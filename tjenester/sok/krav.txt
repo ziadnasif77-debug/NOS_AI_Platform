@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pymilvus
+sentence-transformers
+rank-bm25
+numpy
+requests
+pydantic

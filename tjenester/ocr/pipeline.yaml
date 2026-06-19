@@ -1,0 +1,40 @@
+steps:
+  - step: Segmentation
+    settings:
+      model: yolo
+      model_settings:
+        model: Riksarkivet/yolov9-lines-within-regions-1
+
+  - step: TextRecognition
+    settings:
+      model: TrOCR
+      model_settings:
+        model: Sprakbanken/TrOCR-norhand-v3
+        generation_settings:
+          num_beams: 4
+
+  - step: OrderLines
+
+  - step: Export
+    settings:
+      format: json
+      dest: /data/behandlet/raw
+
+  - step: RemoveLowTextConfidenceLines
+    settings:
+      threshold: 0.85
+
+  - step: Export
+    settings:
+      format: json
+      dest: /data/behandlet/renset
+
+  - step: Export
+    settings:
+      format: alto_xml
+      dest: /data/behandlet/alto
+
+  - step: Export
+    settings:
+      format: page_xml
+      dest: /data/behandlet/page

@@ -1,0 +1,10 @@
+htrflow
+marker-pdf
+opencv-python-headless
+watchdog
+requests
+torch
+transformers
+pydantic
+fastapi
+uvicorn
