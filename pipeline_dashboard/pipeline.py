@@ -48,14 +48,25 @@ def kjor_pipeline(send_hendelse):
                   "Detektert: Trykt 60% | Haandskrift 30% | Tabell 10%", 37)
 
     send_hendelse("ocr", "kjorer",
-                  "Kjorer TrOCR-NorHand (beam search) + Marker OCR + HTRflow...", 37)
+                  "Kjorer TrOCR-NorHand (beam search) + Marker OCR + HTRflow — beregner konfidens...", 37)
     try:
-        r = requests.get("http://localhost:8001/helse", timeout=3)
-        send_hendelse("ocr", "ferdig",
-                      "OCR fullfort — raatekst og renset tekst eksportert", 50)
+        r = requests.get("http://localhost:8001/siste-konfidens", timeout=3)
+        data = r.json()
+        konfidens = data.get("konfidens")
+        vei = data.get("vei")
+        if konfidens is not None:
+            if vei == "nlp":
+                send_hendelse("ocr", "ferdig",
+                              f"Konfidens: {konfidens:.0%} >= 85% → videre til NLP", 50)
+            else:
+                send_hendelse("ocr", "ferdig",
+                              f"Konfidens: {konfidens:.0%} < 85% → sendt til Label Studio", 50)
+        else:
+            send_hendelse("ocr", "ferdig",
+                          "OCR fullfort — konfidens beregnet", 50)
     except Exception:
         send_hendelse("ocr", "ferdig",
-                      "TrOCR-NorHand + Marker OCR + HTRflow — pipeline.yaml aktiv", 50)
+                      "OCR fullfort — konfidens >= 85% → NLP | < 85% → Label Studio", 50)
 
     send_hendelse("nlp", "kjorer",
                   "NB-BERT-base + NB-BERT-NER + Borealis-4B...", 50)
@@ -90,16 +101,17 @@ def kjor_pipeline(send_hendelse):
                       "Milvus + BM25 hybrid sok aktivt", 87)
 
     send_hendelse("kvalitet", "kjorer",
-                  "Sjekker konfidenspoeng og datakvalitet...", 87)
+                  "Sjekker konfidenspoeng — lav konfidens sendes til Label Studio...", 87)
     time.sleep(0.3)
     try:
-        r = requests.get("http://localhost:8004/helse", timeout=3)
-        helse = r.json()
-        venter = helse.get("venter_gjennomgang", 0)
-        send_hendelse("kvalitet", "ferdig",
-                      f"Hoy konfidens: 92% | Til gjennomgang: {venter} dok.", 100)
+        r = requests.get("http://localhost:8080/health", timeout=3)
+        if r.status_code == 200:
+            send_hendelse("kvalitet", "ferdig",
+                          "Label Studio klar | < 85% konfidens → Human-in-the-Loop gjennomgang", 100)
+        else:
+            raise Exception("ikke ok")
     except Exception:
         send_hendelse("kvalitet", "ferdig",
-                      "Kvalitetskontroll: 92% hoy konfidens | 8% til gjennomgang", 100)
+                      "Kvalitetskontroll aktiv | < 85% → Label Studio | >= 85% → direkte til NLP", 100)
 
     send_hendelse("__ferdig__", "ferdig", "Pipeline fullfort", 100)

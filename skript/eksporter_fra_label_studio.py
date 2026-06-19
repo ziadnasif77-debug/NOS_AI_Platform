@@ -154,5 +154,26 @@ def eksporter():
     return totalt
 
 
+def etter_finjustering():
+    """
+    Kalles etter at finjuster.py er ferdig.
+    Ber OCR-tjenesten laste inn oppdaterte modeller.
+    Tilsvarer feedback-pilen i arkitektur__1_.svg som peker
+    tilbake til lag 4 OCR — ikke til NLP.
+    """
+    ocr_url = os.environ.get("OCR_URL", "http://localhost:8001")
+    try:
+        svar = requests.post(
+            f"{ocr_url}/last-inn-modeller-pa-nytt",
+            timeout=60
+        )
+        svar.raise_for_status()
+        print("OCR-tjeneste har lastet inn oppdaterte modeller")
+    except requests.RequestException as feil:
+        print(f"Kunne ikke varsle OCR-tjeneste: {feil}")
+
+
 if __name__ == "__main__":
-    eksporter()
+    totalt = eksporter()
+    if totalt > 0:
+        etter_finjustering()

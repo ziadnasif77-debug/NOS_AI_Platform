@@ -13,6 +13,9 @@ services:
       - GPU_ENHET=${GPU_ENHET}
       - KONFIDENS_TERSKEL=${KONFIDENS_TERSKEL}
       - NLP_URL=http://nlp:8002
+      - LABEL_STUDIO_URL=http://label-studio:8080
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY}
+      - LABEL_STUDIO_OCR_PROSJEKT_ID=${LABEL_STUDIO_OCR_PROSJEKT_ID}
       - INNTAK_STI=/data/inntak
       - BEHANDLET_STI=/data/behandlet
       - MODELLER_STI=/modeller
