@@ -1,4 +1,4 @@
-.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp
+.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening
 
 start:
 	docker compose up -d
@@ -31,3 +31,12 @@ sok:
 
 last-opp:
 	curl -X POST http://localhost:8000/last-opp -F "fil=@$(FIL)"
+
+label-studio:
+	open http://localhost:8080
+
+eksporter-korreksjoner:
+	python skript/eksporter_fra_label_studio.py
+
+send-til-trening:
+	python skript/eksporter_fra_label_studio.py && make finjuster

@@ -94,7 +94,7 @@ services:
       - OCR_URL=http://ocr:8001
       - NLP_URL=http://nlp:8002
       - SOK_URL=http://sok:8003
-      - GJENNOMGANG_URL=http://gjennomgang:8004
+      - GJENNOMGANG_URL=http://label-studio:8080
       - INNTAK_STI=/data/inntak
     ports:
       - "${API_PORT}:8000"
@@ -109,20 +109,20 @@ services:
       - sok
     restart: unless-stopped
 
-  gjennomgang:
-    build: ./tjenester/gjennomgang
-    volumes:
-      - ${GJENNOMGANG_STI}:/data/gjennomgang
-      - ${FINJUSTERING_STI}:/data/finjustering
-      - ./delt:/delt
-    environment:
-      - GJENNOMGANG_STI=/data/gjennomgang
-      - FINJUSTERING_STI=/data/finjustering
-      - MIN_KORREKSJONER_FOR_FINJUSTERING=${MIN_KORREKSJONER_FOR_FINJUSTERING}
+  label-studio:
+    image: heartexlabs/label-studio:latest
     ports:
-      - "${GJENNOMGANG_PORT}:8004"
+      - "${LABEL_STUDIO_PORT}:8080"
+    volumes:
+      - ${GJENNOMGANG_STI}:/label-studio/data
+      - ${FINJUSTERING_STI}:/label-studio/export
+      - label_studio_data:/label-studio/data
+    environment:
+      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data
+      - LABEL_STUDIO_HOST=http://host.docker.internal:${LABEL_STUDIO_PORT}
     healthcheck:
-      test: ["CMD", "python", "helsesjekk.py"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -172,3 +172,4 @@ volumes:
   milvus_data:
   etcd_data:
   minio_data:
+  label_studio_data:

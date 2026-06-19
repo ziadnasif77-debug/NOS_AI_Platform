@@ -2,11 +2,11 @@
 import requests
 
 TJENESTER = {
-    "OCR (8001)":         "http://localhost:8001/helse",
-    "NLP (8002)":         "http://localhost:8002/helse",
-    "Sok (8003)":         "http://localhost:8003/helse",
-    "API (8000)":         "http://localhost:8000/helse",
-    "Gjennomgang (8004)": "http://localhost:8004/helse",
+    "OCR (8001)":          "http://localhost:8001/helse",
+    "NLP (8002)":          "http://localhost:8002/helse",
+    "Sok (8003)":          "http://localhost:8003/helse",
+    "API (8000)":          "http://localhost:8000/helse",
+    "Label Studio (8080)": "http://localhost:8080/health",
 }
 
 print("NAV Archive — Systemstatus\n" + "─" * 40)

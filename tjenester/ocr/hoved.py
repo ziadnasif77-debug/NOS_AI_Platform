@@ -9,10 +9,12 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 sys.path.insert(0, "/delt")
+sys.path.insert(0, "/skript")
 from delt.verktøy import konfigurer_logging, lagre_json, generer_fil_id
 from delt.skjemaer import DokumentInntak, SideResultat
 from delt.konstanter import HANDSKRIFT, TRYKT, TABELL, BLANDET
 from klassifiserer import klassifiser_side, forbehandle_bilde
+from send_til_label_studio import send_til_gjennomgang
 
 logger = konfigurer_logging("ocr-tjeneste")
 
@@ -78,6 +80,30 @@ def behandle_pdf(pdf_sti: str) -> None:
             output = kjor_marker(pdf_sti, fil_id)
         else:
             output = kjor_htrflow(pdf_sti, fil_id)
+        # Les konfidens fra output for å avgjøre om gjennomgang trengs
+        raa_tekst = ""
+        konfidens = 1.0
+        try:
+            raa_sti = output.get("raa", "")
+            if raa_sti and Path(raa_sti).exists():
+                from delt.verktøy import les_json
+                raa_data = les_json(raa_sti)
+                raa_tekst = raa_data.get("tekst", "")
+                konfidens = float(raa_data.get("konfidens", 1.0))
+        except Exception:
+            pass
+
+        if konfidens < KONFIDENS_TERSKEL:
+            sendt = send_til_gjennomgang(
+                fil_id=fil_id,
+                bilde_sti=pdf_sti,
+                raa_tekst=raa_tekst,
+                konfidens=konfidens,
+                metadata={"dokumenttype": dokumenttype}
+            )
+            if sendt:
+                logger.info(f"Sendt til Label Studio for gjennomgang: {fil_id}")
+
         _send_til_nlp(fil_id, filnavn, dokumenttype, output)
         logger.info(f"Fullfort: {filnavn}")
     except Exception as feil:
