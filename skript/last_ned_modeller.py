@@ -25,4 +25,15 @@ for mappe, modell_id in MODELLER.items():
     except Exception as feil:
         print(f"✗ Feil ved nedlasting av {modell_id}: {feil}")
 
+print("\nForhåndsinstallerer Marker OCR-modeller...")
+try:
+    import subprocess
+    subprocess.run(
+        ["python", "-c", "from marker.models import load_all_models; load_all_models()"],
+        check=True
+    )
+    print("✓ Marker OCR-modeller lastet ned")
+except Exception as feil:
+    print(f"✗ Marker-feil: {feil}")
+
 print("\nAlle modeller er lastet ned. Systemet er klart for offline-drift.")

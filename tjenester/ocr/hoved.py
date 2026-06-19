@@ -4,6 +4,7 @@ import time
 import subprocess
 import requests
 import uvicorn
+import fitz  # PyMuPDF
 from fastapi import FastAPI
 from pathlib import Path
 from datetime import datetime
@@ -31,6 +32,16 @@ _siste_konfidens: dict = {"konfidens": None, "fil_id": None, "vei": None}
 app = FastAPI(title="NAV OCR-tjeneste")
 
 
+def pdf_til_bilde(pdf_sti: str, utgang_sti: str) -> str:
+    """Konverterer første side i PDF til PNG for OpenCV-klassifisering."""
+    dok = fitz.open(pdf_sti)
+    side = dok[0]
+    pix = side.get_pixmap(matrix=fitz.Matrix(2, 2))
+    pix.save(utgang_sti)
+    dok.close()
+    return utgang_sti
+
+
 def kjor_htrflow(pdf_sti: str, fil_id: str) -> dict:
     pipeline_sti = Path(__file__).parent / "pipeline.yaml"
     try:
@@ -45,11 +56,13 @@ def kjor_htrflow(pdf_sti: str, fil_id: str) -> dict:
     except Exception as feil:
         logger.error(f"HTRflow-feil: {feil}")
         raise
+    # HTRflow navngir output etter original filnavn, ikke fil_id
+    stamme = Path(pdf_sti).stem
     return {
-        "raa": f"{BEHANDLET_STI}/raw/{fil_id}.json",
-        "renset": f"{BEHANDLET_STI}/renset/{fil_id}.json",
-        "alto": f"{BEHANDLET_STI}/alto/{fil_id}.xml",
-        "page": f"{BEHANDLET_STI}/page/{fil_id}.xml",
+        "raa": f"{BEHANDLET_STI}/raw/{stamme}.json",
+        "renset": f"{BEHANDLET_STI}/renset/{stamme}.json",
+        "alto": f"{BEHANDLET_STI}/alto/{stamme}.xml",
+        "page": f"{BEHANDLET_STI}/page/{stamme}.xml",
     }
 
 
@@ -115,8 +128,14 @@ def behandle_pdf(pdf_sti: str) -> None:
     fil_id = generer_fil_id(filnavn)
     logger.info(f"Starter behandling av: {filnavn} (ID: {fil_id})")
     try:
-        # Steg 1: Klassifiser dokumenttype
-        dokumenttype = klassifiser_side(pdf_sti)
+        # Steg 1: Konverter første PDF-side til bilde og forbehandle
+        raa_bilde_sti = f"/tmp/{fil_id}_side0.png"
+        forbehandlet_sti = f"/tmp/{fil_id}_forbehandlet.png"
+        pdf_til_bilde(pdf_sti, raa_bilde_sti)
+        forbehandle_bilde(raa_bilde_sti, forbehandlet_sti)
+
+        # Klassifiser dokumenttype basert på forbehandlet bilde
+        dokumenttype = klassifiser_side(forbehandlet_sti)
         logger.info(f"Dokumenttype: {dokumenttype}")
 
         # Steg 2: Kjor OCR og hent konfidenspoeng

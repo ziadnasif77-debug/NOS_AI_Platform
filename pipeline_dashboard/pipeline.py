@@ -8,7 +8,7 @@ FASER = [
     {"id": "bildebehandling", "etikett": "Bildebehandling (OpenCV)",  "ikon": "🖼️"},
     {"id": "deteksjon",       "etikett": "Dokumenttypedeteksjon",     "ikon": "🔍"},
     {"id": "ocr",             "etikett": "Tekstuttrekking (OCR)",     "ikon": "📝"},
-    {"id": "nlp",             "etikett": "Tekstforstaaelse (NLP)",    "ikon": "🧠"},
+    {"id": "nlp",             "etikett": "Tekstforståelse (NLP)",     "ikon": "🧠"},
     {"id": "vektorisering",   "etikett": "Vektorkonvertering",        "ikon": "🔢"},
     {"id": "lagring",         "etikett": "Databaselagring",           "ikon": "💾"},
     {"id": "kvalitet",        "etikett": "Kvalitetskontroll",         "ikon": "✅"},

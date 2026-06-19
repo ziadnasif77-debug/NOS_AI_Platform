@@ -29,7 +29,7 @@ app.include_router(gjennomgang_ruter)
 SOK_URL = os.environ.get("SOK_URL", "http://sok:8003")
 OCR_URL = os.environ.get("OCR_URL", "http://ocr:8001")
 NLP_URL = os.environ.get("NLP_URL", "http://nlp:8002")
-GJENNOMGANG_URL = os.environ.get("GJENNOMGANG_URL", "http://gjennomgang:8004")
+LABEL_STUDIO_URL = os.environ.get("GJENNOMGANG_URL", "http://label-studio:8080")
 
 
 @app.get("/helse")
@@ -39,7 +39,7 @@ async def helse():
         ("ocr", f"{OCR_URL}/helse"),
         ("nlp", f"{NLP_URL}/helse"),
         ("sok", f"{SOK_URL}/helse"),
-        ("gjennomgang", f"{GJENNOMGANG_URL}/helse"),
+        ("label-studio", f"{LABEL_STUDIO_URL}/health"),
     ]:
         try:
             svar = requests.get(url, timeout=5)

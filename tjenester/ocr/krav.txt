@@ -8,3 +8,4 @@ transformers
 pydantic
 fastapi
 uvicorn
+PyMuPDF

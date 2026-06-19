@@ -9,6 +9,7 @@ services:
       - ${MODELLER_STI}:/modeller
       - ${LOGGER_STI}:/data/logger
       - ./delt:/delt
+      - ./skript:/skript
     environment:
       - GPU_ENHET=${GPU_ENHET}
       - KONFIDENS_TERSKEL=${KONFIDENS_TERSKEL}

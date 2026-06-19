@@ -146,9 +146,9 @@
       <h3>API-tjeneste</h3>
       <div class="port">Port 8000</div>
     </div>
-    <div class="tjeneste-kort" id="tjk-gjennomgang">
-      <h3>Gjennomgangstjeneste</h3>
-      <div class="port">Port 8004</div>
+    <div class="tjeneste-kort" id="tjk-label-studio">
+      <h3>Label Studio</h3>
+      <div class="port">Port 8080</div>
     </div>
   </div>
 
@@ -234,7 +234,7 @@ async function sjekkTjenester() {
     {id: 'tjk-nlp',          url: 'http://localhost:8002/helse'},
     {id: 'tjk-sok',          url: 'http://localhost:8003/helse'},
     {id: 'tjk-api',          url: 'http://localhost:8000/helse'},
-    {id: 'tjk-gjennomgang',  url: 'http://localhost:8004/helse'},
+    {id: 'tjk-label-studio', url: 'http://localhost:8080/health'},
   ];
   for (const t of tjenester) {
     try {

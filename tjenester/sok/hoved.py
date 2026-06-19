@@ -63,12 +63,13 @@ embedding_modell = SentenceTransformer(
 )
 
 bm25_korpus = []
+bm25_fil_ids = []
 bm25_indeks = None
 
 
 @app.post("/indekser")
 async def indekser(data: dict):
-    global bm25_indeks, bm25_korpus
+    global bm25_indeks, bm25_korpus, bm25_fil_ids
     tekst = data.get("tekst", "")
     metadata = data.get("metadata", {})
     try:
@@ -89,6 +90,7 @@ async def indekser(data: dict):
             "vektor": vektor,
         }])
         bm25_korpus.append(tekst.split())
+        bm25_fil_ids.append(metadata.get("fil_id", ""))
         bm25_indeks = BM25Okapi(bm25_korpus)
         samling.flush()
         return {"status": "indeksert", "fil_id": metadata.get("fil_id")}
@@ -151,10 +153,12 @@ def _bm25_sok(sporsmal: str, antall: int) -> list:
 def _rrf_fusjoner(vektor_treff: list, bm25_treff: list, k: int = 60) -> list:
     poeng = {}
     for rang, treff in enumerate(vektor_treff):
-        nokkel = treff.entity.get("fil_id")
-        poeng[nokkel] = poeng.get(nokkel, 0) + 1.0 / (k + rang + 1)
+        fil_id = treff.entity.get("fil_id")
+        poeng[fil_id] = poeng.get(fil_id, 0) + 1.0 / (k + rang + 1)
     for rang, indeks in enumerate(bm25_treff):
-        poeng[indeks] = poeng.get(indeks, 0) + 1.0 / (k + rang + 1)
+        if indeks < len(bm25_fil_ids):
+            fil_id = bm25_fil_ids[indeks]
+            poeng[fil_id] = poeng.get(fil_id, 0) + 1.0 / (k + rang + 1)
     return sorted(poeng.items(), key=lambda x: x[1], reverse=True)
 
 
