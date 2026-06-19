@@ -4,8 +4,10 @@ Kjøres automatisk etter 500 korreksjoner eller 90 dager.
 """
 import os
 import json
+import shutil
 import torch
 from pathlib import Path
+from datetime import datetime
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 
@@ -85,6 +87,12 @@ def finjuster_norhand():
         args=treningsarg,
         train_dataset=datasett,
     )
+    # Backup før overskrivning
+    backup_sti = f"{MODELLER_STI}/norhand-backup-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if Path(f"{MODELLER_STI}/norhand").exists():
+        shutil.copytree(f"{MODELLER_STI}/norhand", backup_sti)
+        print(f"Backup lagret: {backup_sti}")
+
     trener.train()
     trener.save_model(f"{MODELLER_STI}/norhand")
     print(f"TrOCR-NorHand finjustering fullført — {len(korreksjoner)} eksempler.")
@@ -146,6 +154,12 @@ def finjuster_nb_bert():
         logging_steps=10,
         report_to="none",
     )
+    # Backup før overskrivning
+    backup_sti = f"{MODELLER_STI}/nb-bert-backup-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if Path(f"{MODELLER_STI}/nb-bert").exists():
+        shutil.copytree(f"{MODELLER_STI}/nb-bert", backup_sti)
+        print(f"Backup lagret: {backup_sti}")
+
     trener = Trainer(model=modell, args=treningsarg, train_dataset=datasett)
     trener.train()
     trener.save_model(f"{MODELLER_STI}/nb-bert")

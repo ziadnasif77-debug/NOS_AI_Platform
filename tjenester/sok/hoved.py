@@ -57,9 +57,11 @@ def opprett_samling():
 samling = opprett_samling()
 
 logger.info("Laster Qwen3-Embedding-0.6B...")
+_embedding_enhet = "cuda" if torch.cuda.is_available() else "cpu"
+logger.info(f"Embedding kjører på: {_embedding_enhet}")
 embedding_modell = SentenceTransformer(
     f"{MODELLER_STI}/qwen3-embed",
-    device="cpu"
+    device=_embedding_enhet
 )
 
 bm25_korpus = []

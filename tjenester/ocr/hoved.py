@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import threading
 import subprocess
 import requests
 import uvicorn
@@ -28,6 +29,9 @@ KONFIDENS_TERSKEL = float(os.environ.get("KONFIDENS_TERSKEL", "85")) / 100
 
 # Holder styr på siste kjente konfidenspoeng for dashboard-endepunktet
 _siste_konfidens: dict = {"konfidens": None, "fil_id": None, "vei": None}
+
+# Global modell-referanse — kan byttes ut uten omstart via /last-inn-modeller-pa-nytt
+_modell_lås = threading.Lock()
 
 app = FastAPI(title="NAV OCR-tjeneste")
 
@@ -226,20 +230,40 @@ async def siste_konfidens():
 @app.post("/last-inn-modeller-pa-nytt")
 async def last_inn_modeller_pa_nytt():
     """
-    Ber OCR-tjenesten laste inn oppdaterte modeller etter finjustering.
+    Laster inn oppdaterte OCR-modeller etter finjustering uten omstart.
     Kalles av eksporter_fra_label_studio.etter_finjustering().
     Tilsvarer feedback-pilen i arkitektur__1_.svg som peker tilbake til lag 4 OCR.
     """
-    logger.info("Mottok foresporsel om aa laste inn modeller pa nytt etter finjustering")
-    return {"status": "ok", "melding": "Modeller vil lastes inn ved neste oppstart"}
+    def _last_i_bakgrunn():
+        with _modell_lås:
+            logger.info("Laster inn oppdaterte OCR-modeller fra finjustering...")
+            try:
+                from marker.models import load_all_models
+                load_all_models()
+                logger.info("Marker OCR-modeller lastet inn på nytt")
+            except Exception as feil:
+                logger.warning(f"Marker re-load feilet: {feil}")
+            logger.info("Modellinnlasting fullført")
+
+    threading.Thread(target=_last_i_bakgrunn, daemon=True).start()
+    return {"status": "ok", "melding": "Modellinnlasting startet i bakgrunnen"}
 
 
 class NyFilHaandterer(FileSystemEventHandler):
     def on_created(self, hendelse):
         if not hendelse.is_directory and hendelse.src_path.endswith(".pdf"):
             logger.info(f"Ny fil oppdaget: {hendelse.src_path}")
-            time.sleep(1)
-            behandle_pdf(hendelse.src_path)
+            # Thread per fil — flere filer behandles parallelt
+            threading.Thread(
+                target=self._behandle_med_forsinkelse,
+                args=(hendelse.src_path,),
+                daemon=True
+            ).start()
+
+    @staticmethod
+    def _behandle_med_forsinkelse(sti: str):
+        time.sleep(1)  # Venter på at filen er ferdig skrevet
+        behandle_pdf(sti)
 
 
 def start_watchdog():
@@ -257,7 +281,6 @@ def start_watchdog():
 
 
 if __name__ == "__main__":
-    import threading
     wd_trad = threading.Thread(target=start_watchdog, daemon=True)
     wd_trad.start()
     uvicorn.run(app, host="0.0.0.0", port=8001)
