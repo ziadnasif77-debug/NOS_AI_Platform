@@ -1,15 +1,11 @@
 import sys
-import subprocess
+import requests
 
 
 def sjekk() -> bool:
     try:
-        resultat = subprocess.run(
-            ["htrflow", "--help"],
-            capture_output=True,
-            timeout=10
-        )
-        return resultat.returncode == 0
+        svar = requests.get("http://localhost:8001/helse", timeout=5)
+        return svar.status_code == 200
     except Exception:
         return False
 
