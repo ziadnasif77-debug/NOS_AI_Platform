@@ -1,5 +1,6 @@
 import os
 import sys
+import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pymilvus import (
