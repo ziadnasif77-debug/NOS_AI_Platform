@@ -6,3 +6,4 @@ rank-bm25
 numpy
 requests
 pydantic
+torch
