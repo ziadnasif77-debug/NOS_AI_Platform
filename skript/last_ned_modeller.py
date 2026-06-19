@@ -12,7 +12,7 @@ MODELLER = {
     "norhand":     "Sprakbanken/TrOCR-norhand-v3",
     "nb-bert":     "NbAiLab/nb-bert-base",
     "nb-bert-ner": "NbAiLab/nb-bert-base-ner",
-    "borealis":    "NbAiLab/borealis-4b",
+    "borealis":    "NbAiLab/borealis-4b-instruct-preview",
     "qwen3-embed": "Qwen/Qwen3-Embedding-0.6B",
 }
 
