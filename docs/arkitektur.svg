@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1320" viewBox="0 0 720 1320" font-family="'Segoe UI', Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#555"/>
+    </marker>
+    <marker id="arrow-gold" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#b7860b"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#c0392b"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="1320" fill="#fafaf8"/>
+
+  <!-- ① Inntak -->
+  <line x1="30" y1="30" x2="690" y2="30" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="58" r="14" fill="#2c2c2c"/>
+  <text x="44" y="63" text-anchor="middle" fill="white" font-size="12" font-weight="bold">①</text>
+  <text x="66" y="55" fill="#2c2c2c" font-size="12" font-weight="600">استقبال / Inntak</text>
+
+  <rect x="210" y="74" width="300" height="58" rx="8" fill="#2c2c2c"/>
+  <text x="360" y="98" text-anchor="middle" fill="white" font-size="15" font-weight="bold">PDF</text>
+  <text x="360" y="116" text-anchor="middle" fill="#aaa" font-size="10">من الماسح الضوئي — Watchdog مراقبة مجلد تلقائية</text>
+
+  <line x1="360" y1="132" x2="360" y2="156" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ② Bildebehandling -->
+  <line x1="30" y1="166" x2="690" y2="166" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="192" r="14" fill="#2c2c2c"/>
+  <text x="44" y="197" text-anchor="middle" fill="white" font-size="12" font-weight="bold">②</text>
+  <text x="66" y="189" fill="#2c2c2c" font-size="12" font-weight="600">معالجة الصورة / Bildebehandling</text>
+
+  <rect x="210" y="210" width="300" height="58" rx="8" fill="#1a6b4a"/>
+  <text x="360" y="234" text-anchor="middle" fill="white" font-size="14" font-weight="bold">OpenCV</text>
+  <text x="360" y="252" text-anchor="middle" fill="#b8e8d0" font-size="10">تنظيف + تصحيح انحناء + تباين  |  Deskew + støy + kontrast</text>
+
+  <line x1="360" y1="268" x2="360" y2="292" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ③ Dokumenttype -->
+  <line x1="30" y1="302" x2="690" y2="302" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="328" r="14" fill="#2c2c2c"/>
+  <text x="44" y="333" text-anchor="middle" fill="white" font-size="12" font-weight="bold">③</text>
+  <text x="66" y="325" fill="#2c2c2c" font-size="12" font-weight="600">تصنيف نوع الوثيقة / Dokumenttype</text>
+
+  <rect x="200" y="346" width="320" height="58" rx="8" fill="#1a6b4a"/>
+  <text x="360" y="370" text-anchor="middle" fill="white" font-size="13" font-weight="bold">OpenCV — كاشف النوع</text>
+  <text x="360" y="390" text-anchor="middle" fill="#b8e8d0" font-size="10">مطبوع / خط يد / جدول / مختلط  |  trykt / håndskrift / tabell / blandet</text>
+
+  <line x1="280" y1="404" x2="192" y2="438" stroke="#1a6b4a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="360" y1="404" x2="360" y2="438" stroke="#1a6b4a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="440" y1="404" x2="528" y2="438" stroke="#1a6b4a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ④ OCR -->
+  <line x1="30" y1="430" x2="690" y2="430" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="456" r="14" fill="#2c2c2c"/>
+  <text x="44" y="461" text-anchor="middle" fill="white" font-size="12" font-weight="bold">④</text>
+  <text x="66" y="453" fill="#2c2c2c" font-size="12" font-weight="600">استخراج النص — OCR</text>
+
+  <rect x="42" y="446" width="192" height="66" rx="8" fill="#1a6b4a"/>
+  <text x="138" y="469" text-anchor="middle" fill="white" font-size="12" font-weight="bold">TrOCR-NorHand</text>
+  <text x="138" y="486" text-anchor="middle" fill="#b8e8d0" font-size="10">خط يد 1800–1970</text>
+  <text x="138" y="502" text-anchor="middle" fill="#b8e8d0" font-size="10">num_beams: 4</text>
+
+  <rect x="264" y="446" width="192" height="66" rx="8" fill="#1a6b4a"/>
+  <text x="360" y="469" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Marker OCR</text>
+  <text x="360" y="486" text-anchor="middle" fill="#b8e8d0" font-size="10">مطبوع + جداول</text>
+  <text x="360" y="502" text-anchor="middle" fill="#b8e8d0" font-size="10">trykt + tabell</text>
+
+  <rect x="486" y="446" width="192" height="66" rx="8" fill="#1a6b4a"/>
+  <text x="582" y="469" text-anchor="middle" fill="white" font-size="12" font-weight="bold">HTRflow</text>
+  <text x="582" y="486" text-anchor="middle" fill="#b8e8d0" font-size="10">وثائق مختلطة</text>
+  <text x="582" y="502" text-anchor="middle" fill="#b8e8d0" font-size="10">pipeline.yaml</text>
+
+  <line x1="138" y1="512" x2="318" y2="546" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="360" y1="512" x2="360" y2="546" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="582" y1="512" x2="402" y2="546" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="210" y="554" width="300" height="52" rx="8" fill="#3a3a3a"/>
+  <text x="360" y="576" text-anchor="middle" fill="white" font-size="13" font-weight="bold">نص خام / Rå tekst</text>
+  <text x="360" y="596" text-anchor="middle" fill="#aaa" font-size="10">raw + renset  |  &lt;85% → Label Studio</text>
+
+  <!-- Feedback arrow right side (dashed gold) -->
+  <path d="M 660 580 Q 700 580 700 520 Q 700 480 660 470" fill="none" stroke="#b7860b" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrow-gold)"/>
+
+  <line x1="360" y1="606" x2="360" y2="630" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ⑤ NLP -->
+  <line x1="30" y1="640" x2="690" y2="640" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="666" r="14" fill="#2c2c2c"/>
+  <text x="44" y="671" text-anchor="middle" fill="white" font-size="12" font-weight="bold">⑤</text>
+  <text x="66" y="663" fill="#2c2c2c" font-size="12" font-weight="600">فهم النص / NLP</text>
+
+  <rect x="46" y="656" width="272" height="64" rx="8" fill="#4a3580"/>
+  <text x="182" y="679" text-anchor="middle" fill="white" font-size="12" font-weight="bold">NB-BERT-base</text>
+  <text x="182" y="696" text-anchor="middle" fill="#c8b8f0" font-size="10">تصنيف نوع الطلب + موضوعه</text>
+  <text x="182" y="710" text-anchor="middle" fill="#c8b8f0" font-size="10">dokumenttype | ytelse | utfall</text>
+
+  <rect x="358" y="656" width="316" height="64" rx="8" fill="#4a3580"/>
+  <text x="516" y="679" text-anchor="middle" fill="white" font-size="12" font-weight="bold">NB-BERT-base-NER</text>
+  <text x="516" y="696" text-anchor="middle" fill="#c8b8f0" font-size="10">اسم / fnr / dato / adresse</text>
+  <text x="516" y="710" text-anchor="middle" fill="#c8b8f0" font-size="10">PER | ORG | LOC | DATE | NUM</text>
+
+  <line x1="240" y1="720" x2="324" y2="748" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="436" y1="720" x2="396" y2="748" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="160" y="756" width="400" height="58" rx="8" fill="#4a3580"/>
+  <text x="360" y="779" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Borealis-4B</text>
+  <text x="360" y="798" text-anchor="middle" fill="#c8b8f0" font-size="10">فهم السياق + تلخيص نرويجي  |  kontekst + oppsummering (float16)</text>
+
+  <line x1="360" y1="814" x2="360" y2="838" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="210" y="846" width="300" height="50" rx="8" fill="#3a3a3a"/>
+  <text x="360" y="868" text-anchor="middle" fill="white" font-size="13" font-weight="bold">JSON بيانات منظمة</text>
+  <text x="360" y="886" text-anchor="middle" fill="#aaa" font-size="10">fnr | navn | dato | ytelse | fylke | kontornavn</text>
+
+  <line x1="360" y1="896" x2="360" y2="920" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ⑥ Lagring og søk -->
+  <line x1="30" y1="930" x2="690" y2="930" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="956" r="14" fill="#2c2c2c"/>
+  <text x="44" y="961" text-anchor="middle" fill="white" font-size="12" font-weight="bold">⑥</text>
+  <text x="66" y="953" fill="#2c2c2c" font-size="12" font-weight="600">تخزين وبحث / Lagring og søk</text>
+
+  <rect x="46" y="946" width="280" height="64" rx="8" fill="#8b1a1a"/>
+  <text x="186" y="969" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Qwen3-Embedding</text>
+  <text x="186" y="986" text-anchor="middle" fill="#f5b8b8" font-size="10">نص → متجهات دلالية</text>
+  <text x="186" y="1000" text-anchor="middle" fill="#f5b8b8" font-size="10">tekst → vektorer (1024 dim)</text>
+
+  <line x1="326" y1="978" x2="374" y2="978" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <rect x="382" y="946" width="292" height="64" rx="8" fill="#8b1a1a"/>
+  <text x="528" y="969" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Milvus</text>
+  <text x="528" y="986" text-anchor="middle" fill="#f5b8b8" font-size="10">مئات ملايين متجه + BM25</text>
+  <text x="528" y="1000" text-anchor="middle" fill="#f5b8b8" font-size="10">HNSW + BM25 → RRF Hybrid søk</text>
+
+  <line x1="360" y1="1010" x2="360" y2="1034" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ⑦ API -->
+  <line x1="30" y1="1044" x2="690" y2="1044" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="1070" r="14" fill="#2c2c2c"/>
+  <text x="44" y="1075" text-anchor="middle" fill="white" font-size="12" font-weight="bold">⑦</text>
+  <text x="66" y="1067" fill="#2c2c2c" font-size="12" font-weight="600">واجهة الفريق / API</text>
+
+  <rect x="160" y="1060" width="400" height="52" rx="8" fill="#3a3a3a"/>
+  <text x="360" y="1082" text-anchor="middle" fill="white" font-size="13" font-weight="bold">FastAPI</text>
+  <text x="360" y="1100" text-anchor="middle" fill="#aaa" font-size="10">فلاتر: fnr / ytelse / fylke / år  |  /sok  /last-opp  /statistikk</text>
+
+  <line x1="360" y1="1112" x2="360" y2="1136" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="160" y="1144" width="400" height="52" rx="8" fill="#1a6b4a"/>
+  <text x="360" y="1166" text-anchor="middle" fill="white" font-size="13" font-weight="bold">نتيجة + نسبة دقة %</text>
+  <text x="360" y="1184" text-anchor="middle" fill="#b8e8d0" font-size="10">اسم ملف + رقم صفحة + مقتطف  |  filnavn + sidenummer + utdrag</text>
+
+  <line x1="360" y1="1196" x2="360" y2="1220" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ⑧ Kontinuerlig læring -->
+  <line x1="30" y1="1230" x2="690" y2="1230" stroke="#ccc" stroke-width="1"/>
+  <circle cx="44" cy="1254" r="14" fill="#2c2c2c"/>
+  <text x="44" y="1259" text-anchor="middle" fill="white" font-size="12" font-weight="bold">⑧</text>
+  <text x="66" y="1251" fill="#2c2c2c" font-size="12" font-weight="600">تعلم مستمر / Kontinuerlig læring</text>
+
+  <rect x="100" y="1244" width="520" height="56" rx="8" fill="#7a5c00"/>
+  <text x="360" y="1267" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Human-in-the-Loop — Label Studio — فحص الثقة</text>
+  <text x="360" y="1288" text-anchor="middle" fill="#f0d080" font-size="10">دون 85% ← الفريق يصحح ← نموذج يتعلم  |  &lt;85% → korreksjon → finjustering</text>
+
+  <!-- Feedback loop left side (dashed gold) -->
+  <path d="M 100 1272 Q 24 1272 24 1100 Q 24 700 60 606" fill="none" stroke="#b7860b" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arrow-gold)"/>
+
+  <!-- Legend -->
+  <rect x="30" y="1150" width="118" height="70" rx="6" fill="#f0efe8" stroke="#ddd" stroke-width="1"/>
+  <rect x="40" y="1160" width="12" height="12" rx="2" fill="#1a6b4a"/>
+  <text x="58" y="1171" fill="#333" font-size="10">OCR</text>
+  <rect x="40" y="1178" width="12" height="12" rx="2" fill="#4a3580"/>
+  <text x="58" y="1189" fill="#333" font-size="10">NLP</text>
+  <rect x="40" y="1196" width="12" height="12" rx="2" fill="#8b1a1a"/>
+  <text x="58" y="1207" fill="#333" font-size="10">بحث / Søk</text>
+  <rect x="40" y="1214" width="12" height="12" rx="2" fill="#7a5c00"/>
+  <text x="58" y="1225" fill="#333" font-size="10">تعلم / Læring</text>
+
+</svg>
