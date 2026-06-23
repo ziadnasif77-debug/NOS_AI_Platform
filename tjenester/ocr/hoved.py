@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import time
 import threading
 import subprocess
@@ -26,12 +27,42 @@ BEHANDLET_STI = os.environ.get("BEHANDLET_STI", "/data/behandlet")
 MODELLER_STI = os.environ.get("MODELLER_STI", "/modeller")
 NLP_URL = os.environ.get("NLP_URL", "http://nlp:8002")
 KONFIDENS_TERSKEL = float(os.environ.get("KONFIDENS_TERSKEL", "85")) / 100
+REDIS_URL = os.environ.get("REDIS_URL", "")
+MAKS_OCR_JOBBER = int(os.environ.get("MAKS_OCR_JOBBER", "2"))
+
+# Begrenser antall samtidige OCR-jobber — hindrer GPU OOM ved mange parallelle filer
+_ocr_semafor = threading.Semaphore(MAKS_OCR_JOBBER)
 
 # Holder styr på siste kjente konfidenspoeng for dashboard-endepunktet
 _siste_konfidens: dict = {"konfidens": None, "fil_id": None, "vei": None}
 
 # Global modell-referanse — kan byttes ut uten omstart via /last-inn-modeller-pa-nytt
 _modell_lås = threading.Lock()
+
+
+def _oppdater_jobb(jobb_id: str, status: str, detaljer: dict = None) -> None:
+    """Oppdaterer jobbstatus i Redis (24 timers TTL). Taus ved feil."""
+    if not jobb_id or not REDIS_URL:
+        return
+    try:
+        import redis
+        r = redis.from_url(REDIS_URL, decode_responses=True)
+        data = {"jobb_id": jobb_id, "status": status, **(detaljer or {})}
+        r.setex(f"jobb:{jobb_id}", 86400, json.dumps(data))
+    except Exception:
+        pass
+
+
+def _les_jobb_id(pdf_sti: str) -> str:
+    """Leser jobb_id fra sidecar-fil generert av API ved opplasting."""
+    sidecar = Path(pdf_sti).with_suffix(".jobb.json")
+    if sidecar.exists():
+        try:
+            with open(sidecar, encoding="utf-8") as f:
+                return json.load(f).get("jobb_id", "")
+        except Exception:
+            pass
+    return ""
 
 app = FastAPI(title="NAV OCR-tjeneste")
 
@@ -175,46 +206,54 @@ def behandle_pdf(pdf_sti: str) -> None:
     """
     filnavn = Path(pdf_sti).name
     fil_id = generer_fil_id(filnavn)
+    jobb_id = _les_jobb_id(pdf_sti)
     logger.info(f"Starter behandling av: {filnavn} (ID: {fil_id})")
-    try:
-        # Steg 1: Konverter første PDF-side til bilde og forbehandle
-        raa_bilde_sti = f"/tmp/{fil_id}_side0.png"
-        forbehandlet_sti = f"/tmp/{fil_id}_forbehandlet.png"
-        pdf_til_bilde(pdf_sti, raa_bilde_sti)
-        forbehandle_bilde(raa_bilde_sti, forbehandlet_sti)
 
-        # Klassifiser dokumenttype basert på forbehandlet bilde
-        dokumenttype = klassifiser_side(forbehandlet_sti)
-        logger.info(f"Dokumenttype: {dokumenttype}")
+    with _ocr_semafor:  # Maks MAKS_OCR_JOBBER samtidige OCR-jobber
+        _oppdater_jobb(jobb_id, "ocr_pagar", {"fil_id": fil_id, "filnavn": filnavn})
+        try:
+            # Steg 1: Konverter første PDF-side til bilde og forbehandle
+            raa_bilde_sti = f"/tmp/{fil_id}_side0.png"
+            forbehandlet_sti = f"/tmp/{fil_id}_forbehandlet.png"
+            pdf_til_bilde(pdf_sti, raa_bilde_sti)
+            forbehandle_bilde(raa_bilde_sti, forbehandlet_sti)
 
-        # Steg 2: Kjor OCR og hent konfidenspoeng (send forbehandlet bilde til PaddleOCR)
-        ocr_resultat = kjor_ocr(pdf_sti, fil_id, dokumenttype, bilde_sti=forbehandlet_sti)
-        konfidens = ocr_resultat["konfidens"]
+            # Klassifiser dokumenttype basert på forbehandlet bilde
+            dokumenttype = klassifiser_side(forbehandlet_sti)
+            logger.info(f"Dokumenttype: {dokumenttype}")
 
-        # Oppdater siste-konfidens for dashboard-endepunktet
-        global _siste_konfidens
+            # Steg 2: Kjor OCR og hent konfidenspoeng
+            ocr_resultat = kjor_ocr(pdf_sti, fil_id, dokumenttype, bilde_sti=forbehandlet_sti)
+            konfidens = ocr_resultat["konfidens"]
 
-        # Steg 3: EKSPLISITT BRANCH — som vist i arkitektur__1_.svg
-        if konfidens >= KONFIDENS_TERSKEL:
-            # Vei A: Hoy konfidens → NLP
-            logger.info(
-                f"Konfidens {konfidens:.0%} >= {KONFIDENS_TERSKEL:.0%} terskel "
-                f"→ sender til NLP"
-            )
-            _siste_konfidens = {"konfidens": konfidens, "fil_id": fil_id, "vei": "nlp"}
-            _send_til_nlp(fil_id, filnavn, dokumenttype, ocr_resultat)
-        else:
-            # Vei B: Lav konfidens → Label Studio (sidebranch)
-            logger.info(
-                f"Konfidens {konfidens:.0%} < {KONFIDENS_TERSKEL:.0%} terskel "
-                f"→ sender til Label Studio"
-            )
-            _siste_konfidens = {"konfidens": konfidens, "fil_id": fil_id, "vei": "label_studio"}
-            _send_til_label_studio(fil_id, pdf_sti, ocr_resultat)
+            # Oppdater siste-konfidens for dashboard-endepunktet
+            global _siste_konfidens
 
-        logger.info(f"Fullfort: {filnavn}")
-    except Exception as feil:
-        logger.error(f"Feil ved behandling av {filnavn}: {feil}")
+            # Steg 3: EKSPLISITT BRANCH — som vist i arkitektur__1_.svg
+            if konfidens >= KONFIDENS_TERSKEL:
+                # Vei A: Hoy konfidens → NLP
+                logger.info(
+                    f"Konfidens {konfidens:.0%} >= {KONFIDENS_TERSKEL:.0%} terskel "
+                    f"→ sender til NLP"
+                )
+                _siste_konfidens = {"konfidens": konfidens, "fil_id": fil_id, "vei": "nlp"}
+                _oppdater_jobb(jobb_id, "nlp_pagar", {"fil_id": fil_id, "konfidens": konfidens})
+                _send_til_nlp(fil_id, filnavn, dokumenttype, ocr_resultat)
+                _oppdater_jobb(jobb_id, "fullfort", {"fil_id": fil_id, "konfidens": konfidens})
+            else:
+                # Vei B: Lav konfidens → Label Studio (sidebranch)
+                logger.info(
+                    f"Konfidens {konfidens:.0%} < {KONFIDENS_TERSKEL:.0%} terskel "
+                    f"→ sender til Label Studio"
+                )
+                _siste_konfidens = {"konfidens": konfidens, "fil_id": fil_id, "vei": "label_studio"}
+                _oppdater_jobb(jobb_id, "gjennomgang", {"fil_id": fil_id, "konfidens": konfidens})
+                _send_til_label_studio(fil_id, pdf_sti, ocr_resultat)
+
+            logger.info(f"Fullfort: {filnavn}")
+        except Exception as feil:
+            logger.error(f"Feil ved behandling av {filnavn}: {feil}")
+            _oppdater_jobb(jobb_id, "feil", {"feil": str(feil), "fil_id": fil_id})
 
 
 def _send_til_nlp(fil_id: str, filnavn: str,

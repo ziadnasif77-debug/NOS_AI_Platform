@@ -22,6 +22,8 @@ services:
       - BEHANDLET_STI=/data/behandlet
       - MODELLER_STI=/modeller
       - GJENNOMGANG_STI=/data/gjennomgang
+      - REDIS_URL=redis://redis:6379/0
+      - MAKS_OCR_JOBBER=${MAKS_OCR_JOBBER:-2}
     deploy:
       resources:
         reservations:
@@ -36,6 +38,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    depends_on:
+      - redis
     restart: unless-stopped
 
   nlp:
@@ -103,6 +107,7 @@ services:
       - GJENNOMGANG_URL=http://label-studio:8080
       - INNTAK_STI=/data/inntak
       - API_NOKKEL=${API_NOKKEL}
+      - REDIS_URL=redis://redis:6379/0
     ports:
       - "${API_PORT}:8000"
     healthcheck:
@@ -114,6 +119,7 @@ services:
       - ocr
       - nlp
       - sok
+      - redis
     restart: unless-stopped
 
   label-studio:
@@ -133,6 +139,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
     restart: unless-stopped
 
   milvus:
@@ -180,3 +192,4 @@ volumes:
   etcd_data:
   minio_data:
   label_studio_data:
+  redis_data:
