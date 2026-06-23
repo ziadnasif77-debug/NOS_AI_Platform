@@ -207,11 +207,14 @@ def _klassifiser_dokument(tekst: str) -> dict:
 
 
 _NORSKE_FYLKER = [
-    "Akershus", "Oslo", "Innlandet", "Vestfold", "Telemark", "Agder",
-    "Rogaland", "Vestland", "Møre og Romsdal", "Trøndelag", "Nordland",
-    "Troms", "Finnmark", "Viken", "Buskerud", "Østfold", "Hedmark",
-    "Oppland", "Hordaland", "Sogn og Fjordane", "Aust-Agder", "Vest-Agder",
+    # Lengre/mer spesifikke navn MÅ komme før kortere overlappende navn
+    "Møre og Romsdal", "Vestfold og Telemark", "Troms og Finnmark",
     "Nord-Trøndelag", "Sør-Trøndelag",
+    "Aust-Agder", "Vest-Agder",
+    "Sogn og Fjordane",
+    "Akershus", "Oslo", "Innlandet", "Vestfold", "Telemark", "Agder",
+    "Rogaland", "Vestland", "Trøndelag", "Nordland", "Troms", "Finnmark",
+    "Viken", "Buskerud", "Østfold", "Hedmark", "Oppland", "Hordaland",
 ]
 
 
