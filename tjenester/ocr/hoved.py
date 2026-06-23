@@ -86,15 +86,59 @@ def kjor_marker(pdf_sti: str, fil_id: str) -> dict:
         raise
 
 
-def kjor_ocr(pdf_sti: str, fil_id: str, dokumenttype: str) -> dict:
+def kjor_paddleocr(bilde_sti: str, fil_id: str) -> dict:
+    """
+    PaddleOCR for enkle trykte skjemaer — returnerer tokens og bokser
+    i tillegg til tekst, slik at LayoutLMv3 kan bruke layout-informasjonen.
+    """
+    try:
+        from paddleocr import PaddleOCR
+        ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+        resultat = ocr.ocr(bilde_sti, cls=True)
+        tekst_linjer = []
+        tokens = []
+        bokser = []
+        if resultat and resultat[0]:
+            for linje in resultat[0]:
+                boks_raa, (tekst, konf) = linje
+                tekst_linjer.append(tekst)
+                tokens.append(tekst)
+                # Normaliser boks til [x0, y0, x1, y1] format
+                x_koord = [p[0] for p in boks_raa]
+                y_koord = [p[1] for p in boks_raa]
+                bokser.append([int(min(x_koord)), int(min(y_koord)),
+                                int(max(x_koord)), int(max(y_koord))])
+        fulltekst = "\n".join(tekst_linjer)
+        utgang_sti = f"{BEHANDLET_STI}/renset/{fil_id}.json"
+        lagre_json({
+            "fil_id": fil_id,
+            "tekst": fulltekst,
+            "tokens": tokens,
+            "bokser": bokser,
+            "konfidens": 0.95,
+        }, utgang_sti)
+        return {"renset": utgang_sti, "raa": utgang_sti}
+    except Exception as feil:
+        logger.error(f"PaddleOCR-feil: {feil}")
+        raise
+
+
+def kjor_ocr(pdf_sti: str, fil_id: str, dokumenttype: str, bilde_sti: str = "") -> dict:
     """
     Kjorer riktig OCR-modell basert på dokumenttype.
+    PaddleOCR for enkle trykte skjemaer (returnerer tokens+bokser for LayoutLMv3).
     Returnerer output-stier og beregnet konfidenspoeng.
     """
     if dokumenttype == HANDSKRIFT:
         output = kjor_htrflow(pdf_sti, fil_id)
-    elif dokumenttype in [TRYKT, TABELL]:
+    elif dokumenttype == TABELL:
         output = kjor_marker(pdf_sti, fil_id)
+    elif dokumenttype == TRYKT and bilde_sti:
+        # PaddleOCR for trykte skjemaer — gir tokens+bokser til LayoutLMv3
+        try:
+            output = kjor_paddleocr(bilde_sti, fil_id)
+        except Exception:
+            output = kjor_marker(pdf_sti, fil_id)
     else:
         output = kjor_htrflow(pdf_sti, fil_id)
 
@@ -115,6 +159,7 @@ def kjor_ocr(pdf_sti: str, fil_id: str, dokumenttype: str) -> dict:
         "raa_tekst": raa_tekst,
         "konfidens": konfidens,
         "dokumenttype": dokumenttype,
+        "bilde_sti": bilde_sti,
         "metadata": {"dokumenttype": dokumenttype},
     }
 
@@ -142,8 +187,8 @@ def behandle_pdf(pdf_sti: str) -> None:
         dokumenttype = klassifiser_side(forbehandlet_sti)
         logger.info(f"Dokumenttype: {dokumenttype}")
 
-        # Steg 2: Kjor OCR og hent konfidenspoeng
-        ocr_resultat = kjor_ocr(pdf_sti, fil_id, dokumenttype)
+        # Steg 2: Kjor OCR og hent konfidenspoeng (send forbehandlet bilde til PaddleOCR)
+        ocr_resultat = kjor_ocr(pdf_sti, fil_id, dokumenttype, bilde_sti=forbehandlet_sti)
         konfidens = ocr_resultat["konfidens"]
 
         # Oppdater siste-konfidens for dashboard-endepunktet
@@ -183,6 +228,7 @@ def _send_til_nlp(fil_id: str, filnavn: str,
                 "filnavn": filnavn,
                 "dokumenttype": dokumenttype,
                 "renset_sti": ocr_resultat.get("renset"),
+                "bilde_sti": ocr_resultat.get("bilde_sti"),  # for LayoutLMv3
             },
             timeout=30
         )

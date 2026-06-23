@@ -6,3 +6,6 @@ accelerate
 requests
 pydantic
 sentencepiece
+Pillow
+datasets
+seqeval

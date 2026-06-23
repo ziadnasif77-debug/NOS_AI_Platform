@@ -14,6 +14,7 @@ MODELLER = {
     "nb-bert-ner": "NbAiLab/nb-bert-base-ner",
     "borealis":    "NbAiLab/borealis-4b-instruct-preview",
     "qwen3-embed": "Qwen/Qwen3-Embedding-0.6B",
+    "layoutlmv3":  "microsoft/layoutlmv3-base",
 }
 
 for mappe, modell_id in MODELLER.items():

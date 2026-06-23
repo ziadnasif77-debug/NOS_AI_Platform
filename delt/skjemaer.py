@@ -26,6 +26,7 @@ class UttrukketData(BaseModel):
     navn: Optional[str] = None
     dato: Optional[str] = None
     adresse: Optional[str] = None
+    signatur: Optional[str] = None   # LayoutLMv3
     ytelse: Optional[str] = None
     kontornavn: Optional[str] = None
     fylke: Optional[str] = None

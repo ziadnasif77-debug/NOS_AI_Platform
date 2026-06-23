@@ -1,4 +1,4 @@
-.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening
+.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner
 
 start:
 	docker compose up -d
@@ -40,3 +40,9 @@ eksporter-korreksjoner:
 
 send-til-trening:
 	python skript/eksporter_fra_label_studio.py && make finjuster
+
+lag-datasett:
+	python skript/lag_layoutlmv3_datasett.py
+
+konverter-annotasjoner:
+	python skript/konverter_til_layoutlmv3.py
