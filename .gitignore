@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtuelle miljøer
+.venv/
+venv/
+env/
+
+# Miljøvariabler
+.env
+
+# Data og modeller (for store for git)
+data/
+modeller/
+
+# Loggfiler
+*.log
+logs/
+
+# Midlertidige filer
+*.tmp
+*.bak
+tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
