@@ -40,7 +40,7 @@ try:
         f"{MODELLER_STI}/layoutlmv3", apply_ocr=False
     )
     layoutlm_modell = LayoutLMv3ForTokenClassification.from_pretrained(
-        f"{MODELLER_STI}/layoutlmv3"
+        f"{MODELLER_STI}/layoutlmv3", num_labels=6, ignore_mismatched_sizes=True
     ).to(enhet)
     _layoutlm_laster = False
     logger.info("LayoutLMv3 lastet")
@@ -64,10 +64,8 @@ borealis_modell = AutoModelForCausalLM.from_pretrained(
     device_map="auto"
 )
 
-# LayoutLMv3 label mapping (B-/I- prefix per NER convention)
-_ETIKETTER = ["O", "B-NAVN", "I-NAVN", "B-FODSELSNUMMER", "I-FODSELSNUMMER",
-              "B-DATO", "I-DATO", "B-ADRESSE", "I-ADRESSE",
-              "B-SIGNATUR", "I-SIGNATUR"]
+# 6 flate etiketter — samme skjema som konverter_til_layoutlmv3.py og finjuster.py
+_ETIKETTER = ["NAVN", "FODSELSNUMMER", "DATO", "ADRESSE", "SIGNATUR", "O"]
 _ID_TIL_ETIKETT = {i: e for i, e in enumerate(_ETIKETTER)}
 
 
@@ -138,28 +136,29 @@ def _layoutlmv3_ekstraher(bilde_sti: str, tokens: list, bokser: list) -> dict:
         if isinstance(prediksjoner, int):
             prediksjoner = [prediksjoner]
 
-        # Samle tokens per etikett
+        # Samle sammenhengende tokens per flat etikett (samme skjema som treningsdataene)
         resultat: dict = {}
-        gjeldende_etikett = None
-        gjeldende_ord = []
+        aktuell_etikett = None
+        aktuell_tekst: list = []
         for token_id, pred_id in enumerate(prediksjoner):
             etikett = _ID_TIL_ETIKETT.get(pred_id, "O")
-            if etikett.startswith("B-"):
-                if gjeldende_etikett and gjeldende_ord:
-                    resultat[gjeldende_etikett] = " ".join(gjeldende_ord)
-                gjeldende_etikett = etikett[2:]
-                gjeldende_ord = [tokens[token_id]] if token_id < len(tokens) else []
-            elif etikett.startswith("I-") and gjeldende_etikett:
-                if token_id < len(tokens):
-                    gjeldende_ord.append(tokens[token_id])
+            if etikett != "O":
+                if etikett == aktuell_etikett:
+                    if token_id < len(tokens):
+                        aktuell_tekst.append(tokens[token_id])
+                else:
+                    if aktuell_etikett and aktuell_tekst:
+                        resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
+                    aktuell_etikett = etikett
+                    aktuell_tekst = [tokens[token_id]] if token_id < len(tokens) else []
             else:
-                if gjeldende_etikett and gjeldende_ord:
-                    resultat[gjeldende_etikett] = " ".join(gjeldende_ord)
-                gjeldende_etikett = None
-                gjeldende_ord = []
+                if aktuell_etikett and aktuell_tekst:
+                    resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
+                aktuell_etikett = None
+                aktuell_tekst = []
 
-        if gjeldende_etikett and gjeldende_ord:
-            resultat[gjeldende_etikett] = " ".join(gjeldende_ord)
+        if aktuell_etikett and aktuell_tekst:
+            resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
 
         logger.info(f"LayoutLMv3 fant: {list(resultat.keys())}")
         return resultat

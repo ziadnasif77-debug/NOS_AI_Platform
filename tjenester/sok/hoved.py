@@ -70,6 +70,42 @@ bm25_fil_ids = []
 bm25_indeks = None
 
 
+def _gjenoppbygg_bm25() -> None:
+    """
+    Gjenoppbygger BM25-indeksen fra Milvus ved oppstart.
+    Sikrer at BM25 er i sync med Milvus etter container-restart.
+    """
+    global bm25_indeks, bm25_korpus, bm25_fil_ids
+    try:
+        samling.load()
+        hentet = []
+        grense = 1000
+        offset = 0
+        while True:
+            batch = samling.query(
+                expr='fil_id != ""',
+                output_fields=["fil_id", "tekst"],
+                limit=grense,
+                offset=offset,
+            )
+            if not batch:
+                break
+            hentet.extend(batch)
+            offset += len(batch)
+            if len(batch) < grense:
+                break
+        bm25_korpus = [d["tekst"].split() for d in hentet]
+        bm25_fil_ids = [d["fil_id"] for d in hentet]
+        if bm25_korpus:
+            bm25_indeks = BM25Okapi(bm25_korpus)
+        logger.info(f"BM25 gjenoppbygd ved oppstart: {len(bm25_korpus)} dokumenter")
+    except Exception as feil:
+        logger.warning(f"BM25-gjenoppbygging feilet (fortsetter med tom indeks): {feil}")
+
+
+_gjenoppbygg_bm25()
+
+
 @app.post("/indekser")
 async def indekser(data: dict):
     global bm25_indeks, bm25_korpus, bm25_fil_ids

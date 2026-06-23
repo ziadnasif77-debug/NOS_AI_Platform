@@ -8,6 +8,7 @@ services:
       - ${BEHANDLET_STI}:/data/behandlet
       - ${MODELLER_STI}:/modeller
       - ${LOGGER_STI}:/data/logger
+      - ${GJENNOMGANG_STI}:/data/gjennomgang
       - ./delt:/delt
       - ./skript:/skript
     environment:
@@ -20,6 +21,7 @@ services:
       - INNTAK_STI=/data/inntak
       - BEHANDLET_STI=/data/behandlet
       - MODELLER_STI=/modeller
+      - GJENNOMGANG_STI=/data/gjennomgang
     deploy:
       resources:
         reservations:

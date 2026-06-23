@@ -166,7 +166,89 @@ def finjuster_nb_bert():
     print(f"NB-BERT finjustering fullført — {len(korreksjoner)} eksempler.")
 
 
+def finjuster_layoutlmv3():
+    from transformers import (
+        LayoutLMv3Processor, LayoutLMv3ForTokenClassification,
+        Trainer, TrainingArguments
+    )
+
+    print("Starter finjustering av LayoutLMv3...")
+
+    treningsfiler = list(Path(FINJUSTERING_STI).glob("layoutlmv3_*.json"))
+    alle_data = []
+    for fil in treningsfiler:
+        with open(fil, encoding="utf-8") as f:
+            alle_data.extend(json.load(f))
+
+    if len(alle_data) < MIN_EKSEMPLER:
+        print(f"For få LayoutLMv3-eksempler ({len(alle_data)}) — minimum {MIN_EKSEMPLER} nødvendig.")
+        print("Kjør 'make lag-datasett' og annotter i Label Studio, deretter 'make konverter-annotasjoner'.")
+        return
+
+    print(f"Finjusterer LayoutLMv3 med {len(alle_data)} eksempler...")
+
+    # 6 flate etiketter — samme som konverter_til_layoutlmv3.py og nlp/hoved.py
+    ANTALL_ETIKETTER = 6
+
+    modell_sti = f"{MODELLER_STI}/layoutlmv3"
+    prosessor = LayoutLMv3Processor.from_pretrained(modell_sti, apply_ocr=False)
+    modell = LayoutLMv3ForTokenClassification.from_pretrained(
+        modell_sti, num_labels=ANTALL_ETIKETTER, ignore_mismatched_sizes=True
+    )
+
+    class LayoutLMDatasett(Dataset):
+        def __init__(self, data):
+            self.data = data
+
+        def __len__(self):
+            return len(self.data)
+
+        def __getitem__(self, idx):
+            oppf = self.data[idx]
+            try:
+                bilde = Image.open(oppf["bilde_sti"]).convert("RGB")
+            except Exception:
+                bilde = Image.new("RGB", (224, 224), color=255)
+
+            koding = prosessor(
+                bilde,
+                text=oppf["tokens"],
+                boxes=oppf["bokser"],
+                word_labels=oppf["etiketter"],
+                return_tensors="pt",
+                truncation=True,
+                padding="max_length",
+                max_length=512,
+            )
+            return {k: v.squeeze(0) for k, v in koding.items()}
+
+    datasett = LayoutLMDatasett(alle_data)
+
+    treningsarg = TrainingArguments(
+        output_dir=f"{MODELLER_STI}/layoutlmv3-finjustert",
+        num_train_epochs=5,
+        per_device_train_batch_size=2,
+        learning_rate=5e-5,
+        warmup_steps=50,
+        save_strategy="epoch",
+        fp16=torch.cuda.is_available(),
+        logging_steps=10,
+        report_to="none",
+    )
+
+    backup_sti = f"{MODELLER_STI}/layoutlmv3-backup-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if Path(modell_sti).exists():
+        shutil.copytree(modell_sti, backup_sti)
+        print(f"Backup lagret: {backup_sti}")
+
+    trener = Trainer(model=modell, args=treningsarg, train_dataset=datasett)
+    trener.train()
+    trener.save_model(modell_sti)
+    print(f"LayoutLMv3 finjustering fullført — {len(alle_data)} eksempler.")
+
+
 if __name__ == "__main__":
     finjuster_norhand()
     finjuster_nb_bert()
+    finjuster_layoutlmv3()
     print("Alle modeller oppdatert.")
