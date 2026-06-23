@@ -1,0 +1,408 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1020" font-family="'Segoe UI',Arial,sans-serif">
+  <defs>
+    <marker id="pil" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#444"/>
+    </marker>
+    <marker id="pil-bla" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#185FA5"/>
+    </marker>
+    <marker id="pil-gul" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#BA7517"/>
+    </marker>
+    <marker id="pil-gronn" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0,10 3.5,0 7" fill="#3B6D11"/>
+    </marker>
+    <filter id="skygge" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-color="#00000022"/>
+    </filter>
+  </defs>
+
+  <!-- Bakgrunn -->
+  <rect width="1500" height="1020" fill="#F7F5EF"/>
+
+  <!-- TITTEL -->
+  <rect x="0" y="0" width="1500" height="48" fill="#185FA5"/>
+  <text x="750" y="30" text-anchor="middle" fill="white" font-size="17" font-weight="bold">NAV Archive Intelligence System — Flytdiagram</text>
+  <text x="750" y="44" text-anchor="middle" fill="#c8dff7" font-size="10">OCR · NLP · Søk · Label Studio · Finjustering · Dashboard</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- RAD 1: INPUT -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="18" y="68" width="110" height="64" rx="8" fill="#fff" stroke="#185FA5" stroke-width="2" filter="url(#skygge)"/>
+  <text x="73" y="88" text-anchor="middle" fill="#185FA5" font-size="22">📄</text>
+  <text x="73" y="104" text-anchor="middle" fill="#185FA5" font-size="11" font-weight="bold">PDF-fil</text>
+  <text x="73" y="118" text-anchor="middle" fill="#666" font-size="9">data/inntak/</text>
+
+  <!-- Pil: PDF → Watchdog -->
+  <line x1="128" y1="100" x2="155" y2="100" stroke="#444" stroke-width="2" marker-end="url(#pil)"/>
+
+  <!-- WATCHDOG boks -->
+  <rect x="156" y="68" width="110" height="64" rx="8" fill="#fff" stroke="#185FA5" stroke-width="2" filter="url(#skygge)"/>
+  <text x="211" y="88" text-anchor="middle" fill="#185FA5" font-size="18">👁️</text>
+  <text x="211" y="103" text-anchor="middle" fill="#185FA5" font-size="11" font-weight="bold">Watchdog</text>
+  <text x="211" y="117" text-anchor="middle" fill="#666" font-size="9">on_created(.pdf)</text>
+
+  <!-- Pil: Watchdog → OCR -->
+  <line x1="266" y1="100" x2="295" y2="100" stroke="#444" stroke-width="2" marker-end="url(#pil)"/>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- OCR-TJENESTE stor boks -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="296" y="58" width="480" height="240" rx="10" fill="#EEF4FB" stroke="#185FA5" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="296" y="58" width="480" height="26" rx="10" fill="#185FA5"/>
+  <text x="536" y="75" text-anchor="middle" fill="white" font-size="12" font-weight="bold">🔧 OCR-tjeneste — Port 8001</text>
+
+  <!-- Rad 1 inni OCR: Konvertering -->
+  <rect x="308" y="92" width="130" height="52" rx="6" fill="white" stroke="#aac4e0" stroke-width="1.5"/>
+  <text x="373" y="110" text-anchor="middle" fill="#185FA5" font-size="10" font-weight="bold">pdf_til_bilde()</text>
+  <text x="373" y="123" text-anchor="middle" fill="#555" font-size="9">PyMuPDF (fitz)</text>
+  <text x="373" y="136" text-anchor="middle" fill="#555" font-size="9">Matrix(2,2) → PNG</text>
+
+  <line x1="438" y1="118" x2="455" y2="118" stroke="#444" stroke-width="1.5" marker-end="url(#pil)"/>
+
+  <rect x="456" y="92" width="130" height="52" rx="6" fill="white" stroke="#aac4e0" stroke-width="1.5"/>
+  <text x="521" y="110" text-anchor="middle" fill="#185FA5" font-size="10" font-weight="bold">forbehandle_bilde()</text>
+  <text x="521" y="123" text-anchor="middle" fill="#555" font-size="9">OpenCV: deskew</text>
+  <text x="521" y="136" text-anchor="middle" fill="#555" font-size="9">CLAHE + Otsu</text>
+
+  <line x1="586" y1="118" x2="603" y2="118" stroke="#444" stroke-width="1.5" marker-end="url(#pil)"/>
+
+  <rect x="604" y="92" width="130" height="52" rx="6" fill="white" stroke="#aac4e0" stroke-width="1.5"/>
+  <text x="669" y="110" text-anchor="middle" fill="#185FA5" font-size="10" font-weight="bold">klassifiser_side()</text>
+  <text x="669" y="123" text-anchor="middle" fill="#555" font-size="9">OpenCV heuristikk</text>
+  <text x="669" y="136" text-anchor="middle" fill="#555" font-size="9">HANDSKRIFT/TRYKT/TABELL</text>
+
+  <!-- 3 OCR-motorer -->
+  <rect x="308" y="158" width="126" height="50" rx="6" fill="#fff8ee" stroke="#BA7517" stroke-width="1.5"/>
+  <text x="371" y="176" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">HTRflow</text>
+  <text x="371" y="189" text-anchor="middle" fill="#555" font-size="9">TrOCR-NorHand-v3</text>
+  <text x="371" y="200" text-anchor="middle" fill="#555" font-size="8">HANDSKRIFT + BLANDET</text>
+
+  <rect x="448" y="158" width="126" height="50" rx="6" fill="#fff8ee" stroke="#BA7517" stroke-width="1.5"/>
+  <text x="511" y="176" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">PaddleOCR 3.0</text>
+  <text x="511" y="189" text-anchor="middle" fill="#555" font-size="9">tokens + bokser</text>
+  <text x="511" y="200" text-anchor="middle" fill="#555" font-size="8">TRYKT → LayoutLMv3</text>
+
+  <rect x="588" y="158" width="126" height="50" rx="6" fill="#fff8ee" stroke="#BA7517" stroke-width="1.5"/>
+  <text x="651" y="176" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">Marker OCR</text>
+  <text x="651" y="189" text-anchor="middle" fill="#555" font-size="9">PDF → fulltekst</text>
+  <text x="651" y="200" text-anchor="middle" fill="#555" font-size="8">TABELL</text>
+
+  <!-- Konfidensterskel -->
+  <rect x="336" y="222" width="388" height="64" rx="8" fill="#e8f4e8" stroke="#3B6D11" stroke-width="2"/>
+  <text x="530" y="242" text-anchor="middle" fill="#3B6D11" font-size="11" font-weight="bold">⚖️ Konfidens-terskel: 85%</text>
+  <text x="400" y="262" text-anchor="middle" fill="#3B6D11" font-size="10">✓ ≥ 85% → NLP</text>
+  <text x="665" y="262" text-anchor="middle" fill="#A72B1F" font-size="10">✗ &lt; 85% → Label Studio</text>
+  <text x="530" y="278" text-anchor="middle" fill="#555" font-size="9">(_siste_konfidens oppdateres)</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- NLP-TJENESTE -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Pil: OCR → NLP (høy konfidens) -->
+  <line x1="776" y1="145" x2="818" y2="145" stroke="#3B6D11" stroke-width="2" marker-end="url(#pil-gronn)"/>
+  <text x="797" y="138" text-anchor="middle" fill="#3B6D11" font-size="9">≥ 85%</text>
+
+  <rect x="819" y="58" width="310" height="250" rx="10" fill="#EDF7ED" stroke="#3B6D11" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="819" y="58" width="310" height="26" rx="10" fill="#3B6D11"/>
+  <text x="974" y="75" text-anchor="middle" fill="white" font-size="12" font-weight="bold">🧠 NLP-tjeneste — Port 8002</text>
+
+  <!-- LayoutLMv3 -->
+  <rect x="831" y="92" width="286" height="58" rx="6" fill="white" stroke="#5a9e5a" stroke-width="1.5"/>
+  <text x="974" y="111" text-anchor="middle" fill="#3B6D11" font-size="11" font-weight="bold">LayoutLMv3-base (Microsoft)</text>
+  <text x="974" y="125" text-anchor="middle" fill="#555" font-size="9">Feltuttrekking: NAVN, FNR, DATO, ADRESSE, SIGNATUR</text>
+  <text x="974" y="139" text-anchor="middle" fill="#555" font-size="9">Ser tekst + layout (tokens + bokser fra PaddleOCR)</text>
+
+  <!-- NB-BERT -->
+  <rect x="831" y="158" width="136" height="56" rx="6" fill="white" stroke="#5a9e5a" stroke-width="1.5"/>
+  <text x="899" y="175" text-anchor="middle" fill="#3B6D11" font-size="10" font-weight="bold">NB-BERT-base</text>
+  <text x="899" y="188" text-anchor="middle" fill="#555" font-size="9">Zero-shot klassifisering</text>
+  <text x="899" y="201" text-anchor="middle" fill="#555" font-size="8">dokumenttype · ytelse · utfall</text>
+
+  <!-- Borealis -->
+  <rect x="981" y="158" width="136" height="56" rx="6" fill="white" stroke="#5a9e5a" stroke-width="1.5"/>
+  <text x="1049" y="175" text-anchor="middle" fill="#3B6D11" font-size="10" font-weight="bold">Borealis-4B</text>
+  <text x="1049" y="188" text-anchor="middle" fill="#555" font-size="9">NorwAI Gemma3-based</text>
+  <text x="1049" y="201" text-anchor="middle" fill="#555" font-size="8">oppsummering · fylke</text>
+
+  <!-- UttrukketData -->
+  <rect x="831" y="224" width="286" height="72" rx="6" fill="#d4edda" stroke="#3B6D11" stroke-width="1.5"/>
+  <text x="974" y="242" text-anchor="middle" fill="#3B6D11" font-size="10" font-weight="bold">UttrukketData (Pydantic)</text>
+  <text x="870" y="258" text-anchor="start" fill="#333" font-size="9">• navn · fodselsnummer · dato</text>
+  <text x="870" y="271" text-anchor="start" fill="#333" font-size="9">• adresse · signatur · fylke</text>
+  <text x="870" y="284" text-anchor="start" fill="#333" font-size="9">• ytelse · dokumenttype · utfall · oppsummering</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- SØK-TJENESTE -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Pil: NLP → Søk -->
+  <line x1="1129" y1="165" x2="1160" y2="165" stroke="#444" stroke-width="2" marker-end="url(#pil)"/>
+
+  <rect x="1161" y="58" width="310" height="250" rx="10" fill="#F5EEFB" stroke="#6B3FA0" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="1161" y="58" width="310" height="26" rx="10" fill="#6B3FA0"/>
+  <text x="1316" y="75" text-anchor="middle" fill="white" font-size="12" font-weight="bold">🔍 Søk-tjeneste — Port 8003</text>
+
+  <!-- Qwen3 -->
+  <rect x="1173" y="92" width="286" height="50" rx="6" fill="white" stroke="#9b59b6" stroke-width="1.5"/>
+  <text x="1316" y="111" text-anchor="middle" fill="#6B3FA0" font-size="10" font-weight="bold">Qwen3-Embedding-0.6B</text>
+  <text x="1316" y="127" text-anchor="middle" fill="#555" font-size="9">1024-dimensjonale vektorer — normalize_embeddings=True</text>
+
+  <!-- Milvus -->
+  <rect x="1173" y="152" width="136" height="70" rx="6" fill="white" stroke="#9b59b6" stroke-width="1.5"/>
+  <text x="1241" y="171" text-anchor="middle" fill="#6B3FA0" font-size="10" font-weight="bold">Milvus v2.4.5</text>
+  <text x="1241" y="185" text-anchor="middle" fill="#555" font-size="9">HNSW index</text>
+  <text x="1241" y="198" text-anchor="middle" fill="#555" font-size="9">M=16 ef=200</text>
+  <text x="1241" y="211" text-anchor="middle" fill="#555" font-size="8">COSINE metric</text>
+
+  <!-- BM25 -->
+  <rect x="1323" y="152" width="136" height="70" rx="6" fill="white" stroke="#9b59b6" stroke-width="1.5"/>
+  <text x="1391" y="171" text-anchor="middle" fill="#6B3FA0" font-size="10" font-weight="bold">BM25Okapi</text>
+  <text x="1391" y="185" text-anchor="middle" fill="#555" font-size="9">in-memory korpus</text>
+  <text x="1391" y="198" text-anchor="middle" fill="#555" font-size="9">+ bm25_fil_ids[]</text>
+  <text x="1391" y="211" text-anchor="middle" fill="#555" font-size="8">rank-bm25</text>
+
+  <!-- RRF -->
+  <rect x="1173" y="232" width="286" height="64" rx="6" fill="#e8dff5" stroke="#6B3FA0" stroke-width="1.5"/>
+  <text x="1316" y="252" text-anchor="middle" fill="#6B3FA0" font-size="11" font-weight="bold">Reciprocal Rank Fusion (RRF)</text>
+  <text x="1316" y="268" text-anchor="middle" fill="#333" font-size="9">score = Σ 1/(k + rang)  · k=60</text>
+  <text x="1316" y="283" text-anchor="middle" fill="#555" font-size="9">Vektor + BM25 → sortert etter kombinert poeng</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- RAD 2: LABEL STUDIO (sidebranch) -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Pil ned fra konfidensterskel til Label Studio -->
+  <line x1="668" y1="286" x2="668" y2="368" stroke="#A72B1F" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#pil-gul)"/>
+  <text x="680" y="335" fill="#A72B1F" font-size="9">&lt; 85%</text>
+
+  <!-- LABEL STUDIO boks -->
+  <rect x="560" y="368" width="250" height="130" rx="10" fill="#FFF3E0" stroke="#BA7517" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="560" y="368" width="250" height="26" rx="10" fill="#BA7517"/>
+  <text x="685" y="385" text-anchor="middle" fill="white" font-size="12" font-weight="bold">🏷️ Label Studio — Port 8080</text>
+
+  <rect x="572" y="402" width="226" height="40" rx="5" fill="white" stroke="#e0a060" stroke-width="1.5"/>
+  <text x="685" y="418" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">send_til_gjennomgang()</text>
+  <text x="685" y="431" text-anchor="middle" fill="#555" font-size="9">POST /api/projects/{id}/import</text>
+
+  <rect x="572" y="450" width="226" height="40" rx="5" fill="white" stroke="#e0a060" stroke-width="1.5"/>
+  <text x="685" y="466" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">Menneskelig annoteering</text>
+  <text x="685" y="479" text-anchor="middle" fill="#555" font-size="9">NAVN · FNR · DATO · ADRESSE · SIGNATUR</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- RAD 3: EKSPORT + FINJUSTERING -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Pil ned fra Label Studio til Eksport -->
+  <line x1="685" y1="498" x2="685" y2="558" stroke="#BA7517" stroke-width="2" marker-end="url(#pil-gul)"/>
+
+  <!-- EKSPORTER boks -->
+  <rect x="560" y="558" width="250" height="95" rx="10" fill="#FFF3E0" stroke="#BA7517" stroke-width="2" filter="url(#skygge)"/>
+  <rect x="560" y="558" width="250" height="22" rx="10" fill="#BA7517"/>
+  <text x="685" y="573" text-anchor="middle" fill="white" font-size="11" font-weight="bold">📤 eksporter_fra_label_studio.py</text>
+  <text x="685" y="594" text-anchor="middle" fill="#555" font-size="9">trocr_TIMESTAMP.json → TrOCR-format</text>
+  <text x="685" y="607" text-anchor="middle" fill="#555" font-size="9">nb_bert_TIMESTAMP.json → NB-BERT-format</text>
+  <text x="685" y="621" text-anchor="middle" fill="#555" font-size="9">layoutlmv3_TIMESTAMP.json → LayoutLMv3-format</text>
+  <text x="685" y="643" text-anchor="middle" fill="#555" font-size="9">→ data/finjustering/</text>
+
+  <!-- Pil: Eksport → Finjuster -->
+  <line x1="685" y1="653" x2="685" y2="703" stroke="#BA7517" stroke-width="2" marker-end="url(#pil-gul)"/>
+
+  <!-- FINJUSTER boks -->
+  <rect x="450" y="703" width="480" height="110" rx="10" fill="#FFF3E0" stroke="#BA7517" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="450" y="703" width="480" height="24" rx="10" fill="#BA7517"/>
+  <text x="690" y="719" text-anchor="middle" fill="white" font-size="12" font-weight="bold">🔄 finjuster.py — Modelltrening</text>
+
+  <rect x="462" y="733" width="143" height="70" rx="6" fill="white" stroke="#e0a060" stroke-width="1.5"/>
+  <text x="533" y="751" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">TrOCR-NorHand</text>
+  <text x="533" y="765" text-anchor="middle" fill="#555" font-size="9">Seq2SeqTrainer</text>
+  <text x="533" y="778" text-anchor="middle" fill="#555" font-size="9">3 epoker · lr=5e-5</text>
+  <text x="533" y="791" text-anchor="middle" fill="#777" font-size="8">backup før overskriving</text>
+
+  <rect x="619" y="733" width="143" height="70" rx="6" fill="white" stroke="#e0a060" stroke-width="1.5"/>
+  <text x="690" y="751" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">NB-BERT</text>
+  <text x="690" y="765" text-anchor="middle" fill="#555" font-size="9">Trainer (seqclf)</text>
+  <text x="690" y="778" text-anchor="middle" fill="#555" font-size="9">3 epoker · lr=2e-5</text>
+  <text x="690" y="791" text-anchor="middle" fill="#777" font-size="8">backup før overskriving</text>
+
+  <rect x="776" y="733" width="143" height="70" rx="6" fill="#ffe0b2" stroke="#e0a060" stroke-width="1.5"/>
+  <text x="847" y="751" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">LayoutLMv3</text>
+  <text x="847" y="765" text-anchor="middle" fill="#A72B1F" font-size="9">⚠ IKKE implementert</text>
+  <text x="847" y="778" text-anchor="middle" fill="#555" font-size="9">konverter_til_layoutlmv3.py</text>
+  <text x="847" y="791" text-anchor="middle" fill="#777" font-size="8">mangler treningskode</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- FEEDBACK-PIL: finjuster → OCR /last-inn-modeller-pa-nytt -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <path d="M 450 758 L 190 758 L 190 860 L 400 860" stroke="#BA7517" stroke-width="2" stroke-dasharray="8,5" fill="none" marker-end="url(#pil-gul)"/>
+  <rect x="200" y="836" width="185" height="28" rx="5" fill="#FFF3E0" stroke="#BA7517" stroke-width="1.5"/>
+  <text x="292" y="854" text-anchor="middle" fill="#BA7517" font-size="9" font-weight="bold">POST /last-inn-modeller-pa-nytt</text>
+
+  <!-- OCR feedback label -->
+  <text x="93" y="755" text-anchor="middle" fill="#BA7517" font-size="9">Feedback-løkke</text>
+  <text x="93" y="767" text-anchor="middle" fill="#BA7517" font-size="9">→ OCR:8001</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- API-TJENESTE -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Pil: Søk → API (user queries) -->
+  <line x1="1316" y1="308" x2="1316" y2="358" stroke="#444" stroke-width="2" marker-end="url(#pil)"/>
+
+  <rect x="1161" y="358" width="310" height="145" rx="10" fill="#FDE8E8" stroke="#A72B1F" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="1161" y="358" width="310" height="26" rx="10" fill="#A72B1F"/>
+  <text x="1316" y="375" text-anchor="middle" fill="white" font-size="12" font-weight="bold">🌐 API-tjeneste — Port 8000</text>
+
+  <rect x="1173" y="393" width="90" height="45" rx="5" fill="white" stroke="#e08080" stroke-width="1.5"/>
+  <text x="1218" y="410" text-anchor="middle" fill="#A72B1F" font-size="9" font-weight="bold">POST /sok/</text>
+  <text x="1218" y="424" text-anchor="middle" fill="#555" font-size="8">hybrid søk</text>
+
+  <rect x="1273" y="393" width="90" height="45" rx="5" fill="white" stroke="#e08080" stroke-width="1.5"/>
+  <text x="1318" y="410" text-anchor="middle" fill="#A72B1F" font-size="9" font-weight="bold">POST /last-opp/</text>
+  <text x="1318" y="424" text-anchor="middle" fill="#555" font-size="8">PDF upload</text>
+
+  <rect x="1373" y="393" width="90" height="45" rx="5" fill="white" stroke="#e08080" stroke-width="1.5"/>
+  <text x="1418" y="410" text-anchor="middle" fill="#A72B1F" font-size="9" font-weight="bold">GET /gjennomgang/</text>
+  <text x="1418" y="424" text-anchor="middle" fill="#555" font-size="8">Label Studio kø</text>
+
+  <rect x="1173" y="447" width="286" height="48" rx="5" fill="#fcd5d5" stroke="#e08080" stroke-width="1.5"/>
+  <text x="1316" y="465" text-anchor="middle" fill="#A72B1F" font-size="10" font-weight="bold">FastAPI + CORS Middleware</text>
+  <text x="1316" y="480" text-anchor="middle" fill="#555" font-size="9">GET /helse · GET /statistikk · GET /dokument/{fil_id}</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- DASHBOARD -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="1161" y="520" width="310" height="145" rx="10" fill="#E8F0FE" stroke="#1a56c4" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="1161" y="520" width="310" height="26" rx="10" fill="#1a56c4"/>
+  <text x="1316" y="537" text-anchor="middle" fill="white" font-size="12" font-weight="bold">📊 Dashboard — Port 5000</text>
+
+  <rect x="1173" y="554" width="286" height="50" rx="5" fill="white" stroke="#7aa3e5" stroke-width="1.5"/>
+  <text x="1316" y="572" text-anchor="middle" fill="#1a56c4" font-size="10" font-weight="bold">Flask + SSE (Server-Sent Events)</text>
+  <text x="1316" y="587" text-anchor="middle" fill="#555" font-size="9">GET / · GET /pipeline-start</text>
+
+  <rect x="1173" y="614" width="286" height="44" rx="5" fill="white" stroke="#7aa3e5" stroke-width="1.5"/>
+  <text x="1316" y="631" text-anchor="middle" fill="#1a56c4" font-size="10" font-weight="bold">8 Pipeline-faser med live-oppdatering</text>
+  <text x="1316" y="646" text-anchor="middle" fill="#555" font-size="9">Sjekker /siste-konfidens → viser hvilken vei dokumentet tok</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- INFRASTRUKTUR (Milvus-stack) -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="1161" y="680" width="310" height="110" rx="10" fill="#F0F0F0" stroke="#888" stroke-width="2" filter="url(#skygge)"/>
+  <rect x="1161" y="680" width="310" height="24" rx="10" fill="#555"/>
+  <text x="1316" y="696" text-anchor="middle" fill="white" font-size="11" font-weight="bold">🗄️ Milvus Infrastruktur</text>
+
+  <rect x="1173" y="712" width="86" height="66" rx="5" fill="white" stroke="#aaa" stroke-width="1.5"/>
+  <text x="1216" y="730" text-anchor="middle" fill="#444" font-size="9" font-weight="bold">Milvus</text>
+  <text x="1216" y="744" text-anchor="middle" fill="#666" font-size="8">v2.4.5</text>
+  <text x="1216" y="757" text-anchor="middle" fill="#666" font-size="8">standalone</text>
+  <text x="1216" y="770" text-anchor="middle" fill="#666" font-size="8">19530</text>
+
+  <rect x="1271" y="712" width="86" height="66" rx="5" fill="white" stroke="#aaa" stroke-width="1.5"/>
+  <text x="1314" y="730" text-anchor="middle" fill="#444" font-size="9" font-weight="bold">etcd</text>
+  <text x="1314" y="744" text-anchor="middle" fill="#666" font-size="8">v3.5.5</text>
+  <text x="1314" y="757" text-anchor="middle" fill="#666" font-size="8">konfig</text>
+  <text x="1314" y="770" text-anchor="middle" fill="#666" font-size="8">:2379</text>
+
+  <rect x="1369" y="712" width="86" height="66" rx="5" fill="white" stroke="#aaa" stroke-width="1.5"/>
+  <text x="1412" y="730" text-anchor="middle" fill="#444" font-size="9" font-weight="bold">MinIO</text>
+  <text x="1412" y="744" text-anchor="middle" fill="#666" font-size="8">2023-03</text>
+  <text x="1412" y="757" text-anchor="middle" fill="#666" font-size="8">blob-lager</text>
+  <text x="1412" y="770" text-anchor="middle" fill="#666" font-size="8">:9000</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- MODELLER-LAGER -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="18" y="368" width="230" height="380" rx="10" fill="#F7F7F7" stroke="#888" stroke-width="2" filter="url(#skygge)"/>
+  <rect x="18" y="368" width="230" height="24" rx="10" fill="#555"/>
+  <text x="133" y="384" text-anchor="middle" fill="white" font-size="11" font-weight="bold">💾 Modeller — /modeller/</text>
+
+  <rect x="28" y="400" width="210" height="36" rx="5" fill="white" stroke="#ccc" stroke-width="1.5"/>
+  <text x="133" y="415" text-anchor="middle" fill="#333" font-size="9" font-weight="bold">TrOCR-NorHand-v3 (~1.3 GB)</text>
+  <text x="133" y="428" text-anchor="middle" fill="#666" font-size="8">Sprakbanken — handskrift 1800–1970</text>
+
+  <rect x="28" y="444" width="210" height="36" rx="5" fill="white" stroke="#ccc" stroke-width="1.5"/>
+  <text x="133" y="459" text-anchor="middle" fill="#333" font-size="9" font-weight="bold">NB-BERT-base (~700 MB)</text>
+  <text x="133" y="472" text-anchor="middle" fill="#666" font-size="8">NbAiLab — zero-shot klassifisering</text>
+
+  <rect x="28" y="488" width="210" height="36" rx="5" fill="white" stroke="#ccc" stroke-width="1.5"/>
+  <text x="133" y="503" text-anchor="middle" fill="#333" font-size="9" font-weight="bold">NB-BERT-NER (~700 MB)</text>
+  <text x="133" y="516" text-anchor="middle" fill="#666" font-size="8">NbAiLab — entitetsgjenkjenning (fallback)</text>
+
+  <rect x="28" y="532" width="210" height="36" rx="5" fill="white" stroke="#ccc" stroke-width="1.5"/>
+  <text x="133" y="547" text-anchor="middle" fill="#333" font-size="9" font-weight="bold">Borealis-4B-instruct-preview (~8 GB)</text>
+  <text x="133" y="560" text-anchor="middle" fill="#666" font-size="8">NbAiLab — norsk LLM (Gemma3)</text>
+
+  <rect x="28" y="576" width="210" height="36" rx="5" fill="white" stroke="#ccc" stroke-width="1.5"/>
+  <text x="133" y="591" text-anchor="middle" fill="#333" font-size="9" font-weight="bold">Qwen3-Embedding-0.6B (~640 MB)</text>
+  <text x="133" y="604" text-anchor="middle" fill="#666" font-size="8">Alibaba — 1024-dim vektorer</text>
+
+  <rect x="28" y="620" width="210" height="36" rx="5" fill="white" stroke="#ccc" stroke-width="1.5"/>
+  <text x="133" y="635" text-anchor="middle" fill="#333" font-size="9" font-weight="bold">LayoutLMv3-base (~900 MB)</text>
+  <text x="133" y="648" text-anchor="middle" fill="#666" font-size="8">Microsoft — tekst + layout NER</text>
+
+  <rect x="28" y="664" width="210" height="36" rx="5" fill="#fff8ee" stroke="#BA7517" stroke-width="1.5"/>
+  <text x="133" y="679" text-anchor="middle" fill="#BA7517" font-size="9" font-weight="bold">Marker OCR (~5 GB)</text>
+  <text x="133" y="692" text-anchor="middle" fill="#666" font-size="8">pip install marker-pdf</text>
+
+  <rect x="28" y="708" width="210" height="32" rx="5" fill="#FFF3E0" stroke="#BA7517" stroke-width="1.5"/>
+  <text x="133" y="726" text-anchor="middle" fill="#BA7517" font-size="9" font-weight="bold">⚠ Totalt: ~17 GB</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- DATAFLYTEN boks -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="260" y="368" width="280" height="180" rx="10" fill="#F0F7FF" stroke="#185FA5" stroke-width="2" filter="url(#skygge)"/>
+  <rect x="260" y="368" width="280" height="24" rx="10" fill="#185FA5"/>
+  <text x="400" y="384" text-anchor="middle" fill="white" font-size="11" font-weight="bold">📁 Datafiler — /data/</text>
+
+  <rect x="270" y="400" width="258" height="24" rx="4" fill="white" stroke="#aac4e0" stroke-width="1"/>
+  <text x="290" y="415" fill="#333" font-size="9">inntak/ ← PDF-filer fra Watchdog</text>
+
+  <rect x="270" y="432" width="258" height="24" rx="4" fill="white" stroke="#aac4e0" stroke-width="1"/>
+  <text x="290" y="447" fill="#333" font-size="9">behandlet/raw/ ← HTRflow rå JSON</text>
+
+  <rect x="270" y="464" width="258" height="24" rx="4" fill="white" stroke="#aac4e0" stroke-width="1"/>
+  <text x="290" y="479" fill="#333" font-size="9">behandlet/renset/ ← filtrert JSON (85%)</text>
+
+  <rect x="270" y="496" width="258" height="24" rx="4" fill="white" stroke="#aac4e0" stroke-width="1"/>
+  <text x="290" y="511" fill="#333" font-size="9">behandlet/alto/ + page/ ← XML-eksport</text>
+
+  <rect x="270" y="528" width="258" height="24" rx="4" fill="white" stroke="#aac4e0" stroke-width="1"/>
+  <text x="290" y="543" fill="#333" font-size="9">finjustering/ ← treningsdata fra LS</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- MANGLER BOKS -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="260" y="560" width="280" height="240" rx="10" fill="#FFF0F0" stroke="#A72B1F" stroke-width="2.5" filter="url(#skygge)"/>
+  <rect x="260" y="560" width="280" height="24" rx="10" fill="#A72B1F"/>
+  <text x="400" y="576" text-anchor="middle" fill="white" font-size="11" font-weight="bold">⚠ Identifiserte mangler</text>
+
+  <text x="270" y="598" fill="#A72B1F" font-size="9" font-weight="bold">KRITISKE:</text>
+  <text x="270" y="612" fill="#333" font-size="9">1. LayoutLMv3 er IKKE finjustert — prediksjoner</text>
+  <text x="270" y="624" fill="#333" font-size="9">   meningsløse inntil modellen er trent</text>
+  <text x="270" y="638" fill="#333" font-size="9">2. finjuster.py mangler LayoutLMv3-treningskode</text>
+  <text x="270" y="652" fill="#333" font-size="9">3. bm25_fil_ids mistes ved restart (inkonsistens)</text>
+  <text x="270" y="666" fill="#333" font-size="9">4. send_til_gjennomgang sender lokal bilde_sti</text>
+  <text x="270" y="680" fill="#333" font-size="9">   (Label Studio kan ikke nå lokale stier)</text>
+
+  <text x="270" y="698" fill="#BA7517" font-size="9" font-weight="bold">VIKTIGE:</text>
+  <text x="270" y="712" fill="#333" font-size="9">5. Ingen API-autentisering (ingen API-key)</text>
+  <text x="270" y="726" fill="#333" font-size="9">6. Kun 1 PDF om gangen via /last-opp</text>
+  <text x="270" y="740" fill="#333" font-size="9">7. generer_fil_id() kan gi duplikat-ID</text>
+  <text x="270" y="754" fill="#333" font-size="9">   ved samtidige opplastinger</text>
+  <text x="270" y="768" fill="#333" font-size="9">8. Borealis returnerer alltid fylke=None</text>
+  <text x="270" y="782" fill="#333" font-size="9">9. Dashboard SSE-buffer uten trådlås</text>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- LEGENDE -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <rect x="18" y="830" width="530" height="60" rx="8" fill="white" stroke="#ccc" stroke-width="1.5"/>
+  <text x="283" y="848" text-anchor="middle" fill="#333" font-size="10" font-weight="bold">Legende</text>
+  <rect x="28" y="856" width="14" height="14" rx="2" fill="#EEF4FB" stroke="#185FA5" stroke-width="2"/>
+  <text x="47" y="867" fill="#333" font-size="9">OCR-tjeneste</text>
+  <rect x="120" y="856" width="14" height="14" rx="2" fill="#EDF7ED" stroke="#3B6D11" stroke-width="2"/>
+  <text x="139" y="867" fill="#333" font-size="9">NLP-tjeneste</text>
+  <rect x="220" y="856" width="14" height="14" rx="2" fill="#F5EEFB" stroke="#6B3FA0" stroke-width="2"/>
+  <text x="239" y="867" fill="#333" font-size="9">Søk-tjeneste</text>
+  <rect x="320" y="856" width="14" height="14" rx="2" fill="#FFF3E0" stroke="#BA7517" stroke-width="2"/>
+  <text x="339" y="867" fill="#333" font-size="9">Label Studio / Finjustering</text>
+  <line x1="460" y1="863" x2="490" y2="863" stroke="#A72B1F" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="495" y="867" fill="#333" font-size="9">Lav konfidens-vei</text>
+
+  <!-- Versjonsstempel -->
+  <text x="1480" y="1010" text-anchor="end" fill="#aaa" font-size="8">NAV Archive v3.0 · LayoutLMv3 + PaddleOCR integrert</text>
+</svg>
