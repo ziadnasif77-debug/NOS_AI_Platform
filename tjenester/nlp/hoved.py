@@ -2,11 +2,13 @@ import os
 import sys
 import requests
 import uvicorn
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException
 from transformers import (
     AutoTokenizer, AutoModelForCausalLM, pipeline,
     LayoutLMv3Processor, LayoutLMv3ForTokenClassification,
 )
+from typing import Optional
 import torch
 from PIL import Image
 
@@ -82,13 +84,17 @@ async def behandle(data: dict):
         tokens = ocr_data.get("tokens", [])
         bokser = ocr_data.get("bokser", [])
 
-        klassifisering = _klassifiser_dokument(tekst)
-
-        # Bruk LayoutLMv3 hvis tilgjengelig og bildet finnes
-        if not _layoutlm_laster and bilde_sti:
-            entiteter = _layoutlmv3_ekstraher(bilde_sti, tokens, bokser)
-        else:
-            entiteter = _trekk_ut_entiteter_ner(tekst)
+        # Kjør klassifisering og feltuttrekking parallelt — uavhengige modeller
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            klassifisering_fremtid = executor.submit(_klassifiser_dokument, tekst)
+            if not _layoutlm_laster and bilde_sti:
+                entiteter_fremtid = executor.submit(
+                    _layoutlmv3_ekstraher, bilde_sti, tokens, bokser
+                )
+            else:
+                entiteter_fremtid = executor.submit(_trekk_ut_entiteter_ner, tekst)
+            klassifisering = klassifisering_fremtid.result()
+            entiteter = entiteter_fremtid.result()
 
         borealis_data = _borealis_analyse(tekst, klassifisering, entiteter)
 
@@ -200,6 +206,23 @@ def _klassifiser_dokument(tekst: str) -> dict:
         return {"dokumenttype": "ukjent", "ytelse": "annet", "utfall": "ukjent"}
 
 
+_NORSKE_FYLKER = [
+    "Akershus", "Oslo", "Innlandet", "Vestfold", "Telemark", "Agder",
+    "Rogaland", "Vestland", "Møre og Romsdal", "Trøndelag", "Nordland",
+    "Troms", "Finnmark", "Viken", "Buskerud", "Østfold", "Hedmark",
+    "Oppland", "Hordaland", "Sogn og Fjordane", "Aust-Agder", "Vest-Agder",
+    "Nord-Trøndelag", "Sør-Trøndelag",
+]
+
+
+def _ekstraher_fylke(tekst: str) -> Optional[str]:
+    tekst_liten = tekst.lower()
+    for fylke in _NORSKE_FYLKER:
+        if fylke.lower() in tekst_liten:
+            return fylke
+    return None
+
+
 def _borealis_analyse(tekst: str, klassifisering: dict, entiteter: dict) -> dict:
     prompt = f"""Du er en norsk arkivar som analyserer historiske NAV-dokumenter.
 Dokument:
@@ -207,9 +230,9 @@ Dokument:
 Allerede funnet:
 - Type: {klassifisering.get('dokumenttype')}
 - Ytelse: {klassifisering.get('ytelse')}
-Svar pa norsk bokmal med:
+Svar på norsk bokmål med:
 1. Kort oppsummering (maks 2 setninger)
-2. Fylke (hvis nevnt)
+2. Fylke (hvis nevnt i dokumentet)
 3. Eventuelle manglende felt"""
     try:
         innganger = borealis_tokenizer(prompt, return_tensors="pt").to(borealis_modell.device)
@@ -221,10 +244,12 @@ Svar pa norsk bokmal med:
                 do_sample=False
             )
         svar = borealis_tokenizer.decode(utganger[0], skip_special_tokens=True)
-        return {"oppsummering": svar[:500], "fylke": None}
+        # Søk etter fylke i svaret OG i originalteksten
+        fylke = _ekstraher_fylke(svar) or _ekstraher_fylke(tekst)
+        return {"oppsummering": svar[:500], "fylke": fylke}
     except Exception as feil:
         logger.error(f"Borealis-feil: {feil}")
-        return {"oppsummering": None, "fylke": None}
+        return {"oppsummering": None, "fylke": _ekstraher_fylke(tekst)}
 
 
 def _send_til_sok(fil_id: str, tekst: str, data: UttrukketData) -> None:

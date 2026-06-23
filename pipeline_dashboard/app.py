@@ -6,7 +6,7 @@ from pipeline import kjor_pipeline, FASER
 app = Flask(__name__, template_folder="maler")
 
 
-def send_hendelse_fabrikk(ko):
+def send_hendelse_fabrikk(ko, lås):
     def send_hendelse(fase_id, status, melding, fremdrift):
         data = json.dumps({
             "fase": fase_id,
@@ -14,7 +14,8 @@ def send_hendelse_fabrikk(ko):
             "melding": melding,
             "fremdrift": fremdrift
         }, ensure_ascii=False)
-        ko.append(f"data: {data}\n\n")
+        with lås:
+            ko.append(f"data: {data}\n\n")
     return send_hendelse
 
 
@@ -26,23 +27,24 @@ def indeks():
 @app.route("/pipeline-start")
 def pipeline_start():
     hendelse_buffer = []
+    lås = threading.Lock()
 
     def generer():
-        send_hendelse = send_hendelse_fabrikk(hendelse_buffer)
+        send_hendelse = send_hendelse_fabrikk(hendelse_buffer, lås)
         trad = threading.Thread(target=kjor_pipeline, args=(send_hendelse,))
         trad.daemon = True
         trad.start()
 
+        import time
         ferdig = False
         while not ferdig:
-            while hendelse_buffer:
-                melding = hendelse_buffer.pop(0)
+            with lås:
+                melding = hendelse_buffer.pop(0) if hendelse_buffer else None
+            if melding:
                 yield melding
                 if '"fase": "__ferdig__"' in melding:
                     ferdig = True
-                    break
-            if not ferdig:
-                import time
+            else:
                 time.sleep(0.1)
 
     return Response(

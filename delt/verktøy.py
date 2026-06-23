@@ -1,7 +1,7 @@
 import os
 import json
+import uuid
 import logging
-from datetime import datetime
 from pathlib import Path
 
 
@@ -30,6 +30,6 @@ def les_json(sti: str) -> dict:
 
 
 def generer_fil_id(filnavn: str) -> str:
-    tidsstempel = datetime.now().strftime("%Y%m%d_%H%M%S")
-    stamme = Path(filnavn).stem
-    return f"{stamme}_{tidsstempel}"
+    stamme = Path(filnavn).stem[:50]
+    unik = uuid.uuid4().hex[:8]
+    return f"{stamme}_{unik}"

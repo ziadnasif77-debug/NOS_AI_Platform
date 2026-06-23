@@ -2,8 +2,9 @@ import os
 import sys
 import uvicorn
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 sys.path.insert(0, "/delt")
 from delt.verktøy import konfigurer_logging
@@ -17,6 +18,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+API_NOKKEL = os.environ.get("API_NOKKEL", "")
+
+AAPNE_STIER = {"/helse", "/statistikk"}
+
+
+@app.middleware("http")
+async def api_nokkel_middleware(forespørsel: Request, neste):
+    """Krev X-API-Key header for alle endepunkter unntatt /helse og /statistikk."""
+    if API_NOKKEL and forespørsel.url.path not in AAPNE_STIER:
+        nokkel = forespørsel.headers.get("X-API-Key", "")
+        if nokkel != API_NOKKEL:
+            return JSONResponse(
+                {"feil": "Ugyldig eller manglende API-nøkkel"},
+                status_code=401
+            )
+    return await neste(forespørsel)
 
 from ruter.sok import ruter as sok_ruter
 from ruter.last_opp import ruter as last_opp_ruter

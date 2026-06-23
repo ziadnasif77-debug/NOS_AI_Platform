@@ -102,6 +102,7 @@ services:
       - SOK_URL=http://sok:8003
       - GJENNOMGANG_URL=http://label-studio:8080
       - INNTAK_STI=/data/inntak
+      - API_NOKKEL=${API_NOKKEL}
     ports:
       - "${API_PORT}:8000"
     healthcheck:
