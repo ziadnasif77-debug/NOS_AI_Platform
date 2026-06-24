@@ -46,3 +46,27 @@ lag-datasett:
 
 konverter-annotasjoner:
 	python skript/konverter_til_layoutlmv3.py
+
+# ─── Lagdelt arkitektur ─────────────────────────────────────────────────────
+
+start-lag:
+	docker compose up -d lag0 lag1 lag2 lag3 lag4 ruter redis milvus etcd minio label-studio
+
+stopp-lag:
+	docker compose stop lag0 lag1 lag2 lag3 lag4 lag5 ruter
+
+start-kryssvalidering:
+	docker compose --profile kryssvalidering up -d lag5
+
+test:
+	python -m pytest tester/ -v
+
+helse-lag:
+	@for port in 8010 8011 8012 8013 8014 8016; do \
+		echo -n "Port $$port: "; \
+		curl -sf http://localhost:$$port/helse | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','?'))" 2>/dev/null || echo "ikke tilgjengelig"; \
+	done
+
+ruter-prosesser:
+	curl -s http://localhost:8016/helse
+
