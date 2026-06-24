@@ -51,6 +51,41 @@ gpu:
 redis:
   url:          redis://redis:6379/0
   ttl_sekunder: 86400
+  max_retries:  3
+  kooer:
+    preprocess: queue:preprocess
+    ocr:        queue:ocr
+    nlp:        queue:nlp
+    validation: queue:validation
+    routing:    queue:routing
+  dlq:
+    preprocess: dlq:preprocess
+    ocr:        dlq:ocr
+    nlp:        dlq:nlp
+    validation: dlq:validation
+
+postgres:
+  url: postgresql://nav:nav@postgres:5432/nav_archive
+
+sla:
+  api_ms:         200
+  preprocess_ms:  300
+  ocr_ms:         5000
+  nlp_ms:         1500
+  validation_ms:  50
+  routing_ms:     20
+  hard_limits_ms:
+    api:         500
+    preprocess:  1000
+    ocr:         30000
+    nlp:         5000
+    validation:  200
+    routing:     100
+
+reconciliation:
+  intervall_sekunder:      300
+  lock_timeout_sekunder:   60
+  ghost_timeout_minutter:  10
 
 label_studio:
   url: http://label-studio:8080
