@@ -70,3 +70,37 @@ helse-lag:
 ruter-prosesser:
 	curl -s http://localhost:8016/helse
 
+# ── Nye lag (fase 8) ─────────────────────────────────────────────────────────
+start-lag0:
+	docker compose up lag0 -d
+
+start-lag1:
+	docker compose up lag1 -d
+
+start-lag2:
+	docker compose up lag2 -d
+
+start-lag3:
+	docker compose up lag3 -d
+
+start-lag4:
+	docker compose up lag4 -d
+
+start-lag5:
+	docker compose up lag5 -d
+
+start-ruter:
+	docker compose up ruter -d
+
+start-alle:
+	docker compose up -d
+
+start-ny:
+	docker compose --profile "" up -d
+
+test-lag:
+	python3 -m pytest tester/test_lag$(N).py -v
+
+test-alle-lag:
+	python3 -m pytest tester/ -v
+
