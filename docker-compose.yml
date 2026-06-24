@@ -251,6 +251,129 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # ─── V2.1 Worker-tjenester ────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nav
+      POSTGRES_PASSWORD: nav
+      POSTGRES_DB: nav_archive
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "nav"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  preprocessing_worker:
+    build:
+      context: .
+      dockerfile: tjenester/workers/lag0_preprocessing/Dockerfile
+    volumes:
+      - ./config:/app/config
+      - ./delt:/app/delt
+      - ./tjenester/workers:/app/tjenester/workers
+      - ${DATA_STI:-./data}:/data
+    environment:
+      - PYTHONPATH=/app
+      - INNTAK_STI=/data/inntak
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  ocr_worker:
+    build:
+      context: .
+      dockerfile: tjenester/workers/lag1_ocr/Dockerfile
+    volumes:
+      - ./config:/app/config
+      - ./delt:/app/delt
+      - ./tjenester/workers:/app/tjenester/workers
+      - ${DATA_STI:-./data}:/data
+      - ${MODELLER_STI:-./modeller}:/modeller
+    environment:
+      - PYTHONPATH=/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  nlp_worker:
+    build:
+      context: .
+      dockerfile: tjenester/workers/lag2_nlp/Dockerfile
+    volumes:
+      - ./config:/app/config
+      - ./delt:/app/delt
+      - ./tjenester/workers:/app/tjenester/workers
+      - ${DATA_STI:-./data}:/data
+      - ${MODELLER_STI:-./modeller}:/modeller
+    environment:
+      - PYTHONPATH=/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  routing_worker:
+    build:
+      context: .
+      dockerfile: tjenester/workers/lag3_routing/Dockerfile
+    volumes:
+      - ./config:/app/config
+      - ./delt:/app/delt
+      - ./tjenester/workers:/app/tjenester/workers
+      - ${DATA_STI:-./data}:/data
+    environment:
+      - PYTHONPATH=/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  reconciliation_worker:
+    build:
+      context: .
+      dockerfile: tjenester/workers/reconciliation/Dockerfile
+    volumes:
+      - ./config:/app/config
+      - ./delt:/app/delt
+      - ./tjenester/workers:/app/tjenester/workers
+    environment:
+      - PYTHONPATH=/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     volumes:
@@ -303,3 +426,4 @@ volumes:
   minio_data:
   label_studio_data:
   redis_data:
+  postgres_data:

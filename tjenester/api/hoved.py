@@ -24,7 +24,7 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "")
 REDIS_URL = os.environ.get("REDIS_URL", "")
 
 AAPNE_STIER = {"/helse", "/statistikk"}
-AAPNE_PREFIKSER = ("/jobb/",)
+AAPNE_PREFIKSER = ("/jobb/", "/resultat/", "/audit/")
 
 
 @app.middleware("http")

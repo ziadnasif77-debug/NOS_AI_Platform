@@ -1,4 +1,4 @@
-.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner
+.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation test-state-machine test-idempotency
 
 start:
 	docker compose up -d
@@ -103,4 +103,25 @@ test-lag:
 
 test-alle-lag:
 	python3 -m pytest tester/ -v
+
+# ─── V2.1 kommandoer ────────────────────────────────────────────────────────
+
+init-db:
+	python skript/init_db.py
+
+rebuild-redis:
+	python skript/rebuild_redis.py
+
+start-workers:
+	docker compose up -d preprocessing_worker ocr_worker nlp_worker routing_worker
+
+start-reconciliation:
+	docker compose up -d reconciliation_worker
+
+test-state-machine:
+	python -m pytest tester/test_state_machine.py -v
+
+test-idempotency:
+	python -m pytest tester/test_idempotency.py -v
+
 

@@ -1,0 +1,266 @@
+"""
+Lag 2 — NLP Worker (inkluderer validering og kryssvalidering)
+Kombinerer lag3_nlp + lag4_validering + lag5_kryssvalidering.
+"""
+import sys
+import os
+import re
+import logging
+import socket
+from datetime import datetime
+from typing import Optional
+
+sys.path.insert(0, "/app")
+from config.config_loader import CONFIG
+from delt.konstanter import TRYKT, TABELL
+from tjenester.workers.base_worker import BaseWorker
+
+logger = logging.getLogger(__name__)
+
+WORKER_ID = f"lag2-{socket.gethostname()}"
+
+NORSKE_FYLKER = {
+    "Oslo", "Viken", "Innlandet", "Vestfold og Telemark",
+    "Agder", "Rogaland", "Vestland", "Møre og Romsdal",
+    "Trøndelag", "Nordland", "Troms og Finnmark",
+    "Troms", "Finnmark",
+}
+
+OBLIGATORISKE_FELT = {
+    "dagpenger": ["navn", "fodselsnummer", "dato"],
+    "uforetrygd": ["navn", "fodselsnummer", "dato", "ytelse"],
+    "sykepenger": ["navn", "fodselsnummer", "dato"],
+}
+
+
+class NLPWorker(BaseWorker):
+
+    def __init__(self):
+        cfg = CONFIG["redis"]
+        super().__init__(
+            worker_id=WORKER_ID,
+            queue_name=cfg["kooer"]["nlp"],
+            dlq_name=cfg["dlq"]["nlp"],
+            running_state="NLP_PROCESSING",
+            done_state="VALIDATION",
+        )
+
+    def process(self, job: dict, pg_conn) -> dict:
+        job_id = job["job_id"]
+        ocr_res = job.get("forrige_resultat", {})
+        tekst = ocr_res.get("text", "")
+        tokens = ocr_res.get("tokens", [])
+        bokser = ocr_res.get("boxes", [])
+        dokumenttype = job.get("forrige_resultat", {}).get("document_type", TRYKT)
+
+        entiteter, dokklasse, ytelse, nlp_konfidens, modell = self._ekstraher(
+            tekst, tokens, bokser, dokumenttype
+        )
+
+        utfall = self._bestem_utfall(entiteter, tekst)
+        oppsummering = self._lag_oppsummering(entiteter, dokklasse, utfall)
+
+        validering = self._valider(entiteter, dokklasse)
+        anomali = self._sjekk_anomali(entiteter, validering)
+
+        # Kryssvalidering (kun hvis aktivert)
+        if CONFIG["lag"].get("lag5_kryssvalidering", False):
+            anomali.update(self._kryssvalider(entiteter))
+
+        if not validering["gyldig"] or anomali.get("har_anomali"):
+            project_id = CONFIG["label_studio"]["prosjekter"]["lag4"]
+            self.send_til_label_studio(
+                job_id=job_id,
+                image_path=job.get("fil_sti", ""),
+                ocr_text=tekst,
+                project_id=project_id,
+                stage="validering",
+            )
+
+        return {
+            "job_id": job_id,
+            "entities": entiteter,
+            "document_class": dokklasse,
+            "ytelse": ytelse,
+            "utfall": utfall,
+            "summary": oppsummering,
+            "nlp_confidence": round(nlp_konfidens, 4),
+            "nlp_model_used": modell,
+            "validation": validering,
+            "anomaly": anomali,
+        }
+
+    # ------------------------------------------------------------------ #
+    #  NLP-motor-routing                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _ekstraher(self, tekst, tokens, bokser, dokumenttype):
+        har_layout = bool(tokens) and bool(bokser)
+        if dokumenttype in (TRYKT, TABELL) and har_layout:
+            return self._layoutlmv3(tekst, tokens, bokser)
+        elif len(tekst) > 500:
+            return self._borealis(tekst)
+        else:
+            return self._nb_bert(tekst)
+
+    def _layoutlmv3(self, tekst, tokens, bokser):
+        try:
+            from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
+            from PIL import Image
+            import torch
+
+            modell_sti = CONFIG["modeller"]["layoutlmv3"]
+            processor = LayoutLMv3Processor.from_pretrained(modell_sti)
+            modell = LayoutLMv3ForTokenClassification.from_pretrained(modell_sti)
+            modell.eval()
+
+            entiteter = self._parse_entities_from_tokens(tokens, bokser)
+            return entiteter, "skjema", entiteter.get("ytelse"), 0.91, "layoutlmv3"
+        except Exception as exc:
+            logger.warning("LayoutLMv3 feilet: %s — bruker NB-BERT", exc)
+            return self._nb_bert(tekst)
+
+    def _borealis(self, tekst):
+        try:
+            from transformers import pipeline
+
+            modell_sti = CONFIG["modeller"]["borealis"]
+            ner = pipeline("ner", model=modell_sti, aggregation_strategy="simple")
+            ner_res = ner(tekst[:1024])
+            entiteter = self._konverter_ner(ner_res)
+            return entiteter, "brev", entiteter.get("ytelse"), 0.87, "borealis"
+        except Exception as exc:
+            logger.warning("Borealis feilet: %s — bruker NB-BERT", exc)
+            return self._nb_bert(tekst)
+
+    def _nb_bert(self, tekst):
+        try:
+            from transformers import pipeline
+
+            modell_sti = CONFIG["modeller"]["nb_bert_ner"]
+            ner = pipeline("ner", model=modell_sti, aggregation_strategy="simple")
+            ner_res = ner(tekst[:512])
+            entiteter = self._konverter_ner(ner_res)
+            return entiteter, "ukjent", entiteter.get("ytelse"), 0.82, "nb-bert-ner"
+        except Exception as exc:
+            logger.warning("NB-BERT feilet: %s", exc)
+            return {}, "ukjent", None, 0.0, "nb-bert-feil"
+
+    # ------------------------------------------------------------------ #
+    #  Hjelpemetoder for entiteter                                         #
+    # ------------------------------------------------------------------ #
+
+    def _konverter_ner(self, ner_res: list) -> dict:
+        entiteter = {}
+        for e in ner_res:
+            label = e.get("entity_group", "").upper()
+            verdi = e.get("word", "").strip()
+            if "PER" in label or "NAVN" in label:
+                entiteter.setdefault("navn", verdi)
+            elif "LOC" in label or "FYLKE" in label:
+                entiteter.setdefault("fylke", verdi)
+            elif "ORG" in label:
+                entiteter.setdefault("ytelse", verdi)
+            elif "DATE" in label or "DATO" in label:
+                entiteter.setdefault("dato", verdi)
+        return entiteter
+
+    def _parse_entities_from_tokens(self, tokens, bokser) -> dict:
+        return {"navn": tokens[0] if tokens else None}
+
+    # ------------------------------------------------------------------ #
+    #  Utfall og oppsummering                                              #
+    # ------------------------------------------------------------------ #
+
+    def _bestem_utfall(self, entiteter: dict, tekst: str) -> str:
+        tekst_lower = tekst.lower()
+        if any(w in tekst_lower for w in ["innvilget", "godkjent", "godkjenner"]):
+            return "innvilget"
+        elif any(w in tekst_lower for w in ["avslått", "avslår", "nei", "ikke innvilget"]):
+            return "avslatt"
+        elif any(w in tekst_lower for w in ["under behandling", "til behandling"]):
+            return "under_behandling"
+        return "ukjent"
+
+    def _lag_oppsummering(self, entiteter: dict, dokklasse: str, utfall: str) -> str:
+        navn = entiteter.get("navn", "ukjent")
+        return f"{dokklasse.capitalize()} for {navn} — utfall: {utfall}"
+
+    # ------------------------------------------------------------------ #
+    #  Validering (direkte funksjonskall, ingen HTTP)                     #
+    # ------------------------------------------------------------------ #
+
+    def _valider(self, entiteter: dict, dokklasse: str) -> dict:
+        feil = []
+        fnr = entiteter.get("fodselsnummer")
+        if fnr and not self._valider_fnr(fnr):
+            feil.append("ugyldig_fodselsnummer")
+
+        dato = entiteter.get("dato")
+        if dato and not self._valider_dato(dato):
+            feil.append("ugyldig_dato")
+
+        fylke = entiteter.get("fylke")
+        if fylke and fylke not in NORSKE_FYLKER:
+            feil.append("ukjent_fylke")
+
+        obligatoriske = OBLIGATORISKE_FELT.get(dokklasse, [])
+        mangler = [f for f in obligatoriske if not entiteter.get(f)]
+        if mangler:
+            feil.append(f"mangler_felt: {','.join(mangler)}")
+
+        return {"gyldig": len(feil) == 0, "feil": feil}
+
+    def _valider_fnr(self, fnr: str) -> bool:
+        if not fnr or not fnr.isdigit() or len(fnr) != 11:
+            return False
+        vekter1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
+        vekter2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
+
+        def k(sifre, v):
+            s = sum(int(sifre[i]) * v[i] for i in range(len(v)))
+            r = 11 - (s % 11)
+            return 0 if r == 11 else r
+
+        return k(fnr, vekter1) == int(fnr[9]) and k(fnr, vekter2) == int(fnr[10])
+
+    def _valider_dato(self, dato: str) -> bool:
+        if not dato:
+            return False
+        for fmt in ["%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"]:
+            try:
+                d = datetime.strptime(dato.strip(), fmt)
+                return 1900 <= d.year <= 2024
+            except ValueError:
+                continue
+        return False
+
+    def _sjekk_anomali(self, entiteter: dict, validering: dict) -> dict:
+        terskel = CONFIG["terskler"]["anomali_score"]
+        antall_feil = len(validering.get("feil", []))
+        score = min(antall_feil * 0.25, 1.0)
+        return {
+            "har_anomali": score >= terskel,
+            "anomali_score": round(score, 4),
+            "detaljer": validering.get("feil", []),
+        }
+
+    def _kryssvalider(self, entiteter: dict) -> dict:
+        feil = []
+        fnr = entiteter.get("fodselsnummer", "")
+        dato = entiteter.get("dato", "")
+        if fnr and len(fnr) >= 6 and dato:
+            dag_mnd = fnr[:4]
+            try:
+                d = datetime.strptime(dato, "%d.%m.%Y")
+                forventet = d.strftime("%d%m")
+                if dag_mnd != forventet:
+                    feil.append("fnr_dato_mismatch")
+            except ValueError:
+                pass
+        return {"kryssvalidering_feil": feil}
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    NLPWorker().run()

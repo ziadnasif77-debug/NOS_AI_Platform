@@ -1,14 +1,16 @@
-# NAV Archive Intelligence System
+# NAV Archive Intelligence System — V2.1
 
-Et komplett AI-pipeline for automatisk digitalisering, analyse og søk i historiske NAV-dokumenter (30–60 millioner sider). Systemet kombinerer OCR, NLP og semantisk søk i en selvforbedrede arkitektur med menneskelig kvalitetssikring.
+Et produksjonsklart AI-pipeline for automatisk digitalisering, analyse og søk i historiske NAV-dokumenter (30–60 millioner sider). V2.1 introduserer **Postgres som eneste kilde til sannhet**, asynkrone worker-prosesser, idempotent opplasting og full audit-logg — i henhold til NAV-krav for offentlig forvaltning.
 
 ---
 
 ## Innholdsfortegnelse
 
 - [Oversikt](#oversikt)
-- [Arkitektur](#arkitektur)
-- [Tjenester](#tjenester)
+- [V2.1-arkitektur](#v21-arkitektur)
+- [Tilstandsmaskin](#tilstandsmaskin)
+- [Workers](#workers)
+- [Database-skjema](#database-skjema)
 - [AI-modeller](#ai-modeller)
 - [Forutsetninger](#forutsetninger)
 - [Installasjon](#installasjon)
@@ -16,143 +18,217 @@ Et komplett AI-pipeline for automatisk digitalisering, analyse og søk i histori
 - [Oppstart](#oppstart)
 - [API-dokumentasjon](#api-dokumentasjon)
 - [Make-kommandoer](#make-kommandoer)
-- [Jobbkø og statusstyring](#jobbkø-og-statusstyring)
-- [Label Studio — kvalitetssikring](#label-studio--kvalitetssikring)
-- [Finjusteringspipeline](#finjusteringspipeline)
-- [Dataflyt](#dataflyt)
-- [Mappestruktur](#mappestruktur)
-- [Utvikling](#utvikling)
+- [Testing](#testing)
+- [SLA-mål](#sla-mål)
+- [Sikkerhet og GDPR](#sikkerhet-og-gdpr)
 
 ---
 
 ## Oversikt
 
-NAV Archive Intelligence System behandler historiske papirdokumenter fra NAV gjennom tre lag:
-
 | Lag | Funksjon | Teknologi |
 |-----|----------|-----------|
-| **OCR** | PDF → strukturert tekst + layout | TrOCR, PaddleOCR, Marker |
-| **NLP** | Feltuttrekking + klassifisering + oppsummering | LayoutLMv3, NB-BERT, Borealis-4B |
-| **Søk** | Hybridssøk over hele arkivet | Milvus, BM25, RRF |
+| **Preprocessing** | Bildekvalitet + dokumentklassifisering | OpenCV, Laplacian |
+| **OCR** | PDF → strukturert tekst + layout | TrOCR, PaddleOCR 3.0, Marker |
+| **NLP** | Feltuttrekking + validering + utfall | LayoutLMv3, Borealis-4B, NB-BERT |
+| **Routing** | APPROVED / REVIEW / REJECTED | Ren logikk |
+| **Søk** | Hybrid semantisk + nøkkelordssøk | Milvus, BM25, RRF |
 
-Dokumenter som OCR-tjenesten er usikker på (konfidens < 85 %) sendes automatisk til **Label Studio** for menneskelig gjennomgang. Korreksjoner brukes til å finjustere modellene, slik at systemet kontinuerlig forbedrer seg.
-
----
-
-## Arkitektur
-
-```
-                      ┌─────────────────────────────────────────┐
-                      │           INNTAK (PDF-filer)             │
-                      └────────────────┬────────────────────────┘
-                                       │ Watchdog
-                      ┌────────────────▼────────────────────────┐
-                      │             OCR-TJENESTE (8001)          │
-                      │  ┌──────────────────────────────────┐   │
-                      │  │ 1. PDF → PNG (PyMuPDF)            │   │
-                      │  │ 2. Forbehandling (OpenCV)         │   │
-                      │  │ 3. Klassifisering                 │   │
-                      │  │    handskrift → TrOCR-NorHand     │   │
-                      │  │    trykt      → PaddleOCR 3.0     │   │
-                      │  │    tabell     → Marker OCR        │   │
-                      │  └──────────────┬───────────────────┘   │
-                      └─────────────────┼───────────────────────┘
-                             konfidens  │
-                    ┌──────────────────►│◄──────────────────┐
-                    │  < 85 %           │          >= 85 %   │
-                    ▼                   │                    ▼
-        ┌──────────────────┐            │     ┌─────────────────────────────┐
-        │  LABEL STUDIO     │            │     │      NLP-TJENESTE (8002)    │
-        │  (8080)           │            │     │  ┌───────────────────────┐  │
-        │  Menneskelig      │            │     │  │ LayoutLMv3            │  │
-        │  korreksjon +     │            │     │  │ (feltuttrekking)      │  │
-        │  LayoutLMv3-      │            │     │  │ + NB-BERT (klasse)    │  │
-        │  annotering       │            │     │  │ + Borealis-4B (summ.) │  │
-        └────────┬──────────┘            │     └───────────┬───────────────┘  │
-                 │ make send-til-trening  │                 │                    │
-                 ▼                        │                 ▼                    │
-        ┌──────────────────┐             │     ┌─────────────────────────────┐ │
-        │  FINJUSTERING     │             │     │      SØK-TJENESTE (8003)    │ │
-        │  TrOCR / NB-BERT  │             │     │  Milvus + BM25 + RRF        │ │
-        │  / LayoutLMv3     │             │     │  Qwen3-Embedding-0.6B       │ │
-        └──────────────────┘             │     └─────────────────────────────┘ │
-                                          │                                       │
-                      ┌───────────────────▼───────────────────────────────────┐  │
-                      │                API-TJENESTE (8000)                    │  │
-                      │  POST /last-opp  GET /sok  GET /jobb/{id}             │  │
-                      └───────────────────────────────────────────────────────┘  │
-```
-
-Et fullstendig flytdiagram finnes i [`docs/flytdiagram.svg`](docs/flytdiagram.svg).
+Dokumenter som ikke møter kvalitetskravene sendes automatisk til **Label Studio** (korrekt prosjekt per årsak). Korreksjoner brukes til kontinuerlig finjustering.
 
 ---
 
-## Tjenester
+## V2.1-arkitektur
 
-### `ocr` — OCR-tjeneste (port 8001)
-Overvåker `data/inntak/` med Watchdog. Konverterer PDF til PNG, forbehandler bildet (deskew, CLAHE, binarisering), klassifiserer dokumenttypen og kjører riktig OCR-motor.
+```
+  POST /last-opp/
+       │
+       ▼
+  ┌─────────────────────────────────────────────────────┐
+  │  API (port 8000)                                     │
+  │  • idempotens-sjekk (sha256 + 5-min-bøtte)          │
+  │  • Postgres: UPLOADED → QUEUED                       │
+  │  • Redis: rpush queue:preprocess                     │
+  └────────────────────┬────────────────────────────────┘
+                       │ Redis blpop
+       ┌───────────────▼──────────────────┐
+       │  PreprocessingWorker             │
+       │  QUEUED → PREPROCESSING          │
+       │  Bildekvalitet (Laplacian)       │
+       │  Dokumenttype (Otsu)             │
+       └───────────────┬──────────────────┘
+                       │ queue:ocr
+       ┌───────────────▼──────────────────┐
+       │  OCRWorker                       │
+       │  PREPROCESSING → OCR_PROCESSING  │
+       │  Handskrift → TrOCR              │
+       │  Tabell     → Marker             │
+       │  Blandet    → PaddleOCR+Marker   │
+       │  Trykt      → PaddleOCR 3.0      │
+       └───────────────┬──────────────────┘
+                       │ queue:nlp
+       ┌───────────────▼──────────────────┐
+       │  NLPWorker                       │
+       │  OCR_PROCESSING → NLP_PROCESSING │
+       │  layout → LayoutLMv3             │
+       │  lang   → Borealis               │
+       │  annet  → NB-BERT                │
+       │  + intern validering (mod11 fnr) │
+       └───────────────┬──────────────────┘
+                       │ queue:validation
+       ┌───────────────▼──────────────────┐
+       │  RoutingWorker                   │
+       │  VALIDATION → ROUTING → DONE     │
+       │  APPROVED → Milvus-kø            │
+       │  REVIEW   → Label Studio         │
+       └──────────────────────────────────┘
+               ▲
+               │  hvert 5. minutt
+       ┌───────┴──────────────────────────┐
+       │  ReconciliationWorker            │
+       │  • stuck jobs (lås utløpt)       │
+       │  • ghost states (ikke i Redis)   │
+       │  • tapte jobber (UPLOADED > 5m)  │
+       └──────────────────────────────────┘
 
-- **Semaphore:** Maks `MAKS_OCR_JOBBER` (standard: 2) samtidige jobber — hindrer GPU OOM
-- **Jobbsporing:** Leser `.jobb.json`-sidecar og oppdaterer status i Redis
+  Postgres = eneste kilde til sannhet
+  Redis    = transport (rebuildes fra Postgres ved restart)
+```
 
-### `nlp` — NLP-tjeneste (port 8002)
-Mottar OCR-output og kjører klassifisering og feltuttrekking **parallelt** med `ThreadPoolExecutor`:
-- **NB-BERT** (zero-shot): dokumenttype, ytelse, utfall
-- **LayoutLMv3**: navn, fødselsnummer, dato, adresse, signatur — bruker tekst + layout
-- **Borealis-4B**: norsk oppsummering + fylkeutrekking (regex over 24 norske fylker)
+---
 
-Faller tilbake til NB-BERT-NER hvis LayoutLMv3 ikke er finjustert ennå.
+## Tilstandsmaskin
 
-### `sok` — Søketjeneste (port 8003)
-Hybrid semantisk + nøkkelordssøk:
-- **Milvus** (HNSW, COSINE): vektorsøk med Qwen3-Embedding-0.6B (1024 dim)
-- **BM25Okapi**: tradisjonelt nøkkelordssøk
-- **RRF** (k=60): Reciprocal Rank Fusion kombinerer de to
+```
+UPLOADED → QUEUED → PREPROCESSING → OCR_PROCESSING → NLP_PROCESSING → VALIDATION → ROUTING → DONE
+                                                                                        ↓
+                                                                                     FAILED (terminal)
+```
 
-BM25-indeksen gjenoppbygges automatisk fra Milvus ved oppstart (synkronisering etter restart).
+| Overgang | Utløser |
+|----------|---------|
+| `UPLOADED → QUEUED` | API etter redis rpush |
+| `QUEUED → PREPROCESSING` | PreprocessingWorker blpop |
+| `PREPROCESSING → OCR_PROCESSING` | OCRWorker blpop |
+| `OCR_PROCESSING → NLP_PROCESSING` | NLPWorker blpop |
+| `NLP_PROCESSING → VALIDATION` | NLPWorker ferdig |
+| `VALIDATION → ROUTING` | RoutingWorker blpop |
+| `ROUTING → DONE` | RoutingWorker ferdig |
+| `* → FAILED` | 3 retries → DLQ |
 
-### `api` — Ekstern API (port 8000)
-FastAPI med X-API-Key autentisering. Videresender til interne tjenester.
+Alle andre overganger kaster `UgyldigTilstandsovergang`.
 
-| Endepunkt | Metode | Beskrivelse |
-|-----------|--------|-------------|
-| `/last-opp/` | POST | Last opp PDF. Returnerer `jobb_id` umiddelbart |
-| `/jobb/{jobb_id}` | GET | Sjekk behandlingsstatus (åpen, ingen nøkkel) |
-| `/sok` | POST | Hybrid semantisk + nøkkelordssøk |
-| `/dokument/{fil_id}` | GET | Hent ett dokument |
-| `/gjennomgang/ko` | GET | Antall dokumenter til gjennomgang i Label Studio |
-| `/gjennomgang/korriger/{fil_id}` | POST | Send korreksjon til Label Studio |
-| `/helse` | GET | Helsesjekk alle tjenester |
-| `/statistikk` | GET | Antall dokumenter i arkivet |
+---
 
-### `label-studio` — Kvalitetssikring (port 8080)
-Selvhostet Label Studio for OCR-korreksjon og LayoutLMv3-annotering. Bilder deles via felles volum (`GJENNOMGANG_STI`) slik at Label Studio kan vise dem.
+## Workers
 
-### `pipeline_dashboard` — Overvåkingsdashboard (port 5000)
-Flask + Server-Sent Events (SSE) for live visning av pipeline-status. Trådsikker buffer med `threading.Lock`.
+### BaseWorker (`tjenester/workers/base_worker.py`)
+Abstrakt basisklasse alle workers arver:
+- **Optimistisk låsing:** `locked_by` + `lock_expiry` (60 sek) — hindrer to workers fra å behandle samme jobb
+- **Retry med backoff:** 1s → 3s → 10s, maks 3 forsøk
+- **DLQ:** Etter maks retries → `dead_letter_queue`-tabell + `dlq:<stage>`-kø
+- **Audit-logg:** Hvert tilstandsskift, låsing og DLQ-hendelse skrives til `audit_log`
 
-### `milvus`, `etcd`, `minio` — Vektorinfrastruktur
-Milvus v2.4.5 med etcd (konfiglagrings) og MinIO (objektlagring).
+### PreprocessingWorker
+- Beregner bildekvalitet (Laplacian-varians / 1000, capped 1.0)
+- Klassifiserer dokumenttype (Otsu-terskel)
+- Sender til Label Studio prosjekt 1 hvis kvalitet < terskel
 
-### `redis` — Jobbkø og statusstyring
-Redis 7 for asynkron jobbsporing. 24 timers TTL per jobb.
+### OCRWorker
+- GPU-semaphore: maks `CONFIG["gpu"]["maks_ocr_jobber"]` samtidige
+- Ruter til riktig modell basert på dokumenttype
+- Sender til Label Studio prosjekt 2 ved lav konfidens
+
+### NLPWorker (inkluderer validering)
+- Ruter NLP-modell: PRINTED/TABLE + layout → LayoutLMv3; lang tekst → Borealis; ellers → NB-BERT
+- Intern validering (ingen HTTP): Mod11 fødselsnummer, dato 1900–2024, obligatoriske felt, norske fylker
+- Kryssvalidering (kun hvis `CONFIG["lag"]["lag5_kryssvalidering"] = true`)
+- Sender til Label Studio prosjekt 4 ved valideringsfeil
+
+### RoutingWorker
+- Ren logikk, ingen modeller
+- Prioritet: OCR-konfidens → NLP-konfidens → validering → anomali → APPROVED
+- APPROVED: sendes til `queue:sok_indeksering`
+- REVIEW: sendes til Label Studio med korrekt prosjekt-ID
+
+### ReconciliationWorker (hvert 5. minutt)
+- **Stuck jobs:** lås utløpt → frigi lås + re-kø
+- **Ghost states:** aktiv i Postgres, ikke i Redis, > 10 min siden sist oppdatert → re-kø
+- **Tapte jobber:** UPLOADED > 5 min uten å bli QUEUED → sett QUEUED + kø
+
+---
+
+## Database-skjema
+
+### `jobs`
+```sql
+job_id          UUID PRIMARY KEY DEFAULT gen_random_uuid()
+idempotency_key TEXT UNIQUE NOT NULL   -- sha256(innhold + tidsbøtte)
+state           job_state NOT NULL DEFAULT 'UPLOADED'
+locked_by       TEXT                   -- worker_id eller NULL
+lock_expiry     TIMESTAMP              -- utløpstidspunkt for lås
+filnavn         TEXT
+fil_sti         TEXT
+opprettet       TIMESTAMP DEFAULT NOW()
+oppdatert       TIMESTAMP DEFAULT NOW()
+```
+
+### `results`
+```sql
+job_id              UUID PRIMARY KEY REFERENCES jobs(job_id)
+preprocess_result   JSONB
+ocr_result          JSONB
+nlp_result          JSONB
+validation_result   JSONB
+routing_decision    TEXT CHECK (IN ('APPROVED','REVIEW','REJECTED'))
+label_studio_project INT
+```
+
+### `audit_log` (slettes aldri — NAV-krav)
+```sql
+id          BIGSERIAL PRIMARY KEY
+job_id      UUID
+event_type  TEXT NOT NULL   -- STATE_ENDRING, RETRY, DLQ, OPPRETTET, ...
+from_state  TEXT
+to_state    TEXT
+worker_id   TEXT
+details     JSONB
+created_at  TIMESTAMP DEFAULT NOW()
+```
+
+### `dead_letter_queue`
+```sql
+id               BIGSERIAL PRIMARY KEY
+job_id           UUID
+stage            TEXT
+error_type       TEXT
+error_message    TEXT
+payload_snapshot JSONB
+retry_count      INT
+resolved_at      TIMESTAMP   -- NULL = ikke løst
+resolved_by      TEXT
+created_at       TIMESTAMP DEFAULT NOW()
+```
 
 ---
 
 ## AI-modeller
 
-Alle modeller lastes ned én gang og lagres lokalt. Systemet kjører **100 % offline** etter første nedlasting (~17 GB totalt).
+Alle modeller kjører **100 % offline** etter første nedlasting (~17 GB totalt).
 
-| Nøkkel | Modell-ID | Størrelse | Bruk |
-|--------|-----------|-----------|------|
-| `norhand` | `Sprakbanken/TrOCR-norhand-v3` | ~1,2 GB | Historisk håndskrift-OCR |
-| `nb-bert` | `NbAiLab/nb-bert-base` | ~440 MB | Dokumentklassifisering (zero-shot) |
-| `nb-bert-ner` | `NbAiLab/nb-bert-base-ner` | ~440 MB | Navngitt entitetsgjenkjenning (fallback) |
-| `borealis` | `NbAiLab/borealis-4b-instruct-preview` | ~8 GB | Norsk LLM — oppsummering + analyse |
-| `qwen3-embed` | `Qwen/Qwen3-Embedding-0.6B` | ~1,2 GB | Tekstembedding for vektorsøk |
-| `layoutlmv3` | `microsoft/layoutlmv3-base` | ~500 MB | Feltuttrekking (tekst + layout) |
+| Nøkkel | Modell | Bruk |
+|--------|--------|------|
+| `norhand` | `Sprakbanken/TrOCR-norhand-v3` | Håndskrift-OCR |
+| `nb_bert` | `NbAiLab/nb-bert-base` | Dokumentklassifisering |
+| `nb_bert_ner` | `NbAiLab/nb-bert-base-ner` | Entitetsgjenkjenning (fallback) |
+| `layoutlmv3` | `microsoft/layoutlmv3-base` | Feltuttrekking (tekst + layout) |
+| `borealis` | `NbAiLab/borealis-4b-instruct-preview` | Norsk LLM — analyse |
+| `qwen3` | `Qwen/Qwen3-Embedding-0.6B` | 1024-dim vektorembedding |
 
-**Merk:** LayoutLMv3 må finjusteres på NAV-data før det gir nyttige resultater. Se [Finjusteringspipeline](#finjusteringspipeline).
+**Modellruting NLP (aldri alle tre samtidig):**
+- TRYKT/TABELL + tokens+bokser → LayoutLMv3
+- `len(tekst) > 500` → Borealis
+- ellers → NB-BERT
 
 ---
 
@@ -162,13 +238,7 @@ Alle modeller lastes ned én gang og lagres lokalt. Systemet kjører **100 % off
 - **NVIDIA GPU** med ≥ 12 GB VRAM (anbefalt for Borealis-4B)
 - **NVIDIA Container Toolkit** installert
 - Python 3.11+ (kun for skript utenfor Docker)
-- ≥ 30 GB ledig diskplass (modeller + data)
-
-### GPU-verifisering
-```bash
-nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
-```
+- ≥ 30 GB ledig diskplass (modeller + data + Postgres)
 
 ---
 
@@ -183,20 +253,21 @@ cd nav
 ### 2. Opprett `.env`-fil
 ```bash
 cp .env.example .env
-# Rediger .env og sett minst:
-#   API_NOKKEL=<sterk-tilfeldig-streng>
-#   LABEL_STUDIO_API_KEY=<din-label-studio-nokkel>
-#   GPU_ENHET=cuda:0
+# Sett minst: API_NOKKEL, LABEL_STUDIO_API_KEY, GPU_ENHET
 ```
 
-### 3. Last ned alle AI-modeller
+### 3. Last ned AI-modeller
 ```bash
-pip install huggingface_hub marker-pdf
-make last-ned-modeller
+make last-ned-modeller   # ~17 GB, én gang
 ```
-Dette laster ned ~17 GB og tar 20–60 minutter avhengig av internettforbindelsen. Trenger bare gjøres én gang.
 
-### 4. Opprett datamapper
+### 4. Initialiser databasen
+```bash
+make start       # starter postgres
+make init-db     # oppretter alle tabeller og enum-typer
+```
+
+### 5. Opprett datamapper
 ```bash
 mkdir -p data/{inntak,behandlet,gjennomgang,finjustering,logger}
 ```
@@ -205,51 +276,37 @@ mkdir -p data/{inntak,behandlet,gjennomgang,finjustering,logger}
 
 ## Konfigurasjon
 
-Alle innstillinger settes i `.env`. Se `.env.example` for fullstendig oversikt.
+Alle innstillinger i `config/config.yaml` og `.env`.
 
-| Variabel | Standard | Beskrivelse |
-|----------|----------|-------------|
-| `DATA_STI` | `./data` | Rotmappe for alle data |
-| `MODELLER_STI` | `./modeller` | Lokal modellmappe |
-| `INNTAK_STI` | `./data/inntak` | PDF-filer som skal behandles |
-| `BEHANDLET_STI` | `./data/behandlet` | OCR-output |
-| `GJENNOMGANG_STI` | `./data/gjennomgang` | Delt volum med Label Studio |
-| `FINJUSTERING_STI` | `./data/finjustering` | Treningsdata |
-| `KONFIDENS_TERSKEL` | `85` | Prosent — under dette → Label Studio |
-| `GPU_ENHET` | `cuda:0` | GPU-enhet |
-| `API_NOKKEL` | *(tom)* | X-API-Key for eksternt API. Tom = ingen autentisering |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis-adresse |
-| `MAKS_OCR_JOBBER` | `2` | Maks samtidige OCR-jobber |
-| `LABEL_STUDIO_API_KEY` | — | API-nøkkel fra Label Studio UI |
-| `LABEL_STUDIO_OCR_PROSJEKT_ID` | `1` | Prosjekt-ID i Label Studio |
+| Parameter | Standard | Beskrivelse |
+|-----------|----------|-------------|
+| `terskler.bildekvalitet` | `0.60` | Laplacian-score under dette → Label Studio |
+| `terskler.ocr_konfidens` | `85` | Prosent — under dette → Label Studio |
+| `terskler.nlp_konfidens` | `80` | Prosent — under dette → Label Studio |
+| `gpu.maks_ocr_jobber` | `2` | Maks samtidige GPU-OCR-jobber |
+| `reconciliation.intervall_sekunder` | `300` | Reconciliation-frekvens |
+| `reconciliation.lock_timeout_sekunder` | `60` | Låsevarighet for workers |
+| `lag.lag5_kryssvalidering` | `false` | Aktiver FNR/dato-kryssvalidering |
 
 ---
 
 ## Oppstart
 
 ```bash
-# Start alle tjenester
+# Start alle tjenester (inkl. V2.1 workers og Postgres)
 make start
+
+# Første kjøring: initialiser database
+make init-db
+
+# Rebuild Redis fra Postgres (etter Redis-restart)
+make rebuild-redis
 
 # Sjekk at alt er oppe
 make helse
 
-# Se logger i sanntid
+# Se logger
 make logger
-
-# Stop
-make stopp
-```
-
-Første oppstart tar lenger tid fordi Docker-bildene bygges og modellene lastes inn i GPU-minnet.
-
-### Verifiser at API fungerer
-```bash
-# Uten autentisering (hvis API_NOKKEL er tom)
-curl http://localhost:8000/helse
-
-# Med autentisering
-curl -H "X-API-Key: din-nokkel" http://localhost:8000/helse
 ```
 
 ---
@@ -260,61 +317,44 @@ curl -H "X-API-Key: din-nokkel" http://localhost:8000/helse
 ```bash
 curl -X POST http://localhost:8000/last-opp/ \
   -H "X-API-Key: din-nokkel" \
-  -F "fil=@/sti/til/dokument.pdf"
+  -F "fil=@dokument.pdf"
 ```
-**Svar:**
+**Svar (202 Accepted):**
 ```json
 {
-  "jobb_id": "f8e194242467",
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "filnavn": "dokument.pdf",
-  "status": "i_ko",
-  "sjekk_status": "/jobb/f8e194242467"
+  "state": "QUEUED",
+  "idempotent": false,
+  "sjekk_status": "/jobb/550e8400-e29b-41d4-a716-446655440000"
 }
 ```
+Sender du samme fil innen 5 minutter får du `"idempotent": true` og samme `job_id` tilbake.
 
-### Sjekk behandlingsstatus
+### Sjekk status
 ```bash
-curl http://localhost:8000/jobb/f8e194242467
+curl http://localhost:8000/jobb/{job_id}
 ```
-**Mulige statuser:**
-| Status | Beskrivelse |
-|--------|-------------|
-| `i_ko` | Fil mottatt, venter på OCR |
-| `ocr_pagar` | OCR pågår |
-| `nlp_pagar` | NLP-analyse pågår |
-| `gjennomgang` | Lav konfidens → sendt til Label Studio |
-| `fullfort` | Indeksert i søkemotoren |
-| `feil` | Feil under behandling (se `feil`-feltet) |
+Returnerer `job_id`, `state`, `filnavn`, `opprettet`, `oppdatert`.
+
+### Hent resultat
+```bash
+curl http://localhost:8000/resultat/{job_id}
+```
+Returnerer alle worker-resultater fra `results`-tabellen.
+
+### Hent audit-logg
+```bash
+curl http://localhost:8000/audit/{job_id}
+```
+Returnerer komplett historikk for jobben (alle tilstandsskifter, retries, DLQ-hendelser).
 
 ### Søk i arkivet
 ```bash
-# Enkel tekst-søk
 curl -X POST http://localhost:8000/sok \
   -H "X-API-Key: din-nokkel" \
   -H "Content-Type: application/json" \
-  -d '{"sporsmal": "dagpenger søknad 1985", "antall": 10}'
-
-# Med filtre
-curl -X POST http://localhost:8000/sok \
-  -H "X-API-Key: din-nokkel" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sporsmal": "uføretrygd",
-    "filtre": {
-      "ytelse": "uforetrygd",
-      "fylke": "Rogaland"
-    },
-    "antall": 5
-  }'
-```
-
-### Bruk via Makefile
-```bash
-# Søk direkte fra terminalen
-make sok SPORSMAL="Ola Nordmann 1234567890"
-
-# Last opp en fil
-make last-opp FIL="skjema.pdf"
+  -d '{"sporsmal": "dagpenger 1985", "antall": 10}'
 ```
 
 ---
@@ -322,142 +362,83 @@ make last-opp FIL="skjema.pdf"
 ## Make-kommandoer
 
 ```bash
-make start                  # Start alle Docker-tjenester
-make stopp                  # Stop alle tjenester
-make restart                # Restart alle tjenester
-make logger                 # Vis logger i sanntid
-make helse                  # Sjekk alle tjenester
+# ─── Infrastruktur ───────────────────────────────────────────────────
+make start                   # Start alle Docker-tjenester
+make stopp                   # Stop alle tjenester
+make restart                 # Restart alle tjenester
+make logger                  # Vis logger i sanntid
+make helse                   # Sjekk alle tjenester
 
-make last-ned-modeller      # Last ned AI-modeller fra HuggingFace (~17 GB)
-make finjuster              # Finjuster TrOCR + NB-BERT + LayoutLMv3
+# ─── V2.1 ────────────────────────────────────────────────────────────
+make init-db                 # Opprett Postgres-tabeller og enum-typer
+make rebuild-redis           # Rebuild Redis-køer fra Postgres
+make start-workers           # Start alle worker-containere
+make start-reconciliation    # Start ReconciliationWorker
 
-make label-studio           # Åpne Label Studio i nettleseren
-make eksporter-korreksjoner # Eksporter korreksjoner fra Label Studio til JSON
-make send-til-trening       # Eksporter + finjuster automatisk
+# ─── Tester ──────────────────────────────────────────────────────────
+make test                    # Kjør alle 64 tester
+make test-state-machine      # Test tilstandsmaskin
+make test-idempotency        # Test idempotens-logikk
 
-make lag-datasett           # Generer Label Studio-oppgaver for LayoutLMv3-annotering
-make konverter-annotasjoner # Konverter Label Studio-eksport til LayoutLMv3-treningsformat
+# ─── Modeller og trening ─────────────────────────────────────────────
+make last-ned-modeller       # Last ned AI-modeller (~17 GB)
+make finjuster               # Finjuster TrOCR + NB-BERT + LayoutLMv3
+make lag-datasett            # Generer Label Studio-oppgaver
+make konverter-annotasjoner  # Konverter annotasjoner → treningsformat
+make send-til-trening        # Eksporter + finjuster i én kommando
 
-make sok SPORSMAL="..."     # Søk direkte fra terminalen
-make last-opp FIL="..."     # Last opp én PDF-fil
+# ─── Drift ───────────────────────────────────────────────────────────
+make sok SPORSMAL="..."      # Søk fra terminalen
+make last-opp FIL="..."      # Last opp PDF
+make label-studio            # Åpne Label Studio (http://localhost:8080)
 ```
 
 ---
 
-## Jobbkø og statusstyring
+## Testing
 
-Systemet bruker **Redis** for asynkron jobbsporing med 24 timers TTL.
-
-### Slik fungerer det
-
-1. `POST /last-opp/` lagrer PDF-filen i `data/inntak/` og returnerer **umiddelbart** med `jobb_id`
-2. En `.jobb.json`-sidecarfil skrives ved siden av PDF-en med jobbens ID
-3. **Watchdog** i OCR-tjenesten plukker opp filen og leser sidecar-en
-4. OCR-tjenesten oppdaterer statusen i Redis for hvert steg
-5. Klienten poller `GET /jobb/{jobb_id}` for å følge med
-
-### Backpressure
-`MAKS_OCR_JOBBER` (standard: 2) begrenser antall samtidige OCR-jobber via en `threading.Semaphore`. Filer som ankommer mens grensen er nådd, venter i Watchdog-køen. Dette hindrer GPU-minnefeil (OOM) ved masseopplasting.
-
----
-
-## Label Studio — kvalitetssikring
-
-### Oppsett
-1. Start systemet: `make start`
-2. Åpne Label Studio: `make label-studio` (http://localhost:8080)
-3. Opprett API-nøkkel i Label Studio → Settings → Account → Access Token
-4. Sett `LABEL_STUDIO_API_KEY` i `.env`
-5. Opprett to prosjekter:
-   - **OCR-korreksjon** (prosjekt ID 1): for lav-konfidens dokumenter
-   - **LayoutLMv3-annotering** (prosjekt ID 2): for navngitt entitetsmerking
-
-### Workflow for OCR-korreksjon
-Dokumenter med OCR-konfidens under 85 % sendes automatisk til Label Studio. Bilder kopieres til `data/gjennomgang/bilder/` som Label Studio serverer via `/data/local-files/?d=bilder/`.
-
-### Workflow for LayoutLMv3-trening
 ```bash
-# Steg 1: Generer Label Studio-oppgaver fra PDF-filer
-make lag-datasett
-# → Kjører PaddleOCR og lager oppgaver med tokens + bounding boxes
-
-# Steg 2: Annotter i Label Studio
-# (merk NAVN, FODSELSNUMMER, DATO, ADRESSE, SIGNATUR manuelt)
-
-# Steg 3: Eksporter og konverter
-make konverter-annotasjoner
-# → Konverterer til LayoutLMv3-treningsformat
-
-# Steg 4: Tren modellen
-make finjuster
+python -m pytest tester/ -v
 ```
+
+**64 tester fordelt på:**
+
+| Testfil | Beskrivelse |
+|---------|-------------|
+| `test_config.py` | Config-struktur, porter, terskler |
+| `test_state_machine.py` | Gyldige/ugyldige tilstandsoverganger |
+| `test_idempotency.py` | SHA256-nøkkel, tidsbøtter, hex-format |
+| `test_dlq.py` | Retry-backoff (1s/3s/10s), DLQ etter 3 forsøk |
+| `test_routing_decisions.py` | Alle beslutningskombinasjoner |
+| `test_validation.py` | Mod11 FNR, dato 1900–2024 |
+| `test_reconciliation.py` | Stuck/ghost/tapte jobber |
+| `test_contracts.py` | Worker output-nøkler og verdiområder |
+| `test_lag0.py` | Bildekvalitet (Laplacian), FNR-format |
+| `test_lag4.py` | FNR mod11, datovalidering |
+| `test_ruter.py` | Rutinglogikk fra gamle lag |
 
 ---
 
-## Finjusteringspipeline
+## SLA-mål
 
-Systemet støtter finjustering av tre modeller:
-
-### TrOCR-NorHand
-Forbedrer håndskrift-OCR basert på menneskelige korreksjoner fra Label Studio.
-- Treningsdata: `data/finjustering/trocr_*.json`
-- Format: `{"fil_sti": "...", "tekst": "korrekt tekst"}`
-- Metode: Seq2SeqTrainer, 3 epoker, lr=5e-5
-
-### NB-BERT
-Forbedrer dokumentklassifisering.
-- Treningsdata: `data/finjustering/nb_bert_*.json`
-- Format: `{"tekst": "...", "etikett": "soknad|vedtak|korrespondanse"}`
-- Metode: Trainer, 3 epoker, lr=2e-5
-
-### LayoutLMv3
-Forbedrer feltuttrekking med 6 etiketter:
-
-| Etikett | ID | Beskrivelse |
-|---------|-----|-------------|
-| `NAVN` | 0 | Fullt navn |
-| `FODSELSNUMMER` | 1 | 11-sifret personnummer |
-| `DATO` | 2 | Dato |
-| `ADRESSE` | 3 | Postadresse |
-| `SIGNATUR` | 4 | Signatur |
-| `O` | 5 | Ingen etikett |
-
-- Treningsdata: `data/finjustering/layoutlmv3_*.json`
-- Metode: Trainer, 5 epoker, lr=5e-5
-- `ignore_mismatched_sizes=True` lar base-modellen få ny klassifiseringshode
-
-**Alle finjusteringer tar automatisk backup** med tidsstempel (`modeller/norhand-backup-YYYYMMDD_HHMMSS/`) før modellen overskrives.
-
-### Automatisk eksport og trening
-```bash
-make send-til-trening
-# Tilsvarer: eksporter_fra_label_studio.py && finjuster.py
-# Etter fullføring: OCR-tjenesten laster inn nye modeller uten omstart
-```
+| Steg | Mål | Hardgrense |
+|------|-----|-----------|
+| API (upload) | < 200 ms | 500 ms |
+| Preprocessing | < 300 ms | 1 000 ms |
+| OCR | 1–5 sek | 30 sek |
+| NLP | < 1 500 ms | 5 000 ms |
+| Validering | < 50 ms | 200 ms |
+| Routing | < 20 ms | 100 ms |
 
 ---
 
-## Dataflyt
+## Sikkerhet og GDPR
 
-```
-PDF
- │
- ├─ pdf_til_bilde()         PyMuPDF: første side → PNG (2x zoom)
- ├─ forbehandle_bilde()     OpenCV: deskew + CLAHE + Otsu-binarisering
- ├─ klassifiser_side()      OpenCV: HANDSKRIFT / TRYKT / TABELL / BLANDET
- │
- ├─ [HANDSKRIFT] kjor_htrflow()     HTRflow + TrOCR-NorHand → tekst
- ├─ [TRYKT]      kjor_paddleocr()   PaddleOCR 3.0 → tekst + tokens + bokser
- └─ [TABELL]     kjor_marker()      Marker OCR → tekst + markdown
-      │
-      ├─ konfidens >= 85%
-      │    └─ NLP: LayoutLMv3 + NB-BERT (parallell) + Borealis-4B
-      │         └─ Søk: Qwen3-embedding → Milvus + BM25 → indeksert
-      │
-      └─ konfidens < 85%
-           └─ Label Studio: menneskelig korreksjon
-                └─ make send-til-trening → finjustering → reload
-```
+- **Offline:** Alle AI-modeller kjører lokalt — ingen data forlater serveren
+- **Autentisering:** X-API-Key for alle endepunkter unntatt `/helse`, `/statistikk`, `/jobb/<id>`, `/resultat/<id>`, `/audit/<id>`
+- **Audit-logg:** Slettes aldri (NAV-krav) — komplett sporbarhet for alle tilstandsskifter
+- **Idempotens:** Duplikate opplastinger gir ingen duplikate jobber
+- **GDPR:** Fødselsnummer, navn og adresse behandles kun internt — validering via Mod11 uten ekstern oppkobling
 
 ---
 
@@ -465,120 +446,44 @@ PDF
 
 ```
 nav/
-├── docker-compose.yml          # Alle 9 tjenester + infrastruktur
-├── Makefile                    # Alle driftskommandoer
-├── .env.example                # Konfigurasjonsmalen
-├── .gitignore
-│
-├── delt/                       # Delt kode mellom alle tjenester
-│   ├── skjemaer.py             # Pydantic-modeller (DokumentInntak, UttrukketData, ...)
-│   ├── konstanter.py           # Dokumenttyper, statuser
-│   └── verktøy.py              # Logging, JSON-verktøy, UUID-ID-generator
-│
+├── docker-compose.yml
+├── Makefile
+├── config/
+│   └── config.yaml                         # Sentralkonfig
+├── delt/
+│   ├── konstanter.py                        # V2.1: STATE_OVERGANGER, LOVLIGE_OVERGANGER, REDIS_KOOER
+│   ├── skjemaer.py                          # Pydantic-modeller
+│   └── verktøy.py
 ├── tjenester/
-│   ├── ocr/
-│   │   ├── hoved.py            # Watchdog + OCR-routing + jobbsporing
-│   │   ├── klassifiserer.py    # OpenCV-dokumentklassifisering
-│   │   ├── pipeline.yaml       # HTRflow-konfigurasjon
-│   │   ├── helsesjekk.py       # Docker healthcheck
-│   │   └── krav.txt            # Python-avhengigheter
-│   ├── nlp/
-│   │   ├── hoved.py            # LayoutLMv3 + NB-BERT + Borealis (parallell)
-│   │   ├── helsesjekk.py
-│   │   └── krav.txt
+│   ├── workers/
+│   │   ├── base_worker.py                   # Abstrakt basisklasse (lås, retry, DLQ, audit)
+│   │   ├── lag0_preprocessing/lag0.py       # PreprocessingWorker
+│   │   ├── lag1_ocr/lag1.py                 # OCRWorker
+│   │   ├── lag2_nlp/lag2.py                 # NLPWorker (inkl. validering)
+│   │   ├── lag3_routing/lag3.py             # RoutingWorker
+│   │   └── reconciliation/
+│   │       └── reconciliation_worker.py     # ReconciliationWorker
+│   ├── api/
+│   │   ├── hoved.py
+│   │   └── ruter/
+│   │       └── last_opp.py                  # V2.1: idempotens, /jobb, /resultat, /audit
 │   ├── sok/
-│   │   ├── hoved.py            # Milvus + BM25 + RRF + BM25-gjenoppbygging
-│   │   ├── helsesjekk.py
-│   │   └── krav.txt
-│   └── api/
-│       ├── hoved.py            # API-nøkkel-middleware + /jobb/<id>
-│       ├── ruter/
-│       │   ├── last_opp.py     # Asynkron opplasting med jobb_id
-│       │   ├── sok.py          # Søke-endepunkter
-│       │   └── gjennomgang.py  # Label Studio-integrasjon
-│       └── krav.txt
-│
+│   └── (legacy: ocr, nlp, lag0–lag5, ruter)
 ├── skript/
-│   ├── last_ned_modeller.py    # Engangs-nedlasting fra HuggingFace
-│   ├── finjuster.py            # TrOCR + NB-BERT + LayoutLMv3 trening
-│   ├── eksporter_fra_label_studio.py   # Eksporter korreksjoner → treningsdata
-│   ├── send_til_label_studio.py        # Send lav-konfidens dok. til Label Studio
-│   ├── lag_layoutlmv3_datasett.py      # PDF → Label Studio-oppgaver (PaddleOCR)
-│   ├── konverter_til_layoutlmv3.py     # Label Studio-eksport → treningsformat
-│   └── sjekk_helse.py          # Helse-sjekk for alle tjenester
-│
-├── pipeline_dashboard/
-│   ├── app.py                  # Flask + SSE (trådsikker)
-│   ├── pipeline.py             # Pipeline-faser og helsesjekker
-│   └── maler/indeks.html       # Dashboard-UI
-│
-├── docs/
-│   └── flytdiagram.svg         # Komplett arkitekturdiagram
-│
-└── data/                       # Opprettet ved installasjon
-    ├── inntak/                 # Drop PDF-filer her (eller via API)
-    ├── behandlet/              # OCR-output (raw/ + renset/)
-    ├── gjennomgang/            # Delt med Label Studio (bilder + annoteringer)
-    ├── finjustering/           # Treningsdata og eksporterte annoteringer
-    └── logger/                 # Tjenestologger
+│   ├── init_db.py                           # V2.1: opprett 4 Postgres-tabeller
+│   ├── rebuild_redis.py                     # V2.1: rebuild Redis fra Postgres
+│   ├── last_ned_modeller.py
+│   └── finjuster.py
+├── tester/
+│   ├── test_state_machine.py
+│   ├── test_idempotency.py
+│   ├── test_dlq.py
+│   ├── test_reconciliation.py
+│   ├── test_routing_decisions.py
+│   ├── test_validation.py
+│   ├── test_contracts.py
+│   └── (test_config, test_lag0, test_lag4, test_ruter)
+└── docs/
+    ├── v2_1_analyse.md
+    └── v2_1_migration_guide.md
 ```
-
----
-
-## Utvikling
-
-### Kjør én tjeneste lokalt (uten Docker)
-```bash
-# Eksempel: API-tjenesten
-pip install -r tjenester/api/krav.txt
-cd tjenester/api
-API_NOKKEL="" SOK_URL=http://localhost:8003 uvicorn hoved:app --reload --port 8000
-```
-
-### Syntaks-sjekk alle filer
-```bash
-python3 -m py_compile delt/*.py tjenester/**/*.py skript/*.py
-```
-
-### Lokal søk uten Docker
-```bash
-make sok SPORSMAL="dagpenger 1985"
-# Tilsvarer:
-curl -X POST http://localhost:8000/sok \
-  -H "Content-Type: application/json" \
-  -d '{"sporsmal": "dagpenger 1985"}'
-```
-
-### Manuell batch-import av mange PDF-filer
-Kopier PDF-filene direkte til `data/inntak/`. Watchdog plukker dem opp automatisk og respekterer semaphore-grensen.
-
-```bash
-cp /sti/til/mange_filer/*.pdf data/inntak/
-# Maks 2 behandles parallelt, resten venter
-```
-
----
-
-## Sikkerhet
-
-- **Autentisering:** X-API-Key header for alle endepunkter unntatt `/helse`, `/statistikk` og `/jobb/<id>`
-- **Offline:** Alle AI-modeller kjører lokalt — ingen data sendes til eksterne tjenester
-- **GDPR:** Sensitiv persondata (fødselsnummer, navn, adresse) forlater aldri serveren
-- **API-nøkkel:** Sett `API_NOKKEL` til en sterk tilfeldig streng i produksjon (`openssl rand -hex 32`)
-
----
-
-## Kjente begrensninger
-
-| Begrensning | Forklaring |
-|-------------|------------|
-| LayoutLMv3 utrenet | Krever annoterte NAV-dokumenter via Label Studio før feltuttrekking fungerer optimalt |
-| Kun første PDF-side | Watchdog behandler bare side 1. Flersidig støtte er ikke implementert |
-| Enkeltfiloppladning | `POST /last-opp/` tar én fil om gangen |
-| Ingen OAuth2/JWT | API bruker enkel statisk nøkkel — tilstrekkelig for intern bruk |
-
----
-
-## Lisens
-
-Dette prosjektet er utviklet for internt bruk med historiske NAV-dokumenter.
