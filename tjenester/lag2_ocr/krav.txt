@@ -1,10 +1,4 @@
 fastapi
 uvicorn
-transformers
-torch
-htrflow
-marker-pdf
-paddleocr
-PyMuPDF
-pydantic
-requests
+httpx
+pyyaml

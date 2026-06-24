@@ -1,6 +1,4 @@
 fastapi
 uvicorn
-transformers
-torch
-Pillow
-pydantic
+httpx
+pyyaml
