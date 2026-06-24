@@ -17,10 +17,18 @@ def test_maal_bildekvalitet_god():
             score = min(lap_var / 1000, 1.0)
             assert score > 0.60, f"Sjakkmønster skal gi høy score, fikk {score}"
 
-def test_valider_fodselsnummer_format():
-    """Fødselsnummer må være 11 siffer."""
-    assert len("01010150000") == 11
-    assert not "123456789".isdigit() or len("123456789") != 11
+def test_valider_fodselsnummer_gyldig():
+    """Gyldig norsk fødselsnummer — mod11-verifisert"""
+    # 17078600187 — mod11-gyldig testverdi
+    fnr = "17078600187"
+    vekter1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
+    vekter2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
+    def k(sifre, v):
+        s = sum(int(sifre[i]) * v[i] for i in range(len(v)))
+        r = 11 - (s % 11)
+        return 0 if r == 11 else r
+    assert k(fnr, vekter1) == int(fnr[9])
+    assert k(fnr, vekter2) == int(fnr[10])
 
 def test_maal_bildekvalitet_daarllig():
     """Helt svart bilde → score nær 0"""
