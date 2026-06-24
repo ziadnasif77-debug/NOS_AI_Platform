@@ -5,45 +5,39 @@ services:
 
   lag0:
     build: ./tjenester/lag0_kvalitet
-    environment:
-      - LAG0_PORT=8010
-    ports:
-      - "8010:8010"
     volumes:
       - ./config:/config
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8010/helse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ./delt:/delt
+      - ${BEHANDLET_STI:-./data/behandlet}:/data/behandlet
+    environment:
+      - PYTHONPATH=/config:/delt
+    ports:
+      - "8010:8010"
     restart: unless-stopped
 
   lag1:
     build: ./tjenester/lag1_klassifisering
-    environment:
-      - LAG1_PORT=8011
-    ports:
-      - "8011:8011"
     volumes:
       - ./config:/config
-      - ${MODELLER_STI:-./modeller}:/modeller
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8011/helse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ./delt:/delt
+      - ${BEHANDLET_STI:-./data/behandlet}:/data/behandlet
+    environment:
+      - PYTHONPATH=/config:/delt
+    ports:
+      - "8011:8011"
     restart: unless-stopped
 
   lag2:
     build: ./tjenester/lag2_ocr
-    environment:
-      - LAG2_PORT=8012
-      - GPU_ENHET=${GPU_ENHET:-cpu}
-    ports:
-      - "8012:8012"
     volumes:
       - ./config:/config
+      - ./delt:/delt
+      - ${BEHANDLET_STI:-./data/behandlet}:/data/behandlet
       - ${MODELLER_STI:-./modeller}:/modeller
+    environment:
+      - PYTHONPATH=/config:/delt
+    depends_on:
+      - redis
     deploy:
       resources:
         reservations:
@@ -51,23 +45,19 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8012/helse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    ports:
+      - "8012:8012"
     restart: unless-stopped
 
   lag3:
     build: ./tjenester/lag3_nlp
-    environment:
-      - LAG3_PORT=8013
-      - GPU_ENHET=${GPU_ENHET:-cpu}
-    ports:
-      - "8013:8013"
     volumes:
       - ./config:/config
+      - ./delt:/delt
+      - ${BEHANDLET_STI:-./data/behandlet}:/data/behandlet
       - ${MODELLER_STI:-./modeller}:/modeller
+    environment:
+      - PYTHONPATH=/config:/delt
     deploy:
       resources:
         reservations:
@@ -75,63 +65,50 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8013/helse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    ports:
+      - "8013:8013"
     restart: unless-stopped
 
   lag4:
     build: ./tjenester/lag4_validering
-    environment:
-      - LAG4_PORT=8014
-    ports:
-      - "8014:8014"
     volumes:
       - ./config:/config
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8014/helse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ./delt:/delt
+    environment:
+      - PYTHONPATH=/config:/delt
+    ports:
+      - "8014:8014"
     restart: unless-stopped
 
   lag5:
     build: ./tjenester/lag5_kryssvalidering
-    environment:
-      - LAG5_PORT=8015
-    ports:
-      - "8015:8015"
     volumes:
       - ./config:/config
-    profiles: [kryssvalidering]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8015/helse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ./delt:/delt
+    environment:
+      - PYTHONPATH=/config:/delt
+    depends_on:
+      - milvus
+    ports:
+      - "8015:8015"
     restart: unless-stopped
 
   ruter:
     build: ./tjenester/ruter
-    environment:
-      - RUTER_PORT=8016
-    ports:
-      - "8016:8016"
     volumes:
       - ./config:/config
+      - ./delt:/delt
+    environment:
+      - PYTHONPATH=/config:/delt
     depends_on:
       - lag0
       - lag1
       - lag2
       - lag3
       - lag4
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8016/helse"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - redis
+    ports:
+      - "8016:8016"
     restart: unless-stopped
 
   # ─── Gamle tjenester (legacy) ─────────────────────────────────────────────
@@ -210,19 +187,18 @@ services:
     restart: unless-stopped
 
   sok:
-    profiles: [legacy]
     build: ./tjenester/sok
     volumes:
-      - ${BEHANDLET_STI}:/data/behandlet
-      - ${MODELLER_STI}:/modeller
+      - ${BEHANDLET_STI:-./data/behandlet}:/data/behandlet
+      - ${MODELLER_STI:-./modeller}:/modeller
       - ./delt:/delt
     environment:
-      - MILVUS_VERT=${MILVUS_VERT}
-      - MILVUS_PORT=${MILVUS_PORT}
-      - MILVUS_SAMLING=${MILVUS_SAMLING}
+      - MILVUS_VERT=${MILVUS_VERT:-milvus}
+      - MILVUS_PORT=${MILVUS_PORT:-19530}
+      - MILVUS_SAMLING=${MILVUS_SAMLING:-nav_dokumenter}
       - MODELLER_STI=/modeller
     ports:
-      - "${SOK_PORT}:8003"
+      - "${SOK_PORT:-8003}:8003"
     healthcheck:
       test: ["CMD", "python", "helsesjekk.py"]
       interval: 30s
@@ -230,14 +206,12 @@ services:
       retries: 3
     depends_on:
       - milvus
-      - nlp
     restart: unless-stopped
 
   api:
-    profiles: [legacy]
     build: ./tjenester/api
     volumes:
-      - ${DATA_STI}:/data
+      - ${DATA_STI:-./data}:/data
       - ./delt:/delt
     environment:
       - OCR_URL=http://ocr:8001
@@ -248,31 +222,28 @@ services:
       - API_NOKKEL=${API_NOKKEL}
       - REDIS_URL=redis://redis:6379/0
     ports:
-      - "${API_PORT}:8000"
+      - "${API_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/helse"]
       interval: 30s
       timeout: 10s
       retries: 3
     depends_on:
-      - ocr
-      - nlp
-      - sok
       - redis
     restart: unless-stopped
 
   label-studio:
     image: heartexlabs/label-studio:latest
     ports:
-      - "${LABEL_STUDIO_PORT}:8080"
+      - "${LABEL_STUDIO_PORT:-8080}:8080"
     volumes:
-      - ${GJENNOMGANG_STI}:/label-studio/data
-      - ${FINJUSTERING_STI}:/label-studio/export
+      - ${GJENNOMGANG_STI:-./data/gjennomgang}:/label-studio/data
+      - ${FINJUSTERING_STI:-./data/finjustering}:/label-studio/export
       - label_studio_data:/label-studio/data
     environment:
       - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
       - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data
-      - LABEL_STUDIO_HOST=http://host.docker.internal:${LABEL_STUDIO_PORT}
+      - LABEL_STUDIO_HOST=http://host.docker.internal:${LABEL_STUDIO_PORT:-8080}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -295,7 +266,7 @@ services:
     volumes:
       - milvus_data:/var/lib/milvus
     ports:
-      - "${MILVUS_PORT}:19530"
+      - "${MILVUS_PORT:-19530}:19530"
     depends_on:
       - etcd
       - minio
