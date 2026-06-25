@@ -98,7 +98,11 @@ class BaseWorker(ABC):
                 logger.warning("Ugyldig tilstandsovergang for %s: %s", job_id, exc)
             except Exception as exc:
                 pg.rollback()
-                self._haandter_feil(job, exc, psycopg2.connect(self._pg_url))
+                pg_feil = psycopg2.connect(self._pg_url)
+                try:
+                    self._haandter_feil(job, exc, pg_feil)
+                finally:
+                    pg_feil.close()
 
     # ------------------------------------------------------------------ #
     #  Låsing                                                              #
