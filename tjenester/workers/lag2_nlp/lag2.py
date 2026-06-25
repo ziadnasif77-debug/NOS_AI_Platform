@@ -107,7 +107,7 @@ class NLPWorker(BaseWorker):
             return self._nb_bert(tekst)
 
     _ETIKETTER = ["NAVN", "FODSELSNUMMER", "DATO", "ADRESSE", "SIGNATUR", "O"]
-    _ID_TIL_ETIKETT = {i: e for i, e in enumerate(_ETIKETTER)}
+    _ID_TIL_ETIKETT = dict(enumerate(["NAVN", "FODSELSNUMMER", "DATO", "ADRESSE", "SIGNATUR", "O"]))
 
     def _layoutlmv3(self, bilde_sti, tokens, bokser, tekst=""):
         try:

@@ -8,7 +8,6 @@ GET  /audit/{job_id}    — audit-logg fra Postgres
 import hashlib
 import json
 import os
-import shutil
 import time
 import uuid
 from pathlib import Path
@@ -49,15 +48,17 @@ async def last_opp(fil: UploadFile = File(...)):
     Laster opp PDF. Returnerer 202 med job_id.
     Idempotent: samme fil i samme 5-min-vindu gir samme job_id.
     """
-    if not fil.filename.lower().endswith(".pdf"):
+    filnavn = fil.filename or ""
+    if not filnavn.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Kun PDF-filer er støttet")
 
     innhold = await fil.read()
     idempotens_nokkel = _idempotens_nokkel(innhold)
 
+    pg = _pg()
     try:
-        pg = _pg()
         pg.autocommit = False
+
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT job_id, state FROM jobs WHERE idempotency_key = %s",
@@ -66,7 +67,6 @@ async def last_opp(fil: UploadFile = File(...)):
             eksisterende = cur.fetchone()
 
         if eksisterende:
-            pg.close()
             return JSONResponse(
                 status_code=200,
                 content={
@@ -89,14 +89,14 @@ async def last_opp(fil: UploadFile = File(...)):
                 INSERT INTO jobs (job_id, idempotency_key, state, file_name, file_path)
                 VALUES (%s, %s, 'UPLOADED', %s, %s)
                 """,
-                (job_id, idempotens_nokkel, fil.filename, str(fil_sti)),
+                (job_id, idempotens_nokkel, filnavn, str(fil_sti)),
             )
             cur.execute(
                 """
                 INSERT INTO audit_log (job_id, event_type, to_state, worker_id, details)
                 VALUES (%s, 'OPPRETTET', 'UPLOADED', 'api', %s)
                 """,
-                (job_id, psycopg2.extras.Json({"filnavn": fil.filename})),
+                (job_id, psycopg2.extras.Json({"filnavn": filnavn})),
             )
 
         from config.config_loader import CONFIG
@@ -118,13 +118,12 @@ async def last_opp(fil: UploadFile = File(...)):
                 (job_id,),
             )
         pg.commit()
-        pg.close()
 
         return JSONResponse(
             status_code=202,
             content={
                 "job_id": job_id,
-                "filnavn": fil.filename,
+                "filnavn": filnavn,
                 "state": "QUEUED",
                 "idempotent": False,
                 "sjekk_status": f"/jobb/{job_id}",
@@ -132,7 +131,10 @@ async def last_opp(fil: UploadFile = File(...)):
         )
 
     except Exception as feil:
+        pg.rollback()
         raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
 
 
 # ------------------------------------------------------------------ #
@@ -141,15 +143,14 @@ async def last_opp(fil: UploadFile = File(...)):
 
 @ruter.get("/jobb/{job_id}")
 async def hent_jobb(job_id: str):
+    pg = _pg()
     try:
-        pg = _pg()
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT job_id, state, file_name, created_at, updated_at FROM jobs WHERE job_id = %s",
                 (job_id,),
             )
             rad = cur.fetchone()
-        pg.close()
         if rad is None:
             raise HTTPException(status_code=404, detail="Jobb ikke funnet")
         return dict(rad)
@@ -157,6 +158,8 @@ async def hent_jobb(job_id: str):
         raise
     except Exception as feil:
         raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
 
 
 # ------------------------------------------------------------------ #
@@ -165,12 +168,11 @@ async def hent_jobb(job_id: str):
 
 @ruter.get("/resultat/{job_id}")
 async def hent_resultat(job_id: str):
+    pg = _pg()
     try:
-        pg = _pg()
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM results WHERE job_id = %s", (job_id,))
             rad = cur.fetchone()
-        pg.close()
         if rad is None:
             raise HTTPException(status_code=404, detail="Resultat ikke funnet")
         return dict(rad)
@@ -178,6 +180,8 @@ async def hent_resultat(job_id: str):
         raise
     except Exception as feil:
         raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
 
 
 # ------------------------------------------------------------------ #
@@ -186,8 +190,8 @@ async def hent_resultat(job_id: str):
 
 @ruter.get("/audit/{job_id}")
 async def hent_audit(job_id: str):
+    pg = _pg()
     try:
-        pg = _pg()
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -197,7 +201,8 @@ async def hent_audit(job_id: str):
                 (job_id,),
             )
             rader = cur.fetchall()
-        pg.close()
         return [dict(r) for r in rader]
     except Exception as feil:
         raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
