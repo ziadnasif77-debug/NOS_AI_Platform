@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timedelta
 
 import psycopg2
+import psycopg2.extras
 import redis
 
 sys.path.insert(0, "/app")
@@ -63,7 +64,7 @@ class ReconciliationWorker:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT job_id, state, payload
+                SELECT job_id, state, file_path
                 FROM jobs
                 WHERE locked_by IS NOT NULL
                   AND lock_expiry < NOW()
@@ -73,7 +74,7 @@ class ReconciliationWorker:
             rader = cur.fetchall()
 
         for rad in rader:
-            self._frigi_og_re_koe(rad["job_id"], rad["state"], rad.get("payload"), pg)
+            self._frigi_og_re_koe(rad["job_id"], rad["state"], rad.get("file_path"), pg)
             self._audit(rad["job_id"], "RECONCILIATION_STUCK", pg,
                         details={"state": rad["state"]})
 
@@ -88,11 +89,11 @@ class ReconciliationWorker:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT job_id, state, payload
+                SELECT job_id, state, file_path
                 FROM jobs
                 WHERE state NOT IN ('DONE', 'FAILED', 'UPLOADED')
                   AND locked_by IS NULL
-                  AND oppdatert < %s
+                  AND updated_at < %s
                 """,
                 (grense,),
             )
@@ -104,9 +105,8 @@ class ReconciliationWorker:
             if ko_navn is None:
                 continue
             ko_nokkel = CONFIG["redis"]["kooer"][ko_navn]
-            # Sjekk om jobben allerede er i køen
             if not self._er_i_redis(rad["job_id"], ko_nokkel):
-                self._re_koe(rad["job_id"], rad["state"], rad.get("payload"), ko_nokkel)
+                self._re_koe(rad["job_id"], rad.get("file_path"), rad["state"], ko_nokkel)
                 self._audit(rad["job_id"], "RECONCILIATION_GHOST", pg,
                             details={"state": rad["state"]})
                 antall += 1
@@ -122,10 +122,10 @@ class ReconciliationWorker:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT job_id, payload
+                SELECT job_id, file_path
                 FROM jobs
                 WHERE state = 'UPLOADED'
-                  AND opprettet < %s
+                  AND created_at < %s
                 """,
                 (grense,),
             )
@@ -134,15 +134,11 @@ class ReconciliationWorker:
         for rad in rader:
             with pg.cursor() as cur:
                 cur.execute(
-                    "UPDATE jobs SET state = 'QUEUED', oppdatert = NOW() WHERE job_id = %s",
+                    "UPDATE jobs SET state = 'QUEUED', updated_at = NOW() WHERE job_id = %s",
                     (rad["job_id"],),
                 )
             ko_nokkel = CONFIG["redis"]["kooer"]["preprocess"]
-            payload = rad.get("payload") or {}
-            if isinstance(payload, str):
-                import json as _json
-                payload = _json.loads(payload)
-            payload["job_id"] = str(rad["job_id"])
+            payload = {"job_id": str(rad["job_id"]), "fil_sti": rad.get("file_path", "")}
             self._redis.rpush(ko_nokkel, json.dumps(payload))
             self._audit(rad["job_id"], "RECONCILIATION_TAPT", pg)
             pg.commit()
@@ -153,7 +149,7 @@ class ReconciliationWorker:
     #  Hjelpemetoder                                                       #
     # ------------------------------------------------------------------ #
 
-    def _frigi_og_re_koe(self, job_id, state, payload, pg):
+    def _frigi_og_re_koe(self, job_id, state, file_path, pg):
         with pg.cursor() as cur:
             cur.execute(
                 "UPDATE jobs SET locked_by = NULL, lock_expiry = NULL WHERE job_id = %s",
@@ -163,14 +159,10 @@ class ReconciliationWorker:
         ko_navn = STATE_TIL_KO.get(state)
         if ko_navn:
             ko_nokkel = CONFIG["redis"]["kooer"][ko_navn]
-            self._re_koe(job_id, state, payload, ko_nokkel)
+            self._re_koe(job_id, file_path, state, ko_nokkel)
 
-    def _re_koe(self, job_id, state, payload, ko_nokkel):
-        p = payload or {}
-        if isinstance(p, str):
-            import json as _json
-            p = _json.loads(p)
-        p["job_id"] = str(job_id)
+    def _re_koe(self, job_id, file_path, state, ko_nokkel):
+        p = {"job_id": str(job_id), "fil_sti": file_path or ""}
         self._redis.rpush(ko_nokkel, json.dumps(p))
 
     def _er_i_redis(self, job_id: str, ko_nokkel: str) -> bool:

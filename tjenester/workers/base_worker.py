@@ -141,7 +141,7 @@ class BaseWorker(ABC):
                     f"{gjeldende} → {ny_tilstand} er ikke tillatt"
                 )
             cur.execute(
-                "UPDATE jobs SET state = %s, oppdatert = NOW() WHERE job_id = %s",
+                "UPDATE jobs SET state = %s, updated_at = NOW() WHERE job_id = %s",
                 (ny_tilstand, job_id),
             )
             self._audit(job_id, "STATE_ENDRING", from_state=gjeldende,
@@ -239,7 +239,7 @@ class BaseWorker(ABC):
         with psycopg2.connect(self._pg_url) as pg:
             with pg.cursor() as cur:
                 cur.execute(
-                    "UPDATE jobs SET state = %s, oppdatert = NOW() WHERE job_id = %s",
+                    "UPDATE jobs SET state = %s, updated_at = NOW() WHERE job_id = %s",
                     (ny_tilstand, job_id),
                 )
             pg.commit()

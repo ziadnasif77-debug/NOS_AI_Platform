@@ -53,6 +53,13 @@ LOVLIGE_OVERGANGER = set(STATE_OVERGANGER.items()) | {
     ("NLP_PROCESSING", "FAILED"),
     ("VALIDATION",     "FAILED"),
     ("ROUTING",        "FAILED"),
+    # Self-transitions: worker re-claimer jobb som allerede er i running_state
+    ("PREPROCESSING",  "PREPROCESSING"),
+    ("OCR_PROCESSING", "OCR_PROCESSING"),
+    ("NLP_PROCESSING", "NLP_PROCESSING"),
+    ("ROUTING",        "ROUTING"),
+    # NLP gjør validering inline → hopper over VALIDATION-state
+    ("NLP_PROCESSING", "ROUTING"),
 }
 
 TERMINAL_TILSTANDER = {"DONE", "FAILED"}

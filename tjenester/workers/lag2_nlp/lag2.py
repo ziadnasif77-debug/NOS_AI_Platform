@@ -42,7 +42,7 @@ class NLPWorker(BaseWorker):
             queue_name=cfg["kooer"]["nlp"],
             dlq_name=cfg["dlq"]["nlp"],
             running_state="NLP_PROCESSING",
-            done_state="VALIDATION",
+            done_state="ROUTING",
         )
 
     def process(self, job: dict, pg_conn) -> dict:
@@ -51,10 +51,12 @@ class NLPWorker(BaseWorker):
         tekst = ocr_res.get("text", "")
         tokens = ocr_res.get("tokens", [])
         bokser = ocr_res.get("boxes", [])
-        dokumenttype = job.get("forrige_resultat", {}).get("document_type", TRYKT)
+        dokumenttype = ocr_res.get("document_type", TRYKT)
+        bilde_sti = ocr_res.get("raw_path", job.get("fil_sti", ""))
+        ocr_konfidens = ocr_res.get("confidence", 1.0)
 
         entiteter, dokklasse, ytelse, nlp_konfidens, modell = self._ekstraher(
-            tekst, tokens, bokser, dokumenttype
+            tekst, tokens, bokser, dokumenttype, bilde_sti
         )
 
         utfall = self._bestem_utfall(entiteter, tekst)
@@ -88,33 +90,76 @@ class NLPWorker(BaseWorker):
             "nlp_model_used": modell,
             "validation": validering,
             "anomaly": anomali,
+            "ocr_confidence": round(ocr_konfidens, 4),
         }
 
     # ------------------------------------------------------------------ #
     #  NLP-motor-routing                                                   #
     # ------------------------------------------------------------------ #
 
-    def _ekstraher(self, tekst, tokens, bokser, dokumenttype):
+    def _ekstraher(self, tekst, tokens, bokser, dokumenttype, bilde_sti=""):
         har_layout = bool(tokens) and bool(bokser)
         if dokumenttype in (TRYKT, TABELL) and har_layout:
-            return self._layoutlmv3(tekst, tokens, bokser)
+            return self._layoutlmv3(bilde_sti, tokens, bokser, tekst)
         elif len(tekst) > 500:
             return self._borealis(tekst)
         else:
             return self._nb_bert(tekst)
 
-    def _layoutlmv3(self, tekst, tokens, bokser):
+    _ETIKETTER = ["NAVN", "FODSELSNUMMER", "DATO", "ADRESSE", "SIGNATUR", "O"]
+    _ID_TIL_ETIKETT = {i: e for i, e in enumerate(_ETIKETTER)}
+
+    def _layoutlmv3(self, bilde_sti, tokens, bokser, tekst=""):
         try:
             from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
             from PIL import Image
             import torch
 
             modell_sti = CONFIG["modeller"]["layoutlmv3"]
-            processor = LayoutLMv3Processor.from_pretrained(modell_sti)
-            modell = LayoutLMv3ForTokenClassification.from_pretrained(modell_sti)
+            processor = LayoutLMv3Processor.from_pretrained(modell_sti, apply_ocr=False)
+            modell = LayoutLMv3ForTokenClassification.from_pretrained(
+                modell_sti, num_labels=6, ignore_mismatched_sizes=True
+            )
             modell.eval()
 
-            entiteter = self._parse_entities_from_tokens(tokens, bokser)
+            try:
+                bilde = Image.open(bilde_sti).convert("RGB")
+            except Exception:
+                bilde = Image.new("RGB", (224, 224), color=255)
+
+            innganger = processor(
+                bilde, text=tokens, boxes=bokser,
+                return_tensors="pt", truncation=True
+            )
+            with torch.no_grad():
+                utganger = modell(**innganger)
+
+            prediksjoner = utganger.logits.argmax(-1).squeeze().tolist()
+            if isinstance(prediksjoner, int):
+                prediksjoner = [prediksjoner]
+
+            entiteter: dict = {}
+            aktuell_etikett = None
+            aktuell_tekst: list = []
+            for token_id, pred_id in enumerate(prediksjoner):
+                etikett = self._ID_TIL_ETIKETT.get(pred_id, "O")
+                if etikett != "O":
+                    if etikett == aktuell_etikett:
+                        if token_id < len(tokens):
+                            aktuell_tekst.append(tokens[token_id])
+                    else:
+                        if aktuell_etikett and aktuell_tekst:
+                            entiteter.setdefault(aktuell_etikett.lower(), " ".join(aktuell_tekst))
+                        aktuell_etikett = etikett
+                        aktuell_tekst = [tokens[token_id]] if token_id < len(tokens) else []
+                else:
+                    if aktuell_etikett and aktuell_tekst:
+                        entiteter.setdefault(aktuell_etikett.lower(), " ".join(aktuell_tekst))
+                    aktuell_etikett = None
+                    aktuell_tekst = []
+            if aktuell_etikett and aktuell_tekst:
+                entiteter.setdefault(aktuell_etikett.lower(), " ".join(aktuell_tekst))
+
             return entiteter, "skjema", entiteter.get("ytelse"), 0.91, "layoutlmv3"
         except Exception as exc:
             logger.warning("LayoutLMv3 feilet: %s — bruker NB-BERT", exc)
@@ -164,9 +209,6 @@ class NLPWorker(BaseWorker):
             elif "DATE" in label or "DATO" in label:
                 entiteter.setdefault("dato", verdi)
         return entiteter
-
-    def _parse_entities_from_tokens(self, tokens, bokser) -> dict:
-        return {"navn": tokens[0] if tokens else None}
 
     # ------------------------------------------------------------------ #
     #  Utfall og oppsummering                                              #

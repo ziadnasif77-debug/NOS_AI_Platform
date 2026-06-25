@@ -86,7 +86,7 @@ async def last_opp(fil: UploadFile = File(...)):
         with pg.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO jobs (job_id, idempotency_key, state, filnavn, fil_sti)
+                INSERT INTO jobs (job_id, idempotency_key, state, file_name, file_path)
                 VALUES (%s, %s, 'UPLOADED', %s, %s)
                 """,
                 (job_id, idempotens_nokkel, fil.filename, str(fil_sti)),
@@ -107,7 +107,7 @@ async def last_opp(fil: UploadFile = File(...)):
 
         with pg.cursor() as cur:
             cur.execute(
-                "UPDATE jobs SET state = 'QUEUED', oppdatert = NOW() WHERE job_id = %s",
+                "UPDATE jobs SET state = 'QUEUED', updated_at = NOW() WHERE job_id = %s",
                 (job_id,),
             )
             cur.execute(
@@ -145,7 +145,7 @@ async def hent_jobb(job_id: str):
         pg = _pg()
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT job_id, state, filnavn, opprettet, oppdatert FROM jobs WHERE job_id = %s",
+                "SELECT job_id, state, file_name, created_at, updated_at FROM jobs WHERE job_id = %s",
                 (job_id,),
             )
             rad = cur.fetchone()

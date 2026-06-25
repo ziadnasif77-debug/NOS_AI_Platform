@@ -36,7 +36,7 @@ class RoutingWorker(BaseWorker):
         job_id = job["job_id"]
 
         nlp_res = job.get("forrige_resultat", {})
-        ocr_konfidens = job.get("ocr_konfidens", 1.0)
+        ocr_konfidens = nlp_res.get("ocr_confidence", 1.0)
         nlp_konfidens = nlp_res.get("nlp_confidence", 1.0)
         validering = nlp_res.get("validation", {"gyldig": True, "feil": []})
         anomali = nlp_res.get("anomaly", {"har_anomali": False})

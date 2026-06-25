@@ -82,24 +82,6 @@ async def statistikk():
         raise HTTPException(status_code=503, detail=f"Soketjeneste utilgjengelig: {feil}")
 
 
-@app.get("/jobb/{jobb_id}")
-async def sjekk_jobb(jobb_id: str):
-    """
-    Sjekk status for en asynkron behandlingsjobb.
-    Statuser: i_ko → ocr_pagar → nlp_pagar / gjennomgang → fullfort / feil
-    """
-    if not REDIS_URL:
-        raise HTTPException(status_code=503, detail="Jobbsporing ikke konfigurert (REDIS_URL mangler)")
-    try:
-        import redis
-        r = redis.from_url(REDIS_URL, decode_responses=True)
-        data = r.get(f"jobb:{jobb_id}")
-        if not data:
-            raise HTTPException(status_code=404, detail="Jobb ikke funnet (kan ha utløpt etter 24 timer)")
-        return json.loads(data)
-    except redis.RedisError as feil:
-        raise HTTPException(status_code=503, detail=f"Redis utilgjengelig: {feil}")
-
 
 @app.get("/dokument/{fil_id}")
 async def hent_dokument(fil_id: str):
