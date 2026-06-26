@@ -39,6 +39,25 @@ class OCRWorker(BaseWorker):
             running_state="OCR_PROCESSING",
             done_state="NLP_PROCESSING",
         )
+        self._trocr_processor = None
+        self._trocr_model = None
+        self._trocr_available = False
+        self._last_trocr()
+
+    def _last_trocr(self):
+        """Laster TrOCR én gang ved oppstart — ikke per dokument."""
+        try:
+            from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+            modell_sti = CONFIG["modeller"]["trocr"]
+            self._trocr_processor = TrOCRProcessor.from_pretrained(modell_sti)
+            self._trocr_model = VisionEncoderDecoderModel.from_pretrained(modell_sti)
+            self._trocr_model.eval()
+            self._trocr_available = True
+            logger.info("TrOCR lastet.")
+        except Exception as exc:
+            logger.warning(
+                "TrOCR lasting feilet: %s — handskrift-OCR ikke tilgjengelig.", exc
+            )
 
     def process(self, job: dict, pg_conn) -> dict:
         job_id = job["job_id"]
@@ -78,6 +97,9 @@ class OCRWorker(BaseWorker):
 
     def _kjor_ocr(self, fil_sti: str, dokumenttype: str):
         if dokumenttype == HANDSKRIFT:
+            if not self._trocr_available:
+                logger.warning("TrOCR ikke tilgjengelig — bruker PaddleOCR for HANDSKRIFT")
+                return self._paddleocr(fil_sti)
             return self._trocr(fil_sti)
         elif dokumenttype == TABELL:
             return self._marker(fil_sti)
@@ -105,18 +127,14 @@ class OCRWorker(BaseWorker):
 
     def _trocr(self, fil_sti: str):
         try:
-            from transformers import TrOCRProcessor, VisionEncoderDecoderModel
             from PIL import Image
             import torch
 
-            modell_sti = CONFIG["modeller"]["trocr"]
-            processor = TrOCRProcessor.from_pretrained(modell_sti)
-            modell = VisionEncoderDecoderModel.from_pretrained(modell_sti)
             bilde = Image.open(fil_sti).convert("RGB")
-            pixel_values = processor(images=bilde, return_tensors="pt").pixel_values
+            pixel_values = self._trocr_processor(images=bilde, return_tensors="pt").pixel_values
             with torch.no_grad():
-                generated_ids = modell.generate(pixel_values)
-            tekst = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+                generated_ids = self._trocr_model.generate(pixel_values)
+            tekst = self._trocr_processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
             return tekst, 0.88, tekst.split(), [], "trocr"
         except Exception as exc:
             logger.warning("TrOCR feilet: %s", exc)
