@@ -1,6 +1,9 @@
 import sys
+import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from typing import Optional
 
 sys.path.insert(0, "/app")
@@ -15,7 +18,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from PIL import Image
 
-app = FastAPI(title="NAV Lag 3 — NLP")
+logger = logging.getLogger(__name__)
 
 _PORT = CONFIG["porter"]["lag3"]
 _MODELLER_STI = CONFIG["stier"]["modeller"]
@@ -34,16 +37,32 @@ _NORSKE_FYLKER = [
     "Viken", "Buskerud", "Østfold", "Hedmark", "Oppland", "Hordaland",
 ]
 
-# Lazy singleton state
+# ------------------------------------------------------------------ #
+#  Lazy singleton state                                               #
+# ------------------------------------------------------------------ #
+
 _modell_lås = threading.Lock()
+
 _bert_klassifiserer = None
 _layoutlm_prosessor = None
 _layoutlm_modell = None
-_layoutlm_utilgjengelig = False
 _ner_pipeline = None
 _borealis_tokenizer = None
 _borealis_modell = None
 
+# Feilsporingsstruktur for LayoutLMv3 — permanent deaktivering erstattes
+# med tidsstyrt backoff: maks 3 forsøk, deretter ny sjanse etter 10 min.
+_layoutlm_feil = {
+    "forsok": 0,
+    "neste_forsok": 0.0,   # epoch-sekunder
+}
+_LAYOUTLM_MAKS_FORSOK = 3
+_LAYOUTLM_BACKOFF_SEK = 600  # 10 minutter
+
+
+# ------------------------------------------------------------------ #
+#  Hjelpefunksjoner for enhet                                         #
+# ------------------------------------------------------------------ #
 
 def _enhet() -> str:
     return "cuda" if _GPU_ENHET.startswith("cuda") and torch.cuda.is_available() else "cpu"
@@ -53,40 +72,71 @@ def _enhet_indeks() -> int:
     return 0 if _enhet() == "cuda" else -1
 
 
+# ------------------------------------------------------------------ #
+#  Lazy loaders med double-checked locking                            #
+#                                                                     #
+#  Mønster:                                                           #
+#    1. Sjekk uten lås (rask vei for allerede-lastet tilstand)        #
+#    2. Lås                                                           #
+#    3. Sjekk igjen inne i lås (andre tråd kan ha lastet i mellomtiden)
+#    4. Last                                                          #
+# ------------------------------------------------------------------ #
+
 def _hent_bert():
     global _bert_klassifiserer
     if _bert_klassifiserer is None:
         with _modell_lås:
             if _bert_klassifiserer is None:
                 from transformers import pipeline
+                logger.info("Laster BERT zero-shot klassifiserer...")
                 _bert_klassifiserer = pipeline(
                     "zero-shot-classification",
                     model=f"{_MODELLER_STI}/{CONFIG['modeller']['nb_bert']}",
                     device=_enhet_indeks(),
                 )
+                logger.info("BERT lastet.")
     return _bert_klassifiserer
 
 
 def _hent_layoutlm():
-    global _layoutlm_prosessor, _layoutlm_modell, _layoutlm_utilgjengelig
-    if _layoutlm_utilgjengelig:
-        return None, None
-    if _layoutlm_modell is None:
-        with _modell_lås:
-            if _layoutlm_modell is None and not _layoutlm_utilgjengelig:
-                try:
-                    from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
-                    _layoutlm_prosessor = LayoutLMv3Processor.from_pretrained(
-                        f"{_MODELLER_STI}/{CONFIG['modeller']['layoutlmv3']}",
-                        apply_ocr=False,
-                    )
-                    _layoutlm_modell = LayoutLMv3ForTokenClassification.from_pretrained(
-                        f"{_MODELLER_STI}/{CONFIG['modeller']['layoutlmv3']}",
-                        num_labels=6,
-                        ignore_mismatched_sizes=True,
-                    ).to(_enhet())
-                except Exception:
-                    _layoutlm_utilgjengelig = True
+    """Returnerer (prosessor, modell) eller (None, None) ved for mange feil."""
+    global _layoutlm_prosessor, _layoutlm_modell
+    if _layoutlm_modell is not None:
+        return _layoutlm_prosessor, _layoutlm_modell
+
+    with _modell_lås:
+        if _layoutlm_modell is not None:
+            return _layoutlm_prosessor, _layoutlm_modell
+
+        nå = time.monotonic()
+        if (
+            _layoutlm_feil["forsok"] >= _LAYOUTLM_MAKS_FORSOK
+            and nå < _layoutlm_feil["neste_forsok"]
+        ):
+            return None, None
+
+        try:
+            from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
+            logger.info("Laster LayoutLMv3 (forsøk %d)...", _layoutlm_feil["forsok"] + 1)
+            _layoutlm_prosessor = LayoutLMv3Processor.from_pretrained(
+                f"{_MODELLER_STI}/{CONFIG['modeller']['layoutlmv3']}",
+                apply_ocr=False,
+            )
+            _layoutlm_modell = LayoutLMv3ForTokenClassification.from_pretrained(
+                f"{_MODELLER_STI}/{CONFIG['modeller']['layoutlmv3']}",
+                num_labels=6,
+                ignore_mismatched_sizes=True,
+            ).to(_enhet())
+            _layoutlm_feil["forsok"] = 0
+            logger.info("LayoutLMv3 lastet.")
+        except Exception as exc:
+            _layoutlm_feil["forsok"] += 1
+            _layoutlm_feil["neste_forsok"] = time.monotonic() + _LAYOUTLM_BACKOFF_SEK
+            logger.warning(
+                "LayoutLMv3 lasting feilet (forsøk %d/%d): %s",
+                _layoutlm_feil["forsok"], _LAYOUTLM_MAKS_FORSOK, exc,
+            )
+
     return _layoutlm_prosessor, _layoutlm_modell
 
 
@@ -96,6 +146,7 @@ def _hent_ner():
         with _modell_lås:
             if _ner_pipeline is None:
                 from transformers import AutoTokenizer, pipeline
+                logger.info("Laster NB-BERT NER pipeline...")
                 _ner_pipeline = pipeline(
                     "ner",
                     model=f"{_MODELLER_STI}/{CONFIG['modeller']['nb_bert_ner']}",
@@ -105,6 +156,7 @@ def _hent_ner():
                     aggregation_strategy="simple",
                     device=_enhet_indeks(),
                 )
+                logger.info("NER lastet.")
     return _ner_pipeline
 
 
@@ -114,6 +166,7 @@ def _hent_borealis():
         with _modell_lås:
             if _borealis_modell is None:
                 from transformers import AutoTokenizer, AutoModelForCausalLM
+                logger.info("Laster Borealis LLM...")
                 _borealis_tokenizer = AutoTokenizer.from_pretrained(
                     f"{_MODELLER_STI}/{CONFIG['modeller']['borealis']}"
                 )
@@ -122,8 +175,50 @@ def _hent_borealis():
                     torch_dtype=torch.float16,
                     device_map="auto",
                 )
+                logger.info("Borealis lastet.")
     return _borealis_tokenizer, _borealis_modell
 
+
+# ------------------------------------------------------------------ #
+#  Background warmup — laster alle modeller ved oppstart              #
+#  slik at første reelle forespørsel ikke betaler lastekostnaden.     #
+# ------------------------------------------------------------------ #
+
+def _varm_opp_alle():
+    """Kjøres i bakgrunnstråd etter oppstart."""
+    logger.info("Modell-warmup starter i bakgrunn...")
+    try:
+        _hent_bert()
+    except Exception as exc:
+        logger.warning("Warmup BERT feilet: %s", exc)
+    try:
+        _hent_layoutlm()
+    except Exception as exc:
+        logger.warning("Warmup LayoutLMv3 feilet: %s", exc)
+    try:
+        _hent_ner()
+    except Exception as exc:
+        logger.warning("Warmup NER feilet: %s", exc)
+    try:
+        _hent_borealis()
+    except Exception as exc:
+        logger.warning("Warmup Borealis feilet: %s", exc)
+    logger.info("Modell-warmup fullført.")
+
+
+@asynccontextmanager
+async def lifespan(appl: FastAPI):
+    tråd = threading.Thread(target=_varm_opp_alle, daemon=True, name="modell-warmup")
+    tråd.start()
+    yield
+
+
+app = FastAPI(title="NAV Lag 3 — NLP", lifespan=lifespan)
+
+
+# ------------------------------------------------------------------ #
+#  Domenelogikk                                                       #
+# ------------------------------------------------------------------ #
 
 class AnalyseInn(BaseModel):
     fil_id: str
@@ -242,6 +337,10 @@ Svar på norsk bokmål med:
         return {"oppsummering": None, "fylke": _ekstraher_fylke(tekst)}
 
 
+# ------------------------------------------------------------------ #
+#  Endepunkter                                                        #
+# ------------------------------------------------------------------ #
+
 @app.post("/analyser")
 async def analyser(data: AnalyseInn):
     _, layoutlm_modell = _hent_layoutlm()
@@ -259,7 +358,6 @@ async def analyser(data: AnalyseInn):
         entiteter = entiteter_fremtid.result()
 
     borealis_data = _borealis_analyse(data.tekst, klassifisering, entiteter)
-
     konfidens = 0.9 if entiteter else 0.5
 
     return {
@@ -279,13 +377,22 @@ async def analyser(data: AnalyseInn):
 
 @app.get("/helse")
 async def helse():
-    _, layoutlm_modell = _hent_layoutlm() if not _layoutlm_utilgjengelig else (None, None)
+    _, layoutlm_modell = _hent_layoutlm()
+    layoutlm_status = "lastet" if layoutlm_modell is not None else (
+        f"venter ({_LAYOUTLM_MAKS_FORSOK - _layoutlm_feil['forsok']} forsøk igjen)"
+        if _layoutlm_feil["forsok"] < _LAYOUTLM_MAKS_FORSOK
+        else "backoff"
+    )
     return {
         "status": "ok",
         "lag": 3,
-        "layoutlmv3": "lastet" if layoutlm_modell is not None else "ikke lastet",
+        "bert": "lastet" if _bert_klassifiserer is not None else "ikke lastet",
+        "layoutlmv3": layoutlm_status,
+        "ner": "lastet" if _ner_pipeline is not None else "ikke lastet",
+        "borealis": "lastet" if _borealis_modell is not None else "ikke lastet",
     }
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     uvicorn.run(app, host="0.0.0.0", port=_PORT)
