@@ -27,6 +27,15 @@ STATE_TIL_KO = {
     "ROUTING":        "routing",
 }
 
+# Hvilken results-kolonne inneholder forrige_resultat for en gitt tilstand.
+# QUEUED/PREPROCESSING har ingen forrige worker — payload trenger bare fil_sti.
+STATE_TIL_RESULTAT_KOLONNE = {
+    "OCR_PROCESSING": "preprocess_result",
+    "NLP_PROCESSING": "ocr_result",
+    "VALIDATION":     "ocr_result",
+    "ROUTING":        "nlp_result",
+}
+
 
 class ReconciliationWorker:
 
@@ -107,7 +116,7 @@ class ReconciliationWorker:
                 continue
             ko_nokkel = CONFIG["redis"]["kooer"][ko_navn]
             if not self._er_i_redis(rad["job_id"], ko_nokkel):
-                self._re_koe(rad["job_id"], rad.get("file_path"), rad["state"], ko_nokkel)
+                self._re_koe(rad["job_id"], rad.get("file_path"), rad["state"], ko_nokkel, pg)
                 self._audit(rad["job_id"], "RECONCILIATION_GHOST", pg,
                             details={"state": rad["state"]})
                 antall += 1
@@ -160,11 +169,83 @@ class ReconciliationWorker:
         ko_navn = STATE_TIL_KO.get(state)
         if ko_navn:
             ko_nokkel = CONFIG["redis"]["kooer"][ko_navn]
-            self._re_koe(job_id, file_path, state, ko_nokkel)
+            self._re_koe(job_id, file_path, state, ko_nokkel, pg)
 
-    def _re_koe(self, job_id, file_path, state, ko_nokkel):
-        p = {"job_id": str(job_id), "fil_sti": file_path or ""}
+    def _re_koe(self, job_id, file_path, state, ko_nokkel, pg=None):
+        forrige = self._hent_forrige_resultat(job_id, state, pg) if pg else None
+
+        # Manglende forrige_resultat for tilstander som krever det er en
+        # datainkonsistens — re-queue vil bare føre til DLQ.
+        kolonne = STATE_TIL_RESULTAT_KOLONNE.get(state)
+        if kolonne is not None and forrige is None:
+            logger.error(
+                "DATA_INKONSISTENS: job_id=%s i tilstand %s mangler %s — merker som FAILED",
+                job_id, state, kolonne,
+            )
+            self._merk_som_feilet(job_id, state, pg)
+            if pg:
+                self._audit(job_id, "DATA_INKONSISTENS", pg,
+                            details={"state": state, "mangler": kolonne})
+            return
+
+        p = {
+            "job_id": str(job_id),
+            "fil_sti": file_path or "",
+        }
+        if forrige is not None:
+            p["forrige_resultat"] = forrige
+
         self._redis.rpush(ko_nokkel, json.dumps(p))
+
+    def _hent_forrige_resultat(self, job_id, state, pg):
+        """Henter forrige workers resultat fra Postgres results-tabell."""
+        kolonne = STATE_TIL_RESULTAT_KOLONNE.get(state)
+        if kolonne is None or pg is None:
+            return None
+        try:
+            with pg.cursor() as cur:
+                cur.execute(
+                    f"SELECT {kolonne} FROM results WHERE job_id = %s",
+                    (str(job_id),),
+                )
+                rad = cur.fetchone()
+            if rad is None or rad[0] is None:
+                return None
+            return rad[0] if isinstance(rad[0], dict) else None
+        except Exception as exc:
+            logger.warning("Kunne ikke hente %s for job_id=%s: %s", kolonne, job_id, exc)
+            return None
+
+    def _merk_som_feilet(self, job_id, state, pg):
+        """Setter job til FAILED ved uopprettelig datainkonsistens."""
+        try:
+            if pg:
+                with pg.cursor() as cur:
+                    cur.execute(
+                        "UPDATE jobs SET state = 'FAILED', updated_at = NOW() WHERE job_id = %s",
+                        (str(job_id),),
+                    )
+                pg.commit()
+            with psycopg2.connect(self._pg_url) as pg2:
+                with pg2.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO dead_letter_queue
+                          (job_id, stage, error_type, error_message, payload_snapshot, retry_count)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            str(job_id),
+                            state,
+                            "DataInkonsistens",
+                            f"Mangler forrige_resultat for tilstand {state}",
+                            psycopg2.extras.Json({"job_id": str(job_id), "state": state}),
+                            0,
+                        ),
+                    )
+                pg2.commit()
+        except Exception as exc:
+            logger.error("Kunne ikke merke job_id=%s som FAILED: %s", job_id, exc)
 
     def _er_i_redis(self, job_id: str, ko_nokkel: str) -> bool:
         try:
