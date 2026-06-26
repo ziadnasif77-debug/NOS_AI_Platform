@@ -255,48 +255,46 @@ def _klassifiser_dokument(tekst: str) -> dict:
 
 
 def _layoutlmv3_ekstraher(bilde_sti: str, tokens: list, bokser: list) -> dict:
+    """Pure funksjon — reiser exception ved feil. Ingen intern fallback."""
     prosessor, modell = _hent_layoutlm()
     if prosessor is None or modell is None:
-        return _trekk_ut_entiteter_ner("")
-    try:
-        enhet = _enhet()
-        bilde = Image.open(bilde_sti).convert("RGB")
-        if not tokens or not bokser:
-            innganger = prosessor(bilde, return_tensors="pt").to(enhet)
-        else:
-            innganger = prosessor(
-                bilde, text=tokens, boxes=bokser,
-                return_tensors="pt", truncation=True,
-            ).to(enhet)
-        with torch.no_grad():
-            utganger = modell(**innganger)
-        prediksjoner = utganger.logits.argmax(-1).squeeze().tolist()
-        if isinstance(prediksjoner, int):
-            prediksjoner = [prediksjoner]
-        resultat: dict = {}
-        aktuell_etikett = None
-        aktuell_tekst: list = []
-        for token_id, pred_id in enumerate(prediksjoner):
-            etikett = _ID_TIL_ETIKETT.get(pred_id, "O")
-            if etikett != "O":
-                if etikett == aktuell_etikett:
-                    if token_id < len(tokens):
-                        aktuell_tekst.append(tokens[token_id])
-                else:
-                    if aktuell_etikett and aktuell_tekst:
-                        resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
-                    aktuell_etikett = etikett
-                    aktuell_tekst = [tokens[token_id]] if token_id < len(tokens) else []
+        raise RuntimeError("LayoutLMv3 ikke tilgjengelig")
+    enhet = _enhet()
+    bilde = Image.open(bilde_sti).convert("RGB")
+    if not tokens or not bokser:
+        innganger = prosessor(bilde, return_tensors="pt").to(enhet)
+    else:
+        innganger = prosessor(
+            bilde, text=tokens, boxes=bokser,
+            return_tensors="pt", truncation=True,
+        ).to(enhet)
+    with torch.no_grad():
+        utganger = modell(**innganger)
+    prediksjoner = utganger.logits.argmax(-1).squeeze().tolist()
+    if isinstance(prediksjoner, int):
+        prediksjoner = [prediksjoner]
+    resultat: dict = {}
+    aktuell_etikett = None
+    aktuell_tekst: list = []
+    for token_id, pred_id in enumerate(prediksjoner):
+        etikett = _ID_TIL_ETIKETT.get(pred_id, "O")
+        if etikett != "O":
+            if etikett == aktuell_etikett:
+                if token_id < len(tokens):
+                    aktuell_tekst.append(tokens[token_id])
             else:
                 if aktuell_etikett and aktuell_tekst:
                     resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
-                aktuell_etikett = None
-                aktuell_tekst = []
-        if aktuell_etikett and aktuell_tekst:
-            resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
-        return resultat
-    except Exception:
-        return _trekk_ut_entiteter_ner("")
+                aktuell_etikett = etikett
+                aktuell_tekst = [tokens[token_id]] if token_id < len(tokens) else []
+        else:
+            if aktuell_etikett and aktuell_tekst:
+                resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
+            aktuell_etikett = None
+            aktuell_tekst = []
+    if aktuell_etikett and aktuell_tekst:
+        resultat.setdefault(aktuell_etikett, " ".join(aktuell_tekst))
+    return resultat
 
 
 def _trekk_ut_entiteter_ner(tekst: str) -> dict:
@@ -343,19 +341,58 @@ Svar på norsk bokmål med:
 
 @app.post("/analyser")
 async def analyser(data: AnalyseInn):
-    _, layoutlm_modell = _hent_layoutlm()
-    bruk_layoutlm = layoutlm_modell is not None and bool(data.bilde_sti)
+    fallback_chain: list = []
 
+    # --- Avgjør primærmodell for entitetsutvinning ---
+    _, layoutlm_modell = _hent_layoutlm()
+
+    if not data.bilde_sti:
+        fallback_chain.append({"model": "layoutlmv3", "status": "skipped", "reason": "no_image"})
+        bruk_layoutlm = False
+    elif layoutlm_modell is None:
+        reason = (
+            "backoff"
+            if _layoutlm_feil["forsok"] >= _LAYOUTLM_MAKS_FORSOK
+            else "warmup_pending"
+        )
+        fallback_chain.append({"model": "layoutlmv3", "status": "skipped", "reason": reason})
+        bruk_layoutlm = False
+    else:
+        bruk_layoutlm = True
+
+    # --- Kjør klassifisering og entitetsutvinning parallelt ---
     with ThreadPoolExecutor(max_workers=2) as executor:
         klassifisering_fremtid = executor.submit(_klassifiser_dokument, data.tekst)
+
         if bruk_layoutlm:
             entiteter_fremtid = executor.submit(
                 _layoutlmv3_ekstraher, data.bilde_sti, data.tokens, data.bokser
             )
         else:
             entiteter_fremtid = executor.submit(_trekk_ut_entiteter_ner, data.tekst)
+
         klassifisering = klassifisering_fremtid.result()
-        entiteter = entiteter_fremtid.result()
+
+        if bruk_layoutlm:
+            try:
+                entiteter = entiteter_fremtid.result()
+                fallback_chain.append(
+                    {"model": "layoutlmv3", "status": "used", "reason": "primary_success"}
+                )
+            except Exception as exc:
+                logger.warning("LayoutLMv3 feilet under inferens: %s", exc)
+                fallback_chain.append(
+                    {"model": "layoutlmv3", "status": "failed", "reason": "runtime_error"}
+                )
+                entiteter = _trekk_ut_entiteter_ner(data.tekst)
+                fallback_chain.append(
+                    {"model": "ner", "status": "used", "reason": "primary_success"}
+                )
+        else:
+            entiteter = entiteter_fremtid.result()
+            fallback_chain.append(
+                {"model": "ner", "status": "used", "reason": "primary_success"}
+            )
 
     borealis_data = _borealis_analyse(data.tekst, klassifisering, entiteter)
     konfidens = 0.9 if entiteter else 0.5
@@ -372,6 +409,10 @@ async def analyser(data: AnalyseInn):
         "fylke": borealis_data.get("fylke") or entiteter.get("LOC"),
         "oppsummering": borealis_data.get("oppsummering"),
         "konfidens": konfidens,
+        "inference_meta": {
+            "confidence_source": "heuristic_fixed_rule_v1",
+            "fallback_chain": fallback_chain,
+        },
     }
 
 
