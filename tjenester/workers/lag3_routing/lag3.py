@@ -13,6 +13,7 @@ import psycopg2.extras
 
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
+from delt.skjemaer import NLPResultat
 from tjenester.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,11 @@ class RoutingWorker(BaseWorker):
     def process(self, job: dict, pg_conn) -> dict:
         job_id = job["job_id"]
 
-        nlp_res = job.get("forrige_resultat", {})
-        ocr_konfidens = nlp_res.get("ocr_confidence", 1.0)
-        nlp_konfidens = nlp_res.get("nlp_confidence", 1.0)
-        validering = nlp_res.get("validation", {"gyldig": True, "feil": []})
-        anomali = nlp_res.get("anomaly", {"har_anomali": False})
+        nlp_res = NLPResultat.model_validate(job["forrige_resultat"])
+        ocr_konfidens = nlp_res.ocr_confidence
+        nlp_konfidens = nlp_res.nlp_confidence
+        validering = nlp_res.validation
+        anomali = nlp_res.anomaly
 
         beslutning, grunn, ls_project = self._bestem_beslutning(
             ocr_konfidens, nlp_konfidens, validering, anomali
@@ -48,8 +49,8 @@ class RoutingWorker(BaseWorker):
         audit_trail = [
             f"ocr_konfidens={ocr_konfidens:.2f}",
             f"nlp_konfidens={nlp_konfidens:.2f}",
-            f"validering_gyldig={validering['gyldig']}",
-            f"har_anomali={anomali.get('har_anomali', False)}",
+            f"validering_gyldig={validering.gyldig}",
+            f"har_anomali={anomali.har_anomali}",
             f"beslutning={beslutning}",
             f"grunn={grunn}",
         ]
@@ -62,7 +63,7 @@ class RoutingWorker(BaseWorker):
             self.send_til_label_studio(
                 job_id=job_id,
                 image_path=job.get("fil_sti", ""),
-                ocr_text=nlp_res.get("summary", ""),
+                ocr_text=nlp_res.summary,
                 project_id=ls_project,
                 stage=grunn,
             )
@@ -79,8 +80,8 @@ class RoutingWorker(BaseWorker):
         self,
         ocr_konfidens: float,
         nlp_konfidens: float,
-        validering: dict,
-        anomali: dict,
+        validering,
+        anomali,
     ) -> tuple:
         ocr_terskel = CONFIG["terskler"]["ocr_konfidens"] / 100.0
         nlp_terskel = CONFIG["terskler"]["nlp_konfidens"] / 100.0
@@ -93,10 +94,10 @@ class RoutingWorker(BaseWorker):
         if nlp_konfidens < nlp_terskel:
             return "REVIEW", "lav_nlp_konfidens", ls_prosjekter["lag3"]
 
-        if not validering.get("gyldig", True):
+        if not validering.gyldig:
             return "REVIEW", "valideringsfeil", ls_prosjekter["lag4"]
 
-        if anomali.get("har_anomali", False):
+        if anomali.har_anomali:
             return "REVIEW", "anomali_detektert", ls_prosjekter["lag4"]
 
         return "APPROVED", "alle_lag_godkjent", None
@@ -117,13 +118,13 @@ class RoutingWorker(BaseWorker):
             )
         pg.commit()
 
-    def _send_til_milvus(self, job_id: str, nlp_res: dict):
+    def _send_til_milvus(self, job_id: str, nlp_res):
         import requests as req
         import time as _time
         sok_url = CONFIG.get("tjenester", {}).get("sok_url", "http://sok:8003")
-        entiteter = nlp_res.get("entities", {})
+        entiteter = nlp_res.entities
         payload = {
-            "tekst": nlp_res.get("summary", ""),
+            "tekst": nlp_res.summary,
             "filnavn": entiteter.get("navn", ""),
             "metadata": {
                 "fil_id": job_id,
@@ -133,7 +134,7 @@ class RoutingWorker(BaseWorker):
                 "dato": entiteter.get("dato", ""),
                 "ytelse": entiteter.get("ytelse", ""),
                 "fylke": entiteter.get("fylke", ""),
-                "dokumenttype": nlp_res.get("document_class", ""),
+                "dokumenttype": nlp_res.document_class,
             },
         }
         for forsok in range(1, 4):

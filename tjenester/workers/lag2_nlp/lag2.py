@@ -13,6 +13,7 @@ from typing import Optional
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
 from delt.konstanter import TRYKT, TABELL
+from delt.skjemaer import OCRResultat
 from tjenester.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -106,13 +107,13 @@ class NLPWorker(BaseWorker):
 
     def process(self, job: dict, pg_conn) -> dict:
         job_id = job["job_id"]
-        ocr_res = job.get("forrige_resultat", {})
-        tekst = ocr_res.get("text", "")
-        tokens = ocr_res.get("tokens", [])
-        bokser = ocr_res.get("boxes", [])
-        dokumenttype = ocr_res.get("document_type", TRYKT)
-        bilde_sti = ocr_res.get("raw_path", job.get("fil_sti", ""))
-        ocr_konfidens = ocr_res.get("confidence", 1.0)
+        ocr_res = OCRResultat.model_validate(job["forrige_resultat"])
+        tekst = ocr_res.text
+        tokens = ocr_res.tokens
+        bokser = ocr_res.boxes
+        dokumenttype = ocr_res.document_type
+        bilde_sti = ocr_res.raw_path
+        ocr_konfidens = ocr_res.confidence
 
         entiteter, dokklasse, ytelse, nlp_konfidens, modell = self._ekstraher(
             tekst, tokens, bokser, dokumenttype, bilde_sti

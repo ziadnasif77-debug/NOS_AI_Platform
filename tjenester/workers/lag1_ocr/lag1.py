@@ -11,6 +11,7 @@ import threading
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
 from delt.konstanter import HANDSKRIFT, TRYKT, TABELL, BLANDET
+from delt.skjemaer import PreprocessResultat
 from tjenester.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -41,9 +42,9 @@ class OCRWorker(BaseWorker):
 
     def process(self, job: dict, pg_conn) -> dict:
         job_id = job["job_id"]
-        preprocess = job.get("forrige_resultat", {})
-        fil_sti = preprocess.get("preprocessed_path", job.get("fil_sti", ""))
-        dokumenttype = preprocess.get("document_type", TRYKT)
+        preprocess = PreprocessResultat.model_validate(job["forrige_resultat"])
+        fil_sti = preprocess.preprocessed_path
+        dokumenttype = preprocess.document_type
         terskel = CONFIG["terskler"]["ocr_konfidens"] / 100.0
 
         with _gpu_semaphore():
@@ -69,6 +70,7 @@ class OCRWorker(BaseWorker):
             "tokens": tokens,
             "boxes": bokser,
             "ocr_model_used": modell,
+            "document_type": dokumenttype,
             "raw_path": fil_sti,
             "clean_path": fil_sti,
             "confidence_approved": godkjent,
