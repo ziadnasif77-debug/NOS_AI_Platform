@@ -207,10 +207,16 @@ class ReconciliationWorker:
             pg.commit()
             return
 
-        # Atomisk: unlock + audit i én transaksjon
+        # Atomisk: unlock + updated_at-refresh + audit i én transaksjon.
+        # updated_at settes til NOW() slik at ghost-detektoren ikke matcher
+        # den samme jobben igjen i samme reconciliation-runde.
         with pg.cursor() as cur:
             cur.execute(
-                "UPDATE jobs SET locked_by = NULL, lock_expiry = NULL WHERE job_id = %s",
+                """
+                UPDATE jobs
+                SET locked_by = NULL, lock_expiry = NULL, updated_at = NOW()
+                WHERE job_id = %s
+                """,
                 (job_id,),
             )
             cur.execute(
