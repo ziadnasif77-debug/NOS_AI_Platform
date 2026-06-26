@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 sys.path.insert(0, "/app")
+sys.path.insert(0, "/app/tjenester/api")
 from delt.verktøy import konfigurer_logging
 
 logger = konfigurer_logging("api-tjeneste")

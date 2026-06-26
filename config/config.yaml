@@ -63,6 +63,7 @@ redis:
     ocr:        dlq:ocr
     nlp:        dlq:nlp
     validation: dlq:validation
+    routing:    dlq:routing
 
 postgres:
   url: postgresql://nav:nav@postgres:5432/nav_archive

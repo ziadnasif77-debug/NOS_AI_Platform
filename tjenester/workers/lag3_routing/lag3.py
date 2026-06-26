@@ -27,7 +27,7 @@ class RoutingWorker(BaseWorker):
         super().__init__(
             worker_id=WORKER_ID,
             queue_name=cfg["kooer"]["routing"],
-            dlq_name=cfg["dlq"]["nlp"],
+            dlq_name=cfg["dlq"]["routing"],
             running_state="ROUTING",
             done_state="DONE",
         )
@@ -115,32 +115,37 @@ class RoutingWorker(BaseWorker):
                 """,
                 (job_id, beslutning, ls_project),
             )
+        pg.commit()
 
     def _send_til_milvus(self, job_id: str, nlp_res: dict):
-        try:
-            import requests as req
-            sok_url = CONFIG.get("tjenester", {}).get("sok_url", "http://sok:8003")
-            entiteter = nlp_res.get("entities", {})
-            req.post(
-                f"{sok_url}/indekser",
-                json={
-                    "tekst": nlp_res.get("summary", ""),
-                    "filnavn": entiteter.get("navn", ""),
-                    "metadata": {
-                        "fil_id": job_id,
-                        "side_nummer": 0,
-                        "navn": entiteter.get("navn", ""),
-                        "fodselsnummer": entiteter.get("fodselsnummer", ""),
-                        "dato": entiteter.get("dato", ""),
-                        "ytelse": entiteter.get("ytelse", ""),
-                        "fylke": entiteter.get("fylke", ""),
-                        "dokumenttype": nlp_res.get("document_class", ""),
-                    },
-                },
-                timeout=10,
-            )
-        except Exception as exc:
-            logger.warning("Kunne ikke sende til Milvus: %s", exc)
+        import requests as req
+        import time as _time
+        sok_url = CONFIG.get("tjenester", {}).get("sok_url", "http://sok:8003")
+        entiteter = nlp_res.get("entities", {})
+        payload = {
+            "tekst": nlp_res.get("summary", ""),
+            "filnavn": entiteter.get("navn", ""),
+            "metadata": {
+                "fil_id": job_id,
+                "side_nummer": 0,
+                "navn": entiteter.get("navn", ""),
+                "fodselsnummer": entiteter.get("fodselsnummer", ""),
+                "dato": entiteter.get("dato", ""),
+                "ytelse": entiteter.get("ytelse", ""),
+                "fylke": entiteter.get("fylke", ""),
+                "dokumenttype": nlp_res.get("document_class", ""),
+            },
+        }
+        for forsok in range(1, 4):
+            try:
+                svar = req.post(f"{sok_url}/indekser", json=payload, timeout=10)
+                svar.raise_for_status()
+                return
+            except Exception as exc:
+                logger.warning("Milvus-indeksering forsøk %d feilet: %s", forsok, exc)
+                if forsok < 3:
+                    _time.sleep(forsok * 2)
+        logger.error("Milvus-indeksering feilet etter 3 forsøk for job_id=%s", job_id)
 
 
 if __name__ == "__main__":
