@@ -44,6 +44,65 @@ class NLPWorker(BaseWorker):
             running_state="NLP_PROCESSING",
             done_state="ROUTING",
         )
+        self._layoutlm_processor = None
+        self._layoutlm_model = None
+        self._layoutlmv3_available = False
+        self._borealis_pipeline = None
+        self._borealis_available = False
+        self._nb_bert_pipeline = None
+        self._nb_bert_available = False
+        self._last_modeller()
+
+    def _last_modeller(self):
+        """Laster alle NLP-modeller én gang ved oppstart — ikke per dokument."""
+        try:
+            from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
+            modell_sti = CONFIG["modeller"]["layoutlmv3"]
+            self._layoutlm_processor = LayoutLMv3Processor.from_pretrained(
+                modell_sti, apply_ocr=False
+            )
+            self._layoutlm_model = LayoutLMv3ForTokenClassification.from_pretrained(
+                modell_sti, num_labels=6, ignore_mismatched_sizes=True
+            )
+            self._layoutlm_model.eval()
+            self._layoutlmv3_available = True
+            logger.info("LayoutLMv3 lastet.")
+        except Exception as exc:
+            logger.warning("LayoutLMv3 lasting feilet: %s", exc)
+
+        try:
+            from transformers import pipeline
+            self._borealis_pipeline = pipeline(
+                "ner", model=CONFIG["modeller"]["borealis"], aggregation_strategy="simple"
+            )
+            self._borealis_available = True
+            logger.info("Borealis NER lastet.")
+        except Exception as exc:
+            logger.warning("Borealis lasting feilet: %s", exc)
+
+        try:
+            from transformers import pipeline
+            self._nb_bert_pipeline = pipeline(
+                "ner", model=CONFIG["modeller"]["nb_bert_ner"], aggregation_strategy="simple"
+            )
+            self._nb_bert_available = True
+            logger.info("NB-BERT-NER lastet.")
+        except Exception as exc:
+            logger.warning("NB-BERT lasting feilet: %s", exc)
+
+        tilgjengelige = [
+            m for m, ok in [
+                ("layoutlmv3", self._layoutlmv3_available),
+                ("borealis",   self._borealis_available),
+                ("nb-bert-ner", self._nb_bert_available),
+            ] if ok
+        ]
+        if not tilgjengelige:
+            raise RuntimeError(
+                "Ingen NLP-modeller tilgjengelige — NLPWorker kan ikke starte. "
+                "Kjør 'make last-ned-modeller' for å laste ned nødvendige modeller."
+            )
+        logger.info("NLPWorker klar. Tilgjengelige modeller: %s", tilgjengelige)
 
     def process(self, job: dict, pg_conn) -> dict:
         job_id = job["job_id"]
@@ -99,9 +158,9 @@ class NLPWorker(BaseWorker):
 
     def _ekstraher(self, tekst, tokens, bokser, dokumenttype, bilde_sti=""):
         har_layout = bool(tokens) and bool(bokser)
-        if dokumenttype in (TRYKT, TABELL) and har_layout:
+        if dokumenttype in (TRYKT, TABELL) and har_layout and self._layoutlmv3_available:
             return self._layoutlmv3(bilde_sti, tokens, bokser, tekst)
-        elif len(tekst) > 500:
+        elif len(tekst) > 500 and self._borealis_available:
             return self._borealis(tekst)
         else:
             return self._nb_bert(tekst)
@@ -111,28 +170,20 @@ class NLPWorker(BaseWorker):
 
     def _layoutlmv3(self, bilde_sti, tokens, bokser, tekst=""):
         try:
-            from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
             from PIL import Image
             import torch
-
-            modell_sti = CONFIG["modeller"]["layoutlmv3"]
-            processor = LayoutLMv3Processor.from_pretrained(modell_sti, apply_ocr=False)
-            modell = LayoutLMv3ForTokenClassification.from_pretrained(
-                modell_sti, num_labels=6, ignore_mismatched_sizes=True
-            )
-            modell.eval()
 
             try:
                 bilde = Image.open(bilde_sti).convert("RGB")
             except Exception:
                 bilde = Image.new("RGB", (224, 224), color=255)
 
-            innganger = processor(
+            innganger = self._layoutlm_processor(
                 bilde, text=tokens, boxes=bokser,
                 return_tensors="pt", truncation=True
             )
             with torch.no_grad():
-                utganger = modell(**innganger)
+                utganger = self._layoutlm_model(**innganger)
 
             prediksjoner = utganger.logits.argmax(-1).squeeze().tolist()
             if isinstance(prediksjoner, int):
@@ -167,11 +218,7 @@ class NLPWorker(BaseWorker):
 
     def _borealis(self, tekst):
         try:
-            from transformers import pipeline
-
-            modell_sti = CONFIG["modeller"]["borealis"]
-            ner = pipeline("ner", model=modell_sti, aggregation_strategy="simple")
-            ner_res = ner(tekst[:1024])
+            ner_res = self._borealis_pipeline(tekst[:1024])
             entiteter = self._konverter_ner(ner_res)
             return entiteter, "brev", entiteter.get("ytelse"), 0.87, "borealis"
         except Exception as exc:
@@ -179,12 +226,11 @@ class NLPWorker(BaseWorker):
             return self._nb_bert(tekst)
 
     def _nb_bert(self, tekst):
+        if not self._nb_bert_available:
+            logger.error("NB-BERT ikke tilgjengelig — alle modeller feilet")
+            return {}, "ukjent", None, 0.0, "ingen-modell"
         try:
-            from transformers import pipeline
-
-            modell_sti = CONFIG["modeller"]["nb_bert_ner"]
-            ner = pipeline("ner", model=modell_sti, aggregation_strategy="simple")
-            ner_res = ner(tekst[:512])
+            ner_res = self._nb_bert_pipeline(tekst[:512])
             entiteter = self._konverter_ner(ner_res)
             return entiteter, "ukjent", entiteter.get("ytelse"), 0.82, "nb-bert-ner"
         except Exception as exc:

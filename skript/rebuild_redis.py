@@ -20,7 +20,9 @@ STATE_TIL_KO = {
     "PREPROCESSING":  CONFIG["redis"]["kooer"]["preprocess"],
     "OCR_PROCESSING": CONFIG["redis"]["kooer"]["ocr"],
     "NLP_PROCESSING": CONFIG["redis"]["kooer"]["nlp"],
-    "VALIDATION":     CONFIG["redis"]["kooer"]["validation"],
+    # VALIDATION hoppes over av NLPWorker (validering skjer inline) —
+    # jobs som sitter fast i VALIDATION skal tilbake til nlp-køen
+    "VALIDATION":     CONFIG["redis"]["kooer"]["nlp"],
     "ROUTING":        CONFIG["redis"]["kooer"]["routing"],
 }
 
