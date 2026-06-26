@@ -87,6 +87,9 @@ reconciliation:
   lock_timeout_sekunder:   60
   ghost_timeout_minutter:  10
 
+tjenester:
+  sok_url: http://sok:8003
+
 label_studio:
   url: http://label-studio:8080
   prosjekter:

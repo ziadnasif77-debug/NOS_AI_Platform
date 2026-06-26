@@ -22,7 +22,8 @@ STATE_TIL_KO = {
     "PREPROCESSING":  "preprocess",
     "OCR_PROCESSING": "ocr",
     "NLP_PROCESSING": "nlp",
-    "VALIDATION":     "validation",
+    # VALIDATION er hoppet over av NLPWorker — sett tilbake til nlp-kø
+    "VALIDATION":     "nlp",
     "ROUTING":        "routing",
 }
 

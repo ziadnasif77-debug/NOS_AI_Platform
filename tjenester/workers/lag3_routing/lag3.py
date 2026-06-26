@@ -27,7 +27,7 @@ class RoutingWorker(BaseWorker):
         super().__init__(
             worker_id=WORKER_ID,
             queue_name=cfg["kooer"]["routing"],
-            dlq_name=cfg["dlq"]["validation"],
+            dlq_name=cfg["dlq"]["nlp"],
             running_state="ROUTING",
             done_state="DONE",
         )
@@ -118,17 +118,29 @@ class RoutingWorker(BaseWorker):
 
     def _send_til_milvus(self, job_id: str, nlp_res: dict):
         try:
-            import redis as r
-
-            rc = r.from_url(CONFIG["redis"]["url"])
-            rc.rpush("queue:sok_indeksering", json.dumps({
-                "job_id": job_id,
-                "entities": nlp_res.get("entities", {}),
-                "summary": nlp_res.get("summary", ""),
-                "document_class": nlp_res.get("document_class", ""),
-            }))
+            import requests as req
+            sok_url = CONFIG.get("tjenester", {}).get("sok_url", "http://sok:8003")
+            entiteter = nlp_res.get("entities", {})
+            req.post(
+                f"{sok_url}/indekser",
+                json={
+                    "tekst": nlp_res.get("summary", ""),
+                    "filnavn": entiteter.get("navn", ""),
+                    "metadata": {
+                        "fil_id": job_id,
+                        "side_nummer": 0,
+                        "navn": entiteter.get("navn", ""),
+                        "fodselsnummer": entiteter.get("fodselsnummer", ""),
+                        "dato": entiteter.get("dato", ""),
+                        "ytelse": entiteter.get("ytelse", ""),
+                        "fylke": entiteter.get("fylke", ""),
+                        "dokumenttype": nlp_res.get("document_class", ""),
+                    },
+                },
+                timeout=10,
+            )
         except Exception as exc:
-            logger.warning("Kunne ikke sende til Milvus-kø: %s", exc)
+            logger.warning("Kunne ikke sende til Milvus: %s", exc)
 
 
 if __name__ == "__main__":

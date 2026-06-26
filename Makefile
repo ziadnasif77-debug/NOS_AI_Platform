@@ -22,7 +22,9 @@ finjuster:
 	python skript/finjuster.py
 
 migrer:
-	bash skript/migrer_server.sh
+	docker compose down
+	docker compose pull
+	docker compose up --build -d
 
 sok:
 	curl -X POST http://localhost:8000/sok \

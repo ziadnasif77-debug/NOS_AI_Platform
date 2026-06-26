@@ -80,6 +80,22 @@ class PreprocessingWorker(BaseWorker):
         _, binær = cv2.threshold(bilde, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         hvit_andel = np.sum(binær == 255) / binær.size
 
+        # Detekter tabeller via horisontale og vertikale linjer
+        kanter = cv2.Canny(bilde, 50, 150)
+        horisontale = cv2.morphologyEx(
+            kanter,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1)),
+        )
+        vertikale = cv2.morphologyEx(
+            kanter,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40)),
+        )
+        linje_andel = (np.sum(horisontale > 0) + np.sum(vertikale > 0)) / max(bilde.size, 1)
+        if linje_andel > 0.01 and hvit_andel > 0.70:
+            return TABELL
+
         if hvit_andel > 0.90:
             return TRYKT
         elif hvit_andel > 0.70:

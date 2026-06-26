@@ -1,13 +1,12 @@
 import os
 import sys
-import json
 import uvicorn
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-sys.path.insert(0, "/delt")
+sys.path.insert(0, "/app")
 from delt.verktøy import konfigurer_logging
 
 logger = konfigurer_logging("api-tjeneste")
@@ -21,7 +20,6 @@ app.add_middleware(
 )
 
 API_NOKKEL = os.environ.get("API_NOKKEL", "")
-REDIS_URL = os.environ.get("REDIS_URL", "")
 
 AAPNE_STIER = {"/helse", "/statistikk"}
 AAPNE_PREFIKSER = ("/jobb/", "/resultat/", "/audit/")
@@ -83,15 +81,20 @@ async def statistikk():
 
 
 
-@app.get("/dokument/{fil_id}")
-async def hent_dokument(fil_id: str):
+@app.get("/dokument/{job_id}")
+async def hent_dokument(job_id: str):
     try:
         svar = requests.post(
             f"{SOK_URL}/sok",
-            json={"sporsmal": fil_id, "antall": 1},
-            timeout=30
+            json={"filtre": {"fil_id": job_id}, "antall": 1},
+            timeout=30,
         )
-        return svar.json()
+        resultat = svar.json()
+        if not resultat.get("resultater"):
+            raise HTTPException(status_code=404, detail="Dokument ikke funnet")
+        return resultat
+    except HTTPException:
+        raise
     except Exception as feil:
         raise HTTPException(status_code=503, detail=str(feil))
 

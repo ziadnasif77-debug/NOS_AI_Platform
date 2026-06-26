@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -11,7 +12,7 @@ from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 import numpy as np
 
-sys.path.insert(0, "/delt")
+sys.path.insert(0, "/app")
 from delt.verktøy import konfigurer_logging
 
 logger = konfigurer_logging("sok-tjeneste")
@@ -68,6 +69,7 @@ embedding_modell = SentenceTransformer(
 bm25_korpus = []
 bm25_fil_ids = []
 bm25_indeks = None
+_bm25_lås = threading.Lock()
 
 
 def _gjenoppbygg_bm25() -> None:
@@ -128,9 +130,10 @@ async def indekser(data: dict):
             "dokumenttype": metadata.get("dokumenttype") or "",
             "vektor": vektor,
         }])
-        bm25_korpus.append(tekst.split())
-        bm25_fil_ids.append(metadata.get("fil_id", ""))
-        bm25_indeks = BM25Okapi(bm25_korpus)
+        with _bm25_lås:
+            bm25_korpus.append(tekst.split())
+            bm25_fil_ids.append(metadata.get("fil_id", ""))
+            bm25_indeks = BM25Okapi(bm25_korpus)
         samling.flush()
         return {"status": "indeksert", "fil_id": metadata.get("fil_id")}
     except Exception as feil:

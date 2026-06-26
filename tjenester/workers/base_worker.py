@@ -236,10 +236,11 @@ class BaseWorker(ABC):
             "stage": self.running_state,
             "feil": str(error),
         }))
-        self._oppdater_state_direkte(job_id, "FAILED")
-        self._audit(job_id, "DLQ", details={"feil": str(error), "retry_count": retry_count})
+        self._oppdater_state_direkte(job_id, "FAILED", fra_tilstand=self.running_state)
+        self._audit(job_id, "DLQ", from_state=self.running_state,
+                    to_state="FAILED", details={"feil": str(error), "retry_count": retry_count})
 
-    def _oppdater_state_direkte(self, job_id: str, ny_tilstand: str):
+    def _oppdater_state_direkte(self, job_id: str, ny_tilstand: str, fra_tilstand: str = None):
         with psycopg2.connect(self._pg_url) as pg:
             with pg.cursor() as cur:
                 cur.execute(

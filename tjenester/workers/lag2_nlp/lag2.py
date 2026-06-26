@@ -272,7 +272,7 @@ class NLPWorker(BaseWorker):
         for fmt in ["%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"]:
             try:
                 d = datetime.strptime(dato.strip(), fmt)
-                return 1900 <= d.year <= 2024
+                return 1900 <= d.year <= datetime.utcnow().year
             except ValueError:
                 continue
         return False
