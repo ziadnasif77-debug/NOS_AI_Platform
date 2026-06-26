@@ -250,9 +250,14 @@ class ReconciliationWorker:
     def _er_i_redis(self, job_id: str, ko_nokkel: str) -> bool:
         try:
             elementer = self._redis.lrange(ko_nokkel, 0, -1)
+            jid = str(job_id)
             for e in elementer:
-                if str(job_id) in e.decode("utf-8", errors="ignore"):
-                    return True
+                try:
+                    payload = json.loads(e)
+                    if payload.get("job_id") == jid:
+                        return True
+                except (json.JSONDecodeError, AttributeError):
+                    continue
         except Exception:
             pass
         return False
