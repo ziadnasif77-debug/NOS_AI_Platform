@@ -84,9 +84,10 @@ class ReconciliationWorker:
             rader = cur.fetchall()
 
         for rad in rader:
-            self._frigi_og_re_koe(rad["job_id"], rad["state"], rad.get("file_path"), pg)
-            self._audit(rad["job_id"], "RECONCILIATION_STUCK", pg,
-                        details={"state": rad["state"]})
+            self._frigi_og_re_koe_atomisk(
+                rad["job_id"], rad["state"], rad.get("file_path"), pg,
+                audit_event="RECONCILIATION_STUCK",
+            )
 
         return len(rader)
 
@@ -116,9 +117,10 @@ class ReconciliationWorker:
                 continue
             ko_nokkel = CONFIG["redis"]["kooer"][ko_navn]
             if not self._er_i_redis(rad["job_id"], ko_nokkel):
-                self._re_koe(rad["job_id"], rad.get("file_path"), rad["state"], ko_nokkel, pg)
-                self._audit(rad["job_id"], "RECONCILIATION_GHOST", pg,
-                            details={"state": rad["state"]})
+                self._frigi_og_re_koe_atomisk(
+                    rad["job_id"], rad["state"], rad.get("file_path"), pg,
+                    audit_event="RECONCILIATION_GHOST",
+                )
                 antall += 1
 
         return antall
@@ -142,16 +144,28 @@ class ReconciliationWorker:
             rader = cur.fetchall()
 
         for rad in rader:
+            job_id = rad["job_id"]
+            fil_sti = rad.get("file_path", "")
+            ko_nokkel = CONFIG["redis"]["kooer"]["preprocess"]
+            payload = json.dumps({"job_id": str(job_id), "fil_sti": fil_sti})
+
+            # Atomisk: state-oppdatering + audit i én transaksjon
             with pg.cursor() as cur:
                 cur.execute(
                     "UPDATE jobs SET state = 'QUEUED', updated_at = NOW() WHERE job_id = %s",
-                    (rad["job_id"],),
+                    (job_id,),
                 )
-            ko_nokkel = CONFIG["redis"]["kooer"]["preprocess"]
-            payload = {"job_id": str(rad["job_id"]), "fil_sti": rad.get("file_path", "")}
-            self._redis.rpush(ko_nokkel, json.dumps(payload))
-            self._audit(rad["job_id"], "RECONCILIATION_TAPT", pg)
+                cur.execute(
+                    """
+                    INSERT INTO audit_log (job_id, event_type, worker_id, details)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (str(job_id), "RECONCILIATION_TAPT", "reconciliation",
+                     psycopg2.extras.Json({})),
+                )
             pg.commit()
+            # Redis-push etter commit — ghost detector gjenoppretter ved neste runde hvis dette feiler
+            self._redis.rpush(ko_nokkel, payload)
 
         return len(rader)
 
@@ -159,17 +173,61 @@ class ReconciliationWorker:
     #  Hjelpemetoder                                                       #
     # ------------------------------------------------------------------ #
 
-    def _frigi_og_re_koe(self, job_id, state, file_path, pg):
+    def _frigi_og_re_koe_atomisk(self, job_id, state, file_path, pg, audit_event: str):
+        """
+        Unlock + audit-insert i én Postgres-transaksjon, deretter Redis-push.
+
+        Garanterer at audit-record alltid finnes hvis unlock ble gjort.
+        Redis-push skjer etter commit — ved Redis-feil vil ghost-detektoren
+        gjenopprette jobben ved neste runde.
+        """
+        ko_navn = STATE_TIL_KO.get(state)
+        if ko_navn is None:
+            return
+
+        ko_nokkel = CONFIG["redis"]["kooer"][ko_navn]
+        forrige = self._hent_forrige_resultat(job_id, state, pg)
+
+        kolonne = STATE_TIL_RESULTAT_KOLONNE.get(state)
+        if kolonne is not None and forrige is None:
+            logger.error(
+                "DATA_INKONSISTENS: job_id=%s i tilstand %s mangler %s — merker som FAILED",
+                job_id, state, kolonne,
+            )
+            self._merk_som_feilet(job_id, state, pg)
+            with pg.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO audit_log (job_id, event_type, worker_id, details)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (str(job_id), "DATA_INKONSISTENS", "reconciliation",
+                     psycopg2.extras.Json({"state": state, "mangler": kolonne})),
+                )
+            pg.commit()
+            return
+
+        # Atomisk: unlock + audit i én transaksjon
         with pg.cursor() as cur:
             cur.execute(
                 "UPDATE jobs SET locked_by = NULL, lock_expiry = NULL WHERE job_id = %s",
                 (job_id,),
             )
+            cur.execute(
+                """
+                INSERT INTO audit_log (job_id, event_type, worker_id, details)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (str(job_id), audit_event, "reconciliation",
+                 psycopg2.extras.Json({"state": state})),
+            )
         pg.commit()
-        ko_navn = STATE_TIL_KO.get(state)
-        if ko_navn:
-            ko_nokkel = CONFIG["redis"]["kooer"][ko_navn]
-            self._re_koe(job_id, file_path, state, ko_nokkel, pg)
+
+        # Redis-push etter vellykket commit
+        p = {"job_id": str(job_id), "fil_sti": file_path or ""}
+        if forrige is not None:
+            p["forrige_resultat"] = forrige
+        self._redis.rpush(ko_nokkel, json.dumps(p))
 
     def _re_koe(self, job_id, file_path, state, ko_nokkel, pg=None):
         forrige = self._hent_forrige_resultat(job_id, state, pg) if pg else None
