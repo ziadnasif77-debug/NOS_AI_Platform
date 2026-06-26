@@ -5,7 +5,8 @@ import threading
 import torch
 import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from rank_bm25 import BM25Okapi
 import numpy as np
 
@@ -13,6 +14,15 @@ sys.path.insert(0, "/app")
 from delt.verktøy import konfigurer_logging
 
 logger = konfigurer_logging("sok-tjeneste")
+
+API_NOKKEL = os.environ.get("API_NOKKEL", "")
+if not API_NOKKEL:
+    logger.warning(
+        "API_NOKKEL ikke satt — soketjenesten er ubeskyttet. "
+        "Sett miljøvariabelen API_NOKKEL i produksjon."
+    )
+
+AAPNE_STIER_SOK = {"/helse"}
 
 MODELLER_STI = os.environ.get("MODELLER_STI", "/modeller")
 MILVUS_VERT = os.environ.get("MILVUS_VERT", "milvus")
@@ -69,18 +79,17 @@ def _opprett_samling():
     if utility.has_collection(MILVUS_SAMLING):
         return Collection(MILVUS_SAMLING)
     felt = [
-        FieldSchema("id",            DataType.INT64,         is_primary=True, auto_id=True),
-        FieldSchema("fil_id",        DataType.VARCHAR,        max_length=200),
-        FieldSchema("filnavn",       DataType.VARCHAR,        max_length=500),
-        FieldSchema("side_nummer",   DataType.INT64),
-        FieldSchema("tekst",         DataType.VARCHAR,        max_length=65535),
-        FieldSchema("fodselsnummer", DataType.VARCHAR,        max_length=20),
-        FieldSchema("navn",          DataType.VARCHAR,        max_length=200),
-        FieldSchema("dato",          DataType.VARCHAR,        max_length=50),
-        FieldSchema("ytelse",        DataType.VARCHAR,        max_length=100),
-        FieldSchema("fylke",         DataType.VARCHAR,        max_length=100),
-        FieldSchema("dokumenttype",  DataType.VARCHAR,        max_length=100),
-        FieldSchema("vektor",        DataType.FLOAT_VECTOR,   dim=1024),
+        FieldSchema("id",           DataType.INT64,        is_primary=True, auto_id=True),
+        FieldSchema("fil_id",       DataType.VARCHAR,       max_length=200),
+        FieldSchema("filnavn",      DataType.VARCHAR,       max_length=500),
+        FieldSchema("side_nummer",  DataType.INT64),
+        FieldSchema("tekst",        DataType.VARCHAR,       max_length=65535),
+        FieldSchema("navn",         DataType.VARCHAR,       max_length=200),
+        FieldSchema("dato",         DataType.VARCHAR,       max_length=50),
+        FieldSchema("ytelse",       DataType.VARCHAR,       max_length=100),
+        FieldSchema("fylke",        DataType.VARCHAR,       max_length=100),
+        FieldSchema("dokumenttype", DataType.VARCHAR,       max_length=100),
+        FieldSchema("vektor",       DataType.FLOAT_VECTOR,  dim=1024),
     ]
     skjema = CollectionSchema(felt, "NAV historiske dokumenter")
     samling = Collection(MILVUS_SAMLING, skjema)
@@ -162,6 +171,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="NAV Soketjeneste", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def api_nokkel_middleware(forespørsel: Request, neste):
+    """Krev X-API-Key header på alle endepunkter unntatt /helse."""
+    if API_NOKKEL:
+        sti = forespørsel.url.path
+        if sti not in AAPNE_STIER_SOK:
+            nokkel = forespørsel.headers.get("X-API-Key", "")
+            if nokkel != API_NOKKEL:
+                return JSONResponse(
+                    {"feil": "Ugyldig eller manglende API-nøkkel"},
+                    status_code=401,
+                )
+    return await neste(forespørsel)
+
+
 # ------------------------------------------------------------------ #
 #  Hjelpefunksjon: sjekk Milvus                                        #
 # ------------------------------------------------------------------ #
@@ -187,17 +211,16 @@ async def indekser(data: dict):
     try:
         vektor = _embedding_modell.encode(tekst[:2048], normalize_embeddings=True).tolist()
         _samling.insert([{
-            "fil_id":        metadata.get("fil_id", ""),
-            "filnavn":       data.get("filnavn", ""),
-            "side_nummer":   metadata.get("side_nummer", 0),
-            "tekst":         tekst[:65000],
-            "fodselsnummer": metadata.get("fodselsnummer") or "",
-            "navn":          metadata.get("navn") or "",
-            "dato":          metadata.get("dato") or "",
-            "ytelse":        metadata.get("ytelse") or "",
-            "fylke":         metadata.get("fylke") or "",
-            "dokumenttype":  metadata.get("dokumenttype") or "",
-            "vektor":        vektor,
+            "fil_id":       metadata.get("fil_id", ""),
+            "filnavn":      data.get("filnavn", ""),
+            "side_nummer":  metadata.get("side_nummer", 0),
+            "tekst":        tekst[:65000],
+            "navn":         metadata.get("navn") or "",
+            "dato":         metadata.get("dato") or "",
+            "ytelse":       metadata.get("ytelse") or "",
+            "fylke":        metadata.get("fylke") or "",
+            "dokumenttype": metadata.get("dokumenttype") or "",
+            "vektor":       vektor,
         }])
         with _bm25_lås:
             bm25_korpus.append(tekst.split())
@@ -230,7 +253,7 @@ async def sok(data: dict):
             limit=antall * 3,
             output_fields=[
                 "fil_id", "filnavn", "side_nummer", "tekst",
-                "fodselsnummer", "navn", "dato", "ytelse", "fylke", "dokumenttype",
+                "navn", "dato", "ytelse", "fylke", "dokumenttype",
             ],
         )
         if uttrykk:
@@ -271,16 +294,36 @@ async def statistikk():
 #  Hjelpemetoder                                                        #
 # ------------------------------------------------------------------ #
 
+LOVLIGE_YTELSER = {
+    "dagpenger", "sykepenger", "uforetrygd", "arbeidsavklaringspenger",
+    "foreldrepenger", "overgangsstonad", "barnetrygd", "kontantstotte",
+    "alderspensjon", "uforepensjon",
+}
+
+LOVLIGE_FYLKER = {
+    "Oslo", "Viken", "Innlandet", "Vestfold og Telemark",
+    "Agder", "Rogaland", "Vestland", "Møre og Romsdal",
+    "Trøndelag", "Nordland", "Troms og Finnmark", "Troms", "Finnmark",
+}
+
+
 def _bygg_filter(filtre: dict) -> str:
     betingelser = []
-    if filtre.get("ytelse"):
-        betingelser.append(f'ytelse == "{filtre["ytelse"]}"')
-    if filtre.get("fylke"):
-        betingelser.append(f'fylke == "{filtre["fylke"]}"')
-    if filtre.get("fodselsnummer"):
-        betingelser.append(f'fodselsnummer == "{filtre["fodselsnummer"]}"')
-    if filtre.get("fil_id"):
-        betingelser.append(f'fil_id == "{filtre["fil_id"]}"')
+    ytelse = filtre.get("ytelse")
+    if ytelse:
+        if ytelse not in LOVLIGE_YTELSER:
+            raise HTTPException(status_code=400, detail=f"Ugyldig ytelse: {ytelse!r}")
+        betingelser.append(f'ytelse == "{ytelse}"')
+    fylke = filtre.get("fylke")
+    if fylke:
+        if fylke not in LOVLIGE_FYLKER:
+            raise HTTPException(status_code=400, detail=f"Ugyldig fylke: {fylke!r}")
+        betingelser.append(f'fylke == "{fylke}"')
+    fil_id = filtre.get("fil_id")
+    if fil_id:
+        if not fil_id.replace("-", "").isalnum() or len(fil_id) > 200:
+            raise HTTPException(status_code=400, detail="Ugyldig fil_id")
+        betingelser.append(f'fil_id == "{fil_id}"')
     return " && ".join(betingelser) if betingelser else ""
 
 

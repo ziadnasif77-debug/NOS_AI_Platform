@@ -21,23 +21,26 @@ app.add_middleware(
 )
 
 API_NOKKEL = os.environ.get("API_NOKKEL", "")
+if not API_NOKKEL:
+    logger.warning(
+        "API_NOKKEL ikke satt — alle endepunkter er ubeskyttede. "
+        "Sett miljøvariabelen API_NOKKEL i produksjon."
+    )
 
-AAPNE_STIER = {"/helse", "/statistikk"}
-AAPNE_PREFIKSER = ("/jobb/", "/resultat/", "/audit/")
+AAPNE_STIER = {"/helse"}
 
 
 @app.middleware("http")
 async def api_nokkel_middleware(forespørsel: Request, neste):
-    """Krev X-API-Key header. Unntak: /helse, /statistikk og /jobb/<id> (asynkron polling)."""
+    """Krev X-API-Key header på alle endepunkter unntatt /helse."""
     if API_NOKKEL:
         sti = forespørsel.url.path
-        aapen = sti in AAPNE_STIER or any(sti.startswith(p) for p in AAPNE_PREFIKSER)
-        if not aapen:
+        if sti not in AAPNE_STIER:
             nokkel = forespørsel.headers.get("X-API-Key", "")
             if nokkel != API_NOKKEL:
                 return JSONResponse(
                     {"feil": "Ugyldig eller manglende API-nøkkel"},
-                    status_code=401
+                    status_code=401,
                 )
     return await neste(forespørsel)
 

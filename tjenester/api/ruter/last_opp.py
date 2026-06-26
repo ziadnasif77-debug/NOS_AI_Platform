@@ -99,12 +99,6 @@ async def last_opp(fil: UploadFile = File(...)):
                 (job_id, psycopg2.extras.Json({"filnavn": filnavn})),
             )
 
-        from config.config_loader import CONFIG
-        rc = _redis_client()
-        payload = json.dumps({"job_id": job_id, "fil_sti": str(fil_sti)})
-        ko = CONFIG["redis"]["kooer"]["preprocess"]
-        rc.rpush(ko, payload)
-
         with pg.cursor() as cur:
             cur.execute(
                 "UPDATE jobs SET state = 'QUEUED', updated_at = NOW() WHERE job_id = %s",
@@ -117,7 +111,16 @@ async def last_opp(fil: UploadFile = File(...)):
                 """,
                 (job_id,),
             )
+        # Commit all Postgres changes before pushing to Redis.
+        # If the process crashes between commit and rpush, the ghost detector
+        # will re-queue the job within reconciliation.ghost_timeout_minutter.
         pg.commit()
+
+        from config.config_loader import CONFIG
+        rc = _redis_client()
+        payload = json.dumps({"job_id": job_id, "fil_sti": str(fil_sti)})
+        ko = CONFIG["redis"]["kooer"]["preprocess"]
+        rc.rpush(ko, payload)
 
         return JSONResponse(
             status_code=202,

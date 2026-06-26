@@ -130,7 +130,6 @@ class RoutingWorker(BaseWorker):
                 "fil_id": job_id,
                 "side_nummer": 0,
                 "navn": entiteter.get("navn", ""),
-                "fodselsnummer": entiteter.get("fodselsnummer", ""),
                 "dato": entiteter.get("dato", ""),
                 "ytelse": entiteter.get("ytelse", ""),
                 "fylke": entiteter.get("fylke", ""),

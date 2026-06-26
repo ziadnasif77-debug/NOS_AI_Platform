@@ -284,14 +284,22 @@ class BaseWorker(ABC):
         if pg is not None:
             try:
                 _skriv(pg)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error(
+                    "AUDIT_FEIL: kunne ikke skrive audit-record "
+                    "job_id=%s event=%s — %s",
+                    job_id, event_type, exc,
+                )
         else:
             try:
                 with psycopg2.connect(self._pg_url) as conn:
                     _skriv(conn)
             except Exception as exc:
-                logger.warning("Audit-skriving feilet: %s", exc)
+                logger.error(
+                    "AUDIT_FEIL: kunne ikke skrive audit-record "
+                    "job_id=%s event=%s — %s",
+                    job_id, event_type, exc,
+                )
 
     # ------------------------------------------------------------------ #
     #  Label Studio                                                        #
