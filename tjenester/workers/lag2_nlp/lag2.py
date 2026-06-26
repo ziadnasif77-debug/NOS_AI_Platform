@@ -13,7 +13,7 @@ from typing import Optional
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
 from delt.konstanter import TRYKT, TABELL
-from delt.skjemaer import OCRResultat
+from delt.skjemaer import OCRResultat, NLPResultat, ValideringsResultat, AnomalyResultat
 from tjenester.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -139,19 +139,19 @@ class NLPWorker(BaseWorker):
                 stage="validering",
             )
 
-        return {
-            "job_id": job_id,
-            "entities": entiteter,
-            "document_class": dokklasse,
-            "ytelse": ytelse,
-            "utfall": utfall,
-            "summary": oppsummering,
-            "nlp_confidence": round(nlp_konfidens, 4),
-            "nlp_model_used": modell,
-            "validation": validering,
-            "anomaly": anomali,
-            "ocr_confidence": round(ocr_konfidens, 4),
-        }
+        return NLPResultat(
+            job_id=job_id,
+            entities=entiteter,
+            document_class=dokklasse,
+            ytelse=ytelse,
+            utfall=utfall,
+            summary=oppsummering,
+            nlp_confidence=round(nlp_konfidens, 4),
+            nlp_model_used=modell,
+            validation=ValideringsResultat(**validering),
+            anomaly=AnomalyResultat(**anomali),
+            ocr_confidence=round(ocr_konfidens, 4),
+        ).model_dump()
 
     # ------------------------------------------------------------------ #
     #  NLP-motor-routing                                                   #

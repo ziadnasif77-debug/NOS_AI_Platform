@@ -11,7 +11,7 @@ import threading
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
 from delt.konstanter import HANDSKRIFT, TRYKT, TABELL, BLANDET
-from delt.skjemaer import PreprocessResultat
+from delt.skjemaer import PreprocessResultat, OCRResultat
 from tjenester.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -63,18 +63,18 @@ class OCRWorker(BaseWorker):
                 stage="lav_ocr_konfidens",
             )
 
-        return {
-            "job_id": job_id,
-            "text": tekst,
-            "confidence": round(konfidens, 4),
-            "tokens": tokens,
-            "boxes": bokser,
-            "ocr_model_used": modell,
-            "document_type": dokumenttype,
-            "raw_path": fil_sti,
-            "clean_path": fil_sti,
-            "confidence_approved": godkjent,
-        }
+        return OCRResultat(
+            job_id=job_id,
+            text=tekst,
+            confidence=round(konfidens, 4),
+            tokens=tokens,
+            boxes=bokser,
+            ocr_model_used=modell,
+            document_type=dokumenttype,
+            raw_path=fil_sti,
+            clean_path=fil_sti,
+            confidence_approved=godkjent,
+        ).model_dump()
 
     def _kjor_ocr(self, fil_sti: str, dokumenttype: str):
         if dokumenttype == HANDSKRIFT:

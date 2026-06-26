@@ -10,6 +10,7 @@ import socket
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
 from delt.konstanter import HANDSKRIFT, TRYKT, TABELL, BLANDET
+from delt.skjemaer import PreprocessResultat
 from tjenester.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -47,14 +48,14 @@ class PreprocessingWorker(BaseWorker):
                 stage="bildekvalitet",
             )
 
-        return {
-            "job_id": job_id,
-            "document_type": dokumenttype,
-            "quality_score": round(score, 4),
-            "quality_approved": godkjent,
-            "preprocessed_path": fil_sti,
-            "rejection_reason": None if godkjent else "lav_bildekvalitet",
-        }
+        return PreprocessResultat(
+            job_id=job_id,
+            document_type=dokumenttype,
+            quality_score=round(score, 4),
+            quality_approved=godkjent,
+            preprocessed_path=fil_sti,
+            rejection_reason=None if godkjent else "lav_bildekvalitet",
+        ).model_dump()
 
     def _analyser(self, fil_sti: str) -> tuple:
         try:
