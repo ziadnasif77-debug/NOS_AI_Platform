@@ -100,10 +100,12 @@ Dokumenter som ikke møter kvalitetskravene sendes automatisk til **Label Studio
 ## Tilstandsmaskin
 
 ```
-UPLOADED → QUEUED → PREPROCESSING → OCR_PROCESSING → NLP_PROCESSING → VALIDATION → ROUTING → DONE
-                                                                                        ↓
-                                                                                     FAILED (terminal)
+UPLOADED → QUEUED → PREPROCESSING → OCR_PROCESSING → NLP_PROCESSING → ROUTING → DONE
+                                                                            ↓
+                                                                         FAILED (terminal)
 ```
+
+> **Merk:** `VALIDATION`-tilstanden eksisterer i Postgres-skjemaet, men NLPWorker utfører validering inline og hopper direkte til `ROUTING`. Overgangen `NLP_PROCESSING → ROUTING` er eksplisitt tillatt i `LOVLIGE_OVERGANGER`.
 
 | Overgang | Utløser |
 |----------|---------|
@@ -111,8 +113,7 @@ UPLOADED → QUEUED → PREPROCESSING → OCR_PROCESSING → NLP_PROCESSING → 
 | `QUEUED → PREPROCESSING` | PreprocessingWorker blpop |
 | `PREPROCESSING → OCR_PROCESSING` | OCRWorker blpop |
 | `OCR_PROCESSING → NLP_PROCESSING` | NLPWorker blpop |
-| `NLP_PROCESSING → VALIDATION` | NLPWorker ferdig |
-| `VALIDATION → ROUTING` | RoutingWorker blpop |
+| `NLP_PROCESSING → ROUTING` | NLPWorker ferdig (validering inline) |
 | `ROUTING → DONE` | RoutingWorker ferdig |
 | `* → FAILED` | 3 retries → DLQ |
 
@@ -141,20 +142,72 @@ Abstrakt basisklasse alle workers arver:
 
 ### NLPWorker (inkluderer validering)
 - Ruter NLP-modell: PRINTED/TABLE + layout → LayoutLMv3; lang tekst → Borealis; ellers → NB-BERT
-- Intern validering (ingen HTTP): Mod11 fødselsnummer, dato 1900–2024, obligatoriske felt, norske fylker
+- Intern validering (ingen HTTP): Mod11 fødselsnummer, dato 1900–innværende år (dynamisk), obligatoriske felt, norske fylker
 - Kryssvalidering (kun hvis `CONFIG["lag"]["lag5_kryssvalidering"] = true`)
 - Sender til Label Studio prosjekt 4 ved valideringsfeil
 
 ### RoutingWorker
 - Ren logikk, ingen modeller
 - Prioritet: OCR-konfidens → NLP-konfidens → validering → anomali → APPROVED
-- APPROVED: sendes til `queue:sok_indeksering`
-- REVIEW: sendes til Label Studio med korrekt prosjekt-ID
+- APPROVED: HTTP POST til `sok:8003/indekser` (3 forsøk med backoff 2s/4s)
+- REVIEW/REJECTED: sendes til Label Studio med korrekt prosjekt-ID
 
 ### ReconciliationWorker (hvert 5. minutt)
 - **Stuck jobs:** lås utløpt → frigi lås + re-kø
 - **Ghost states:** aktiv i Postgres, ikke i Redis, > 10 min siden sist oppdatert → re-kø
 - **Tapte jobber:** UPLOADED > 5 min uten å bli QUEUED → sett QUEUED + kø
+
+---
+
+## inference_meta — Sporbarhet per forespørsel
+
+Alle `/analyser`-svar fra `lag3_nlp`-tjenesten inkluderer en `inference_meta`-blokk som dokumenterer nøyaktig hvilken modell som ble brukt og hvorfor:
+
+```json
+{
+  "inference_meta": {
+    "confidence_source": "heuristic_fixed_rule_v1",
+    "fallback_chain": [
+      {"model": "layoutlmv3", "status": "skipped", "reason": "warmup_pending"},
+      {"model": "ner",        "status": "used",    "reason": "primary_success"}
+    ]
+  }
+}
+```
+
+| `status` | Betydning |
+|----------|-----------|
+| `used` | Modellen ble brukt |
+| `skipped` | Modellen ble ikke forsøkt |
+| `failed` | Modellen feilet — fallback ble aktivert |
+
+| `reason` | Utløser |
+|----------|---------|
+| `primary_success` | Brukt uten feil |
+| `no_image` | Mangler bildesti |
+| `warmup_pending` | Modell lastes fortsatt i bakgrunn |
+| `backoff` | Maks lastforsøk nådd, venter på ny sjanse (10 min) |
+| `runtime_error` | Unntak under inferens |
+
+`lag3_nlp`-tjenesten bruker **lazy singleton-initialisering**: modeller lastes ved første forespørsel via en bakgrunnstråd ved oppstart (`lifespan`-hook). Dette eliminerer GPU-minneallokering ved container-oppstart uten trafikk.
+
+---
+
+## Legacy-lag (null trafikk)
+
+Følgende HTTP-tjenester kjører men mottar **ingen trafikk** fra V2.1-pipelinen:
+
+| Tjeneste | Port | Status |
+|----------|------|--------|
+| `lag0_kvalitet` | 8010 | Aktiv, ikke i bruk |
+| `lag1_klassifisering` | 8011 | Aktiv, ikke i bruk |
+| `lag2_ocr` | 8012 | Aktiv, ikke i bruk |
+| `lag3_nlp` | 8013 | Aktiv — GPU lazy-loaded |
+| `lag4_validering` | 8014 | Aktiv, ikke i bruk |
+| `lag5_kryssvalidering` | 8015 | Aktiv, ikke i bruk |
+| `ruter` | 8016 | Aktiv, ikke i bruk |
+
+All reell behandling skjer i `tjenester/workers/` via Redis-køer.
 
 ---
 
@@ -165,12 +218,18 @@ Abstrakt basisklasse alle workers arver:
 job_id          UUID PRIMARY KEY DEFAULT gen_random_uuid()
 idempotency_key TEXT UNIQUE NOT NULL   -- sha256(innhold + tidsbøtte)
 state           job_state NOT NULL DEFAULT 'UPLOADED'
+current_stage   TEXT
+file_name       TEXT NOT NULL
+file_path       TEXT NOT NULL
+priority        INT DEFAULT 1
+attempt_count   INT DEFAULT 0
+max_retries     INT DEFAULT 3
+last_error      TEXT
 locked_by       TEXT                   -- worker_id eller NULL
 lock_expiry     TIMESTAMP              -- utløpstidspunkt for lås
-filnavn         TEXT
-fil_sti         TEXT
-opprettet       TIMESTAMP DEFAULT NOW()
-oppdatert       TIMESTAMP DEFAULT NOW()
+created_at      TIMESTAMP DEFAULT NOW()
+updated_at      TIMESTAMP DEFAULT NOW()
+completed_at    TIMESTAMP
 ```
 
 ### `results`
