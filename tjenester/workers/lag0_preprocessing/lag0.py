@@ -39,7 +39,7 @@ class PreprocessingWorker(BaseWorker):
         godkjent = score >= terskel
 
         if not godkjent:
-            project_id = CONFIG["label_studio"]["prosjekter"]["lag0"]
+            project_id = CONFIG["label_studio"]["prosjekter"]["bildekvalitet"]
             self.send_til_label_studio(
                 job_id=job_id,
                 image_path=fil_sti,
@@ -72,6 +72,11 @@ class PreprocessingWorker(BaseWorker):
             return score, dokumenttype
 
         except ImportError:
+            logger.warning(
+                "cv2 (opencv) ikke tilgjengelig — alle dokumenter godkjennes "
+                "automatisk med score=0.8 og type=%s. "
+                "Installer opencv-python-headless for korrekt klassifisering.", TRYKT
+            )
             return 0.8, TRYKT
 
     def _klassifiser(self, bilde) -> str:

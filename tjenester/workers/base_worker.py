@@ -98,7 +98,15 @@ class BaseWorker(ABC):
                 logger.warning("Ugyldig tilstandsovergang for %s: %s", job_id, exc)
             except Exception as exc:
                 pg.rollback()
-                pg_feil = psycopg2.connect(self._pg_url)
+                try:
+                    pg_feil = psycopg2.connect(self._pg_url)
+                except Exception as tilkobling_exc:
+                    logger.error(
+                        "Kunne ikke opprette DB-tilkobling for feilhåndtering "
+                        "job_id=%s — jobb blir gjenopprettet av reconciliation: %s",
+                        job_id, tilkobling_exc,
+                    )
+                    return
                 try:
                     self._haandter_feil(job, exc, pg_feil)
                 finally:
@@ -181,10 +189,10 @@ class BaseWorker(ABC):
 
     def _legg_i_neste_ko(self, job: dict, resultat: dict):
         neste_ko_map = {
-            "OCR_PROCESSING":  CONFIG["redis"]["kooer"]["ocr"],
-            "NLP_PROCESSING":  CONFIG["redis"]["kooer"]["nlp"],
-            "VALIDATION":      CONFIG["redis"]["kooer"]["validation"],
-            "ROUTING":         CONFIG["redis"]["kooer"]["routing"],
+            "OCR_PROCESSING": CONFIG["redis"]["kooer"]["ocr"],
+            "NLP_PROCESSING": CONFIG["redis"]["kooer"]["nlp"],
+            "ROUTING":        CONFIG["redis"]["kooer"]["routing"],
+            # VALIDATION har ingen consumer — NLPWorker bruker done_state="ROUTING"
         }
         ko = neste_ko_map.get(self.done_state)
         if ko is None:

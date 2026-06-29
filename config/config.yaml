@@ -3,22 +3,10 @@
 # ════════════════════════════════════════════════
 
 lag:
-  lag0_kvalitet:        true
-  lag1_klassifisering:  true
-  lag2_ocr:             true
-  lag3_nlp:             true
-  lag4_validering:      true
   lag5_kryssvalidering: false
 
 porter:
-  lag0:  8010
-  lag1:  8011
-  lag2:  8012
-  lag3:  8013
-  lag4:  8014
-  lag5:  8015
-  ruter: 8016
-  api:   8000
+  api: 8000
 
 stier:
   data:         ./data
@@ -94,7 +82,7 @@ tjenester:
 label_studio:
   url: http://label-studio:8080
   prosjekter:
-    lag0: 1
-    lag2: 2
-    lag3: 3
-    lag4: 4
+    bildekvalitet:  1
+    ocr_konfidens:  2
+    nlp_konfidens:  3
+    validering:     4

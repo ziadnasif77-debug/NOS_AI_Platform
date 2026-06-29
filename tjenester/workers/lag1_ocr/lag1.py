@@ -73,7 +73,7 @@ class OCRWorker(BaseWorker):
 
         godkjent = konfidens >= terskel
         if not godkjent:
-            project_id = CONFIG["label_studio"]["prosjekter"]["lag2"]
+            project_id = CONFIG["label_studio"]["prosjekter"]["ocr_konfidens"]
             self.send_til_label_studio(
                 job_id=job_id,
                 image_path=fil_sti,

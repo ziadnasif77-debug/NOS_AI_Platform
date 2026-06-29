@@ -7,6 +7,7 @@ import os
 import json
 import logging
 import socket
+import threading
 
 import psycopg2
 import psycopg2.extras
@@ -89,16 +90,16 @@ class RoutingWorker(BaseWorker):
         ls_prosjekter = CONFIG["label_studio"]["prosjekter"]
 
         if ocr_konfidens < ocr_terskel:
-            return "REVIEW", "lav_ocr_konfidens", ls_prosjekter["lag2"]
+            return "REVIEW", "lav_ocr_konfidens", ls_prosjekter["ocr_konfidens"]
 
         if nlp_konfidens < nlp_terskel:
-            return "REVIEW", "lav_nlp_konfidens", ls_prosjekter["lag3"]
+            return "REVIEW", "lav_nlp_konfidens", ls_prosjekter["nlp_konfidens"]
 
         if not validering.gyldig:
-            return "REVIEW", "valideringsfeil", ls_prosjekter["lag4"]
+            return "REVIEW", "valideringsfeil", ls_prosjekter["validering"]
 
         if anomali.har_anomali:
-            return "REVIEW", "anomali_detektert", ls_prosjekter["lag4"]
+            return "REVIEW", "anomali_detektert", ls_prosjekter["validering"]
 
         return "APPROVED", "alle_lag_godkjent", None
 
@@ -119,6 +120,16 @@ class RoutingWorker(BaseWorker):
         pg.commit()
 
     def _send_til_milvus(self, job_id: str, nlp_res):
+        """Starter Milvus-indeksering i bakgrunnstråd — blokkerer ikke worker."""
+        t = threading.Thread(
+            target=self._send_til_milvus_sync,
+            args=(job_id, nlp_res),
+            daemon=True,
+            name=f"milvus-{job_id[:8]}",
+        )
+        t.start()
+
+    def _send_til_milvus_sync(self, job_id: str, nlp_res):
         import requests as req
         import time as _time
         sok_url = CONFIG.get("tjenester", {}).get("sok_url", "http://sok:8003")
@@ -140,6 +151,7 @@ class RoutingWorker(BaseWorker):
             try:
                 svar = req.post(f"{sok_url}/indekser", json=payload, timeout=10)
                 svar.raise_for_status()
+                logger.info("Milvus-indeksering fullført for job_id=%s", job_id)
                 return
             except Exception as exc:
                 logger.warning("Milvus-indeksering forsøk %d feilet: %s", forsok, exc)

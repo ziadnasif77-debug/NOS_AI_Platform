@@ -130,7 +130,7 @@ class NLPWorker(BaseWorker):
             anomali.update(self._kryssvalider(entiteter))
 
         if not validering["gyldig"] or anomali.get("har_anomali"):
-            project_id = CONFIG["label_studio"]["prosjekter"]["lag4"]
+            project_id = CONFIG["label_studio"]["prosjekter"]["validering"]
             self.send_til_label_studio(
                 job_id=job_id,
                 image_path=job.get("fil_sti", ""),
