@@ -259,6 +259,8 @@ services:
       POSTGRES_USER: nav
       POSTGRES_PASSWORD: nav
       POSTGRES_DB: nav_archive
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
