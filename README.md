@@ -472,11 +472,11 @@ make label-studio            # Åpne Label Studio (http://localhost:8080)
 
 ## Testing
 
+### Enhetstester (167 totalt: 141 enhet + 26 integrasjon)
+
 ```bash
 python -m pytest tester/ -v
 ```
-
-**64 tester fordelt på:**
 
 | Testfil | Beskrivelse |
 |---------|-------------|
@@ -491,6 +491,67 @@ python -m pytest tester/ -v
 | `test_lag0.py` | Bildekvalitet (Laplacian), FNR-format |
 | `test_lag4.py` | FNR mod11, datovalidering |
 | `test_ruter.py` | Rutinglogikk fra gamle lag |
+| `test_sec_rel_obs.py` | API-auth, FNR-fjerning, commit-før-push, audit-synlighet |
+| `test_hardening.py` | Env-overrides, DB-feilhåndtering, config-opprydding |
+| `test_kubeflow_modus.py` | kfp_steg, KJOREMODUS-gating, K8s-manifester |
+
+### Integrasjonstester (ekte Postgres + Redis, ingen mocks)
+
+Krever kjørende Postgres og Redis:
+
+```bash
+POSTGRES_URL=postgresql://nav:nav@localhost:5432/nav_archive \
+REDIS_URL=redis://localhost:6379/0 \
+INTEGRASJONSTEST=1 python -m pytest tester/test_integrasjon_lokal.py -v
+```
+
+**Verifiserte scenarioer** (`test_integrasjon_lokal.py`, 26 tester):
+
+| # | Scenario | Verifisert |
+|---|----------|------------|
+| 1 | `/helse` åpen uten API-nøkkel | ✅ |
+| 2 | Alle andre endepunkter krever gyldig `X-API-Key` (401 ellers) | ✅ |
+| 3 | Ikke-PDF avvises med 400 | ✅ |
+| 4 | Opplasting: 202, `QUEUED` i Postgres, audit (`OPPRETTET` + `STATE_ENDRING`), nøyaktig én Redis-melding, fil lagret | ✅ |
+| 5 | Idempotens: samme fil → samme `job_id`, ingen duplikat i kø | ✅ |
+| 6 | 404 for ukjent jobb/resultat | ✅ |
+| 7 | **Redis nede ved opplasting** (REL-1): 500 til klient, jobb trygt `QUEUED`, ghost-detektor re-køer automatisk | ✅ |
+| 8 | Ulovlig tilstandsovergang avvises (`DONE → PREPROCESSING`) | ✅ |
+| 9 | Optimistisk lås hindrer dobbel behandling | ✅ |
+| 10 | PreprocessingWorker ende-til-ende: tilstand, resultat, neste kø, lås frigitt | ✅ |
+| 11 | OCRWorker fallback uten modeller: konfidens 0.0, flagges for gjennomgang, fortsetter | ✅ |
+| 12 | Routing `APPROVED` (alle terskler OK) | ✅ |
+| 13 | Routing `REVIEW` ved lav OCR-konfidens (med Label Studio-prosjekt) | ✅ |
+| 14 | Routing `REVIEW` ved anomali | ✅ |
+| 15 | Feil → retry med økt teller, jobb ikke `FAILED` | ✅ |
+| 16 | Uttømte retries → DLQ-rad, `FAILED`, audit `DLQ`, Redis-DLQ | ✅ |
+| 17 | Reconciliation: stuck jobb (utløpt lås) re-køes, lås frigis | ✅ |
+| 18 | Reconciliation: ghost (i Postgres, ikke i Redis) re-køes med audit | ✅ |
+| 19 | Reconciliation: tapt jobb (`UPLOADED` > 5 min) blir `QUEUED` | ✅ |
+| 20 | kfp_steg (kubeflow-modus): preprocess uten kø-push | ✅ |
+| 21 | kfp_steg: routing leser forrige resultat fra `results`-tabellen | ✅ |
+| 22 | kfp_steg: re-kjøring av fullført steg er ufarlig (ingen `FAILED`) | ✅ |
+| 23 | kfp_steg: feil → DLQ + `FAILED` + exception til KFP | ✅ |
+| 24 | kfp_steg: manglende forrige resultat gir tydelig feil | ✅ |
+| 25 | `rebuild_redis`: køer gjenoppbygges fra Postgres | ✅ |
+
+### Live ende-til-ende-verifikasjon
+
+Hele kjeden er kjørt live (ekte uvicorn-API + ekte workers som
+prosesser mot ekte Postgres/Redis): HTTP-opplasting → 401 uten nøkkel →
+202 med nøkkel → `QUEUED → PREPROCESSING → OCR_PROCESSING →
+NLP_PROCESSING → ROUTING → DONE` med `routing_decision=APPROVED` og
+komplett audit-spor. NLP-steget ble simulert med injisert resultat
+(se begrensninger under).
+
+### Hva som IKKE dekkes uten modeller/infrastruktur
+
+| Område | Hvorfor | Hvordan teste |
+|--------|---------|---------------|
+| OCR-/NLP-modellinferens (TrOCR, LayoutLMv3, NB-BERT) | Krever `make last-ned-modeller` (~GB) og helst GPU | Last ned modeller, kjør workers og last opp ekte skannede PDF-er |
+| NLPWorker-oppstart | Nekter bevisst å starte uten minst én modell | Samme som over |
+| Milvus-søk (`/sok`) | Krever kjørende Milvus + embeddings-modell | `make start` og `make sok SPORSMAL="..."` |
+| Kubeflow-runtime | Krever K8s-cluster med KFP installert | Følg [docs/KUBEFLOW.md](docs/KUBEFLOW.md) |
 
 ---
 
