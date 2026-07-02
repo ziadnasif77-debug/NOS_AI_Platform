@@ -7,3 +7,5 @@ redis
 psycopg2-binary
 pyyaml
 kfp
+prometheus-client
+PyJWT[crypto]

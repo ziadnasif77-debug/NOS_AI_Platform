@@ -1,14 +1,17 @@
 import os
 import sys
+import time
 import uvicorn
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 sys.path.insert(0, "/app")
 sys.path.insert(0, "/app/tjenester/api")
 from delt.verktøy import konfigurer_logging
+from delt.autentisering import sjekk_forespoersel, auth_modus
+from delt import metrikker
 
 logger = konfigurer_logging("api-tjeneste")
 app = FastAPI(title="NAV Archive API")
@@ -21,28 +24,47 @@ app.add_middleware(
 )
 
 API_NOKKEL = os.environ.get("API_NOKKEL", "")
-if not API_NOKKEL:
+if auth_modus() == "api_nokkel" and not API_NOKKEL:
     logger.warning(
         "API_NOKKEL ikke satt — alle endepunkter er ubeskyttede. "
-        "Sett miljøvariabelen API_NOKKEL i produksjon."
+        "Sett miljøvariabelen API_NOKKEL i produksjon, "
+        "eller bruk AUTH_MODUS=oidc for token-basert autentisering."
     )
 
-AAPNE_STIER = {"/helse"}
+AAPNE_STIER = {"/helse", "/metrics"}
 
 
 @app.middleware("http")
 async def api_nokkel_middleware(forespørsel: Request, neste):
-    """Krev X-API-Key header på alle endepunkter unntatt /helse."""
-    if API_NOKKEL:
-        sti = forespørsel.url.path
-        if sti not in AAPNE_STIER:
-            nokkel = forespørsel.headers.get("X-API-Key", "")
-            if nokkel != API_NOKKEL:
-                return JSONResponse(
-                    {"feil": "Ugyldig eller manglende API-nøkkel"},
-                    status_code=401,
-                )
+    """
+    Autentisering på alle endepunkter unntatt /helse og /metrics.
+    AUTH_MODUS=api_nokkel: X-API-Key header (konstant-tid-sammenligning).
+    AUTH_MODUS=oidc:       Bearer-token validert mot OIDC-utsteder.
+    """
+    sti = forespørsel.url.path
+    if sti not in AAPNE_STIER:
+        feil = sjekk_forespoersel(forespørsel.headers, API_NOKKEL)
+        if feil:
+            return JSONResponse({"feil": feil}, status_code=401)
     return await neste(forespørsel)
+
+
+@app.middleware("http")
+async def metrikk_middleware(forespørsel: Request, neste):
+    """Teller forespørsler og måler latens per rute (lav kardinalitet)."""
+    start = time.monotonic()
+    svar = await neste(forespørsel)
+    rute = forespørsel.scope.get("route")
+    rutemal = getattr(rute, "path", "ukjent")
+    metrikker.tell_api(forespørsel.method, rutemal, svar.status_code)
+    metrikker.observer_api_latens(rutemal, time.monotonic() - start)
+    return svar
+
+
+@app.get("/metrics")
+async def metrics():
+    payload, content_type = metrikker.metrikk_tekst()
+    return Response(content=payload, media_type=content_type)
 
 from ruter.sok import ruter as sok_ruter
 from ruter.last_opp import ruter as last_opp_ruter

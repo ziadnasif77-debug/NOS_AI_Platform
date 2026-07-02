@@ -175,3 +175,9 @@ k8s-kopier-modeller:
 	kubectl wait --for=condition=Ready pod/modell-hjelper -n kubeflow --timeout=120s
 	kubectl cp ./modeller kubeflow/modell-hjelper:/
 	kubectl delete pod modell-hjelper -n kubeflow
+
+# ─── Overvåking (Prometheus + Grafana) ──────────────────────────────────────
+
+overvaaking:
+	docker compose --profile overvaaking up -d prometheus grafana
+	@echo "Prometheus: http://localhost:9090 — Grafana: http://localhost:3000 (admin/admin)"

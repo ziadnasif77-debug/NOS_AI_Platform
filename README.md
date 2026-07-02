@@ -571,10 +571,41 @@ komplett audit-spor. NLP-steget ble simulert med injisert resultat
 ## Sikkerhet og GDPR
 
 - **Offline:** Alle AI-modeller kjører lokalt — ingen data forlater serveren
-- **Autentisering:** X-API-Key for alle endepunkter unntatt `/helse`, `/statistikk`, `/jobb/<id>`, `/resultat/<id>`, `/audit/<id>`
+- **Autentisering (to moduser via `AUTH_MODUS`):**
+  - `api_nokkel` (standard): `X-API-Key` på alle endepunkter unntatt `/helse` og `/metrics` — sammenlignet i konstant tid (`hmac.compare_digest`, mot timing-angrep)
+  - `oidc`: Bearer-token (JWT) validert mot institusjonens identitetsleverandør (Azure AD, Maskinporten, Keycloak, …). Sett `OIDC_JWKS_URL`, `OIDC_ISSUER` og `OIDC_AUDIENCE`. Signatur, utløp, issuer og audience verifiseres per forespørsel; JWKS-nøkler caches.
 - **Audit-logg:** Slettes aldri (NAV-krav) — komplett sporbarhet for alle tilstandsskifter
 - **Idempotens:** Duplikate opplastinger gir ingen duplikate jobber
-- **GDPR:** Fødselsnummer, navn og adresse behandles kun internt — validering via Mod11 uten ekstern oppkobling
+- **GDPR:** Fødselsnummer, navn og adresse behandles kun internt — validering via Mod11 uten ekstern oppkobling. Fødselsnummer lagres ikke i søkeindeksen (Milvus).
+
+---
+
+## Overvåking (Prometheus + Grafana)
+
+Alle tjenester eksponerer Prometheus-metrikker:
+
+| Kilde | Endepunkt | Metrikker |
+|-------|-----------|-----------|
+| API | `:8000/metrics` (åpent for scraping) | `nav_api_forespoersler_total{metode,rute,status}`, `nav_api_latens_sekunder{rute}` |
+| Workers | `:9101/metrics` (via `METRIKK_PORT`) | `nav_jobber_behandlet_total{worker,utfall}` (`ok`/`retry`/`dlq`/`hoppet_over`), `nav_jobb_varighet_sekunder{worker}` |
+
+```bash
+make overvaaking     # Prometheus (localhost:9090) + Grafana (localhost:3000)
+```
+
+Scrape-konfig ligger i `overvaaking/prometheus.yml`; Grafana får
+Prometheus som datakilde automatisk. I Kubernetes er API-podden
+annotert med `prometheus.io/scrape` for automatisk oppdaging.
+Metrikkene degraderer pent: mangler `prometheus-client` kjører
+tjenestene videre uten metrikker (`delt/metrikker.py`).
+
+Nyttige spørringer:
+
+```promql
+rate(nav_jobber_behandlet_total{utfall="dlq"}[5m])        # feilrate til DLQ
+histogram_quantile(0.95, nav_jobb_varighet_sekunder_bucket)  # p95 per steg
+rate(nav_api_forespoersler_total{status="401"}[5m])       # avviste forespørsler
+```
 
 ---
 

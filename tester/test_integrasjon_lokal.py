@@ -206,6 +206,14 @@ def test_idempotent_opplasting_gir_samme_jobb(api_klient, rc):
     assert rc.llen(CONFIG["redis"]["kooer"]["preprocess"]) == 1
 
 
+def test_metrics_endepunkt_er_aapent_og_teller(api_klient):
+    """Prometheus skal kunne scrape /metrics uten nøkkel."""
+    api_klient.get("/helse")
+    svar = api_klient.get("/metrics")
+    assert svar.status_code == 200
+    assert b"nav_api_forespoersler_total" in svar.content
+
+
 def test_jobb_og_resultat_404(api_klient):
     ukjent = str(uuid.uuid4())
     hodene = {"X-API-Key": "test-nokkel"}

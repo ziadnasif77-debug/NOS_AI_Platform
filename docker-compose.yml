@@ -282,6 +282,7 @@ services:
       - ./tjenester/workers:/app/tjenester/workers
       - ${DATA_STI:-./data}:/data
     environment:
+      - METRIKK_PORT=9101
       - PYTHONPATH=/app
       - INNTAK_STI=/data/inntak
     depends_on:
@@ -302,6 +303,7 @@ services:
       - ${DATA_STI:-./data}:/data
       - ${MODELLER_STI:-./modeller}:/modeller
     environment:
+      - METRIKK_PORT=9101
       - PYTHONPATH=/app
     depends_on:
       postgres:
@@ -328,6 +330,7 @@ services:
       - ${DATA_STI:-./data}:/data
       - ${MODELLER_STI:-./modeller}:/modeller
     environment:
+      - METRIKK_PORT=9101
       - PYTHONPATH=/app
     depends_on:
       postgres:
@@ -353,6 +356,7 @@ services:
       - ./tjenester/workers:/app/tjenester/workers
       - ${DATA_STI:-./data}:/data
     environment:
+      - METRIKK_PORT=9101
       - PYTHONPATH=/app
     depends_on:
       postgres:
@@ -424,6 +428,31 @@ services:
     command: minio server /minio_data
     restart: unless-stopped
 
+  # ─── Overvåking (valgfri): make overvaaking ────────────────────────────────
+
+  prometheus:
+    profiles: [overvaaking]
+    image: prom/prometheus:latest
+    volumes:
+      - ./overvaaking/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    profiles: [overvaaking]
+    image: grafana/grafana:latest
+    volumes:
+      - ./overvaaking/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+
 volumes:
   milvus_data:
   etcd_data:
@@ -431,3 +460,5 @@ volumes:
   label_studio_data:
   redis_data:
   postgres_data:
+  prometheus_data:
+  grafana_data:

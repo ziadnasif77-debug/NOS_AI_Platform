@@ -22,6 +22,7 @@ import psycopg2.extras
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
 from delt.konstanter import LOVLIGE_OVERGANGER, TERMINAL_TILSTANDER
+from delt import metrikker
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class BaseWorker(ABC):
 
     def run(self):
         logger.info("%s starter, lytter på %s", self.worker_id, self.queue_name)
+        metrikker.start_metrikk_server()
         while True:
             try:
                 raw = self._redis.blpop(self.queue_name, timeout=5)
@@ -70,6 +72,7 @@ class BaseWorker(ABC):
 
     def _behandle(self, job: dict):
         job_id = job["job_id"]
+        start_tid = time.monotonic()
         with psycopg2.connect(self._pg_url) as pg:
             pg.autocommit = False
             try:
@@ -92,10 +95,15 @@ class BaseWorker(ABC):
                 self._legg_i_neste_ko(job, resultat)
                 self._audit(job_id, "FERDIG", from_state=self.running_state,
                             to_state=self.done_state)
+                metrikker.tell_jobb(self.queue_name, "ok")
+                metrikker.observer_jobb_varighet(
+                    self.queue_name, time.monotonic() - start_tid
+                )
 
             except UgyldigTilstandsovergang as exc:
                 pg.rollback()
                 logger.warning("Ugyldig tilstandsovergang for %s: %s", job_id, exc)
+                metrikker.tell_jobb(self.queue_name, "hoppet_over")
             except Exception as exc:
                 pg.rollback()
                 try:
@@ -214,6 +222,7 @@ class BaseWorker(ABC):
             job["retry_count"] = retry_count + 1
             self._audit(job_id, "RETRY", details={"retry": retry_count + 1,
                                                    "feil": str(error)})
+            metrikker.tell_jobb(self.queue_name, "retry")
             time.sleep(backoff)
             self._redis.rpush(self.queue_name, json.dumps(job))
         else:
@@ -247,6 +256,7 @@ class BaseWorker(ABC):
         self._oppdater_state_direkte(job_id, "FAILED", fra_tilstand=self.running_state)
         self._audit(job_id, "DLQ", from_state=self.running_state,
                     to_state="FAILED", details={"feil": str(error), "retry_count": retry_count})
+        metrikker.tell_jobb(self.queue_name, "dlq")
 
     def _oppdater_state_direkte(self, job_id: str, ny_tilstand: str, fra_tilstand: str = None):
         with psycopg2.connect(self._pg_url) as pg:

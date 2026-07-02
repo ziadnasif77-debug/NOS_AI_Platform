@@ -11,12 +11,20 @@ spec:
     metadata:
       labels:
         app: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
     spec:
       containers:
         - name: api
           image: nav/api:lokal
           imagePullPolicy: IfNotPresent
           env:
+            # AUTH_MODUS=oidc + OIDC_JWKS_URL/ISSUER/AUDIENCE for
+            # token-basert autentisering (Azure AD, Maskinporten, …)
+            - name: AUTH_MODUS
+              value: api_nokkel
             - name: KJOREMODUS
               value: kubeflow
             - name: KFP_ENDPOINT
