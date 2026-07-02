@@ -368,6 +368,22 @@ make helse
 make logger
 ```
 
+### Kubernetes + Kubeflow (kubeflow-modus)
+
+Dokumentflyten kan alternativt kjøre som Kubeflow Pipelines — én
+pipeline-run per dokument med synlige steg i KFP-UI-et:
+
+```bash
+make kfp-installer        # Kubeflow Pipelines standalone
+make k8s-bygg             # bygg alle images lokalt
+make k8s-start            # deploy tjenestene (k8s/)
+make k8s-init-db          # opprett databaseskjema
+make k8s-kopier-modeller  # kopier modeller inn i PVC
+```
+
+Se [docs/KUBEFLOW.md](docs/KUBEFLOW.md) for full guide og kjente
+begrensninger (retry, ghost-gjenoppretting, oppstartstid per steg).
+
 ---
 
 ## API-dokumentasjon

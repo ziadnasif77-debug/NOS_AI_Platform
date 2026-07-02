@@ -4,3 +4,6 @@ requests
 pydantic
 python-multipart
 redis
+psycopg2-binary
+pyyaml
+kfp

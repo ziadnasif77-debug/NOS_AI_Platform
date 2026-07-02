@@ -1,0 +1,22 @@
+# Delte volumer: nav-data deles av API-et og pipeline-podene (opplastede
+# PDF-er i /data/inntak, finjusteringsdata i /data/finjustering).
+# nav-modeller holder AI-modellene (fylles med: make k8s-kopier-modeller).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nav-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nav-modeller
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 30Gi

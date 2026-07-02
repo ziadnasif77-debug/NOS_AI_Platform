@@ -187,7 +187,9 @@ services:
     restart: unless-stopped
 
   sok:
-    build: ./tjenester/sok
+    build:
+      context: .
+      dockerfile: tjenester/sok/Dockerfile
     volumes:
       - ${BEHANDLET_STI:-./data/behandlet}:/data/behandlet
       - ${MODELLER_STI:-./modeller}:/modeller
@@ -209,7 +211,9 @@ services:
     restart: unless-stopped
 
   api:
-    build: ./tjenester/api
+    build:
+      context: .
+      dockerfile: tjenester/api/Dockerfile
     volumes:
       - ${DATA_STI:-./data}:/data
       - ./delt:/delt

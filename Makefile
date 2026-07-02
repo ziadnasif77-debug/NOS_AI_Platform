@@ -1,4 +1,4 @@
-.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation test-state-machine test-idempotency
+.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
 
 start:
 	docker compose up -d
@@ -127,3 +127,51 @@ test-idempotency:
 	python -m pytest tester/test_idempotency.py -v
 
 
+
+# ─── Kubernetes / Kubeflow (kubeflow-modus) ─────────────────────────────────
+
+KFP_VERSJON ?= 2.2.0
+
+k8s-bygg:
+	docker build -t nav/api:lokal            -f tjenester/api/Dockerfile .
+	docker build -t nav/sok:lokal            -f tjenester/sok/Dockerfile .
+	docker build -t nav/lag0:lokal           -f tjenester/workers/lag0_preprocessing/Dockerfile .
+	docker build -t nav/lag1:lokal           -f tjenester/workers/lag1_ocr/Dockerfile .
+	docker build -t nav/lag2:lokal           -f tjenester/workers/lag2_nlp/Dockerfile .
+	docker build -t nav/lag3:lokal           -f tjenester/workers/lag3_routing/Dockerfile .
+	docker build -t nav/reconciliation:lokal -f tjenester/workers/reconciliation/Dockerfile .
+	docker build -t nav/trening:lokal        -f tjenester/trening/Dockerfile .
+
+kfp-installer:
+	kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/cluster-scoped-resources?ref=$(KFP_VERSJON)"
+	kubectl wait --for condition=established --timeout=60s crd/applications.app.k8s.io
+	kubectl apply -k "github.com/kubeflow/pipelines/manifests/kustomize/env/platform-agnostic?ref=$(KFP_VERSJON)"
+
+kfp-kompiler:
+	python kubeflow/dokument_pipeline.py
+	python kubeflow/trenings_pipeline.py
+
+kfp-ui:
+	kubectl port-forward -n kubeflow svc/ml-pipeline-ui 8888:80
+
+k8s-start:
+	kubectl apply -k k8s/
+
+k8s-stopp:
+	kubectl delete -k k8s/
+
+k8s-status:
+	kubectl get pods -n kubeflow
+
+k8s-init-db:
+	kubectl delete job nav-init-db -n kubeflow --ignore-not-found
+	kubectl apply -n kubeflow -f k8s/12-init-db-jobb.yaml
+
+# Kopierer lokale modeller (./modeller) inn i nav-modeller-PVC-en
+k8s-kopier-modeller:
+	kubectl delete pod modell-hjelper -n kubeflow --ignore-not-found
+	kubectl run modell-hjelper -n kubeflow --image=busybox --restart=Never \
+		--overrides='{"spec":{"containers":[{"name":"modell-hjelper","image":"busybox","command":["sleep","3600"],"volumeMounts":[{"name":"m","mountPath":"/modeller"}]}],"volumes":[{"name":"m","persistentVolumeClaim":{"claimName":"nav-modeller"}}]}}'
+	kubectl wait --for=condition=Ready pod/modell-hjelper -n kubeflow --timeout=120s
+	kubectl cp ./modeller kubeflow/modell-hjelper:/
+	kubectl delete pod modell-hjelper -n kubeflow

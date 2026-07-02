@@ -1,0 +1,11 @@
+# OBS: Lokale utviklingsverdier. I produksjon skal disse settes via
+# ekstern secret-håndtering (Sealed Secrets, Vault, e.l.) — aldri i git.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nav-hemmeligheter
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: nav
+  POSTGRES_URL: postgresql://nav:nav@postgres:5432/nav_archive
+  API_NOKKEL: lokal-test-nokkel

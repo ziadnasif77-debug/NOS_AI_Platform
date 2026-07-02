@@ -26,6 +26,14 @@ def last_config() -> dict:
     if redis_url:
         konfig["redis"]["url"] = redis_url
 
+    sok_url = os.environ.get("SOK_URL")
+    if sok_url:
+        konfig.setdefault("tjenester", {})["sok_url"] = sok_url
+
+    label_studio_url = os.environ.get("LABEL_STUDIO_URL")
+    if label_studio_url:
+        konfig["label_studio"]["url"] = label_studio_url
+
     return konfig
 
 

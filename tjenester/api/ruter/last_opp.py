@@ -22,6 +22,25 @@ ruter = APIRouter(tags=["opplasting"])
 
 INNTAK_STI = os.environ.get("INNTAK_STI", "/data/inntak")
 
+# KJOREMODUS styrer hvordan jobber sendes videre etter opplasting:
+#   redis    (standard) — rpush til queue:preprocess, workers plukker via blpop
+#   kubeflow           — start én Kubeflow-pipeline-run per dokument
+KJOREMODUS = os.environ.get("KJOREMODUS", "redis")
+KFP_PIPELINE_STI = os.environ.get("KFP_PIPELINE_STI", "/app/kubeflow/dokument_pipeline.yaml")
+
+
+def _start_kfp_kjoring(job_id: str):
+    import kfp
+
+    endepunkt = os.environ.get("KFP_ENDPOINT", "http://ml-pipeline:8888")
+    klient = kfp.Client(host=endepunkt)
+    klient.create_run_from_pipeline_package(
+        KFP_PIPELINE_STI,
+        arguments={"job_id": job_id},
+        run_name=f"dokument-{job_id[:8]}",
+        enable_caching=False,
+    )
+
 
 def _pg():
     from config.config_loader import CONFIG
@@ -116,11 +135,14 @@ async def last_opp(fil: UploadFile = File(...)):
         # will re-queue the job within reconciliation.ghost_timeout_minutter.
         pg.commit()
 
-        from config.config_loader import CONFIG
-        rc = _redis_client()
-        payload = json.dumps({"job_id": job_id, "fil_sti": str(fil_sti)})
-        ko = CONFIG["redis"]["kooer"]["preprocess"]
-        rc.rpush(ko, payload)
+        if KJOREMODUS == "kubeflow":
+            _start_kfp_kjoring(job_id)
+        else:
+            from config.config_loader import CONFIG
+            rc = _redis_client()
+            payload = json.dumps({"job_id": job_id, "fil_sti": str(fil_sti)})
+            ko = CONFIG["redis"]["kooer"]["preprocess"]
+            rc.rpush(ko, payload)
 
         return JSONResponse(
             status_code=202,

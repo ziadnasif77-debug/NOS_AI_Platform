@@ -221,9 +221,9 @@
   <text x="690" y="778" text-anchor="middle" fill="#555" font-size="9">3 epoker · lr=2e-5</text>
   <text x="690" y="791" text-anchor="middle" fill="#777" font-size="8">backup før overskriving</text>
 
-  <rect x="776" y="733" width="143" height="70" rx="6" fill="#ffe0b2" stroke="#e0a060" stroke-width="1.5"/>
-  <text x="847" y="751" text-anchor="middle" fill="#BA7517" font-size="10" font-weight="bold">LayoutLMv3</text>
-  <text x="847" y="765" text-anchor="middle" fill="#A72B1F" font-size="9">⚠ IKKE implementert</text>
+  <rect x="776" y="733" width="143" height="70" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1.5"/>
+  <text x="847" y="751" text-anchor="middle" fill="#1B5E20" font-size="10" font-weight="bold">LayoutLMv3</text>
+  <text x="847" y="765" text-anchor="middle" fill="#1B5E20" font-size="9">✓ implementert (finjuster.py)</text>
   <text x="847" y="778" text-anchor="middle" fill="#555" font-size="9">konverter_til_layoutlmv3.py</text>
   <text x="847" y="791" text-anchor="middle" fill="#777" font-size="8">mangler treningskode</text>
 

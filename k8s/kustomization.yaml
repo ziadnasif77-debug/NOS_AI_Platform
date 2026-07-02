@@ -1,0 +1,26 @@
+# NAV Archive V2.1 på Kubernetes (kubeflow-modus)
+#
+# Alle ressurser legges i kubeflow-namespacet slik at pipeline-podene
+# (som KFP starter der) når tjenestene via standard-DNS (redis, postgres,
+# sok, label-studio) og kan montere de samme PVC-ene. I produksjon bør
+# eget namespace + KFP-profiler brukes i stedet.
+#
+# Bruk: kubectl apply -k k8s/   (eller: make k8s-start)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kubeflow
+
+resources:
+  - 01-hemmeligheter.yaml
+  - 02-pvc.yaml
+  - 03-postgres.yaml
+  - 04-redis.yaml
+  - 05-etcd.yaml
+  - 06-minio.yaml
+  - 07-milvus.yaml
+  - 08-label-studio.yaml
+  - 09-sok.yaml
+  - 10-api.yaml
+  - 11-reconciliation.yaml
+  - 12-init-db-jobb.yaml
