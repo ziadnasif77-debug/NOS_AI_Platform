@@ -452,6 +452,27 @@ services:
       - prometheus
     restart: unless-stopped
 
+  loki:
+    profiles: [overvaaking]
+    image: grafana/loki:latest
+    volumes:
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  promtail:
+    profiles: [overvaaking]
+    image: grafana/promtail:latest
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./overvaaking/promtail.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
 
 volumes:
   milvus_data:
@@ -462,3 +483,4 @@ volumes:
   postgres_data:
   prometheus_data:
   grafana_data:
+  loki_data:

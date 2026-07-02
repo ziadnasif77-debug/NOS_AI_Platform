@@ -25,8 +25,11 @@ spec:
             # token-basert autentisering (Azure AD, Maskinporten, …)
             - name: AUTH_MODUS
               value: api_nokkel
+            # Hybrid-arkitektur: redis for dokumentflyt (workers i
+            # 13-workers.yaml), Kubeflow kun for trening. Sett
+            # KJOREMODUS=kubeflow for å kjøre dokumenter som KFP-runs.
             - name: KJOREMODUS
-              value: kubeflow
+              value: redis
             - name: KFP_ENDPOINT
               value: http://ml-pipeline:8888
             - name: INNTAK_STI

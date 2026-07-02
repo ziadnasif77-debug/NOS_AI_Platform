@@ -120,11 +120,30 @@ def test_k8s_manifester_er_gyldig_yaml():
             assert dok is not None, f"tomt dokument i {fil}"
 
 
-def test_api_deployment_kjorer_kubeflow_modus():
+def test_api_deployment_kjorer_hybrid_redis_modus():
+    """Hybrid-arkitektur: redis for dokumentflyt, kubeflow kun for trening."""
     api = Path("k8s/10-api.yaml").read_text(encoding="utf-8")
     assert "KJOREMODUS" in api
-    assert "kubeflow" in api
-    assert "KFP_ENDPOINT" in api
+    assert "value: redis" in api
+    assert "KFP_ENDPOINT" in api  # kubeflow-modus fortsatt tilgjengelig
+
+
+def test_worker_deployments_finnes_for_hybrid():
+    import yaml as _yaml
+    workers = Path("k8s/13-workers.yaml").read_text(encoding="utf-8")
+    navn = [d["metadata"]["name"] for d in _yaml.safe_load_all(workers)]
+    assert navn == ["preprocessing-worker", "ocr-worker", "nlp-worker", "routing-worker"]
+    assert "kustomization" not in navn
+    kust = Path("k8s/kustomization.yaml").read_text(encoding="utf-8")
+    assert "13-workers.yaml" in kust
+
+
+def test_autoskalering_er_valgfri_og_utenfor_kustomization():
+    kust = Path("k8s/kustomization.yaml").read_text(encoding="utf-8")
+    assert "- 14-autoskalering.yaml" not in kust  # krever KEDA — separat apply
+    skalering = Path("k8s/14-autoskalering.yaml").read_text(encoding="utf-8")
+    assert "keda.sh" in skalering
+    assert "queue:ocr" in skalering
 
 
 def test_hemmeligheter_brukes_ikke_hardkodet_i_api_deployment():

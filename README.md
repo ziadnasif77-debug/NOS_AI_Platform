@@ -368,10 +368,17 @@ make helse
 make logger
 ```
 
-### Kubernetes + Kubeflow (kubeflow-modus)
+### Kubernetes: hybrid-arkitektur (anbefalt)
 
-Dokumentflyten kan alternativt kjøre som Kubeflow Pipelines — én
-pipeline-run per dokument med synlige steg i KFP-UI-et:
+Produksjon kjører Redis + permanente workers (varme modeller, lav
+latens); Kubeflow brukes kun til trening og modell-livssyklus.
+Se [docs/HYBRID_ARKITEKTUR.md](docs/HYBRID_ARKITEKTUR.md) for
+diagram, kapasitetsestimat (30–60 mill. sider/år), modelloppdatering
+uten nedetid og KEDA-autoskalering på kølengde.
+
+Dokumentflyten kan alternativt kjøre som Kubeflow Pipelines
+(`KJOREMODUS=kubeflow`) — én pipeline-run per dokument med synlige
+steg i KFP-UI-et, nyttig for feilsøking:
 
 ```bash
 make kfp-installer        # Kubeflow Pipelines standalone

@@ -179,5 +179,5 @@ k8s-kopier-modeller:
 # ─── Overvåking (Prometheus + Grafana) ──────────────────────────────────────
 
 overvaaking:
-	docker compose --profile overvaaking up -d prometheus grafana
+	docker compose --profile overvaaking up -d prometheus grafana loki promtail
 	@echo "Prometheus: http://localhost:9090 — Grafana: http://localhost:3000 (admin/admin)"

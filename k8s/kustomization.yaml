@@ -24,3 +24,5 @@ resources:
   - 10-api.yaml
   - 11-reconciliation.yaml
   - 12-init-db-jobb.yaml
+  - 13-workers.yaml
+  # 14-autoskalering.yaml krever KEDA — appliseres separat (se filen)

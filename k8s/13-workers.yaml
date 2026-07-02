@@ -1,0 +1,180 @@
+# Produksjonssporet (hybrid-arkitektur): permanente workers som
+# konsumerer Redis-køene. Modellene lastes ÉN gang ved oppstart og
+# holdes varme — dette er hovedgevinsten over kubeflow-modus per dokument.
+#
+# Skalering: øk replicas manuelt, eller bruk KEDA på kølengde
+# (se 14-autoskalering.yaml). For GPU i produksjon: legg til
+#   resources.limits: {nvidia.com/gpu: 1}  på ocr-/nlp-worker.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: preprocessing-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: preprocessing-worker
+  template:
+    metadata:
+      labels:
+        app: preprocessing-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+    spec:
+      containers:
+        - name: worker
+          image: nav/lag0:lokal
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+            - name: METRIKK_PORT
+              value: "9101"
+            - name: INNTAK_STI
+              value: /data/inntak
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nav-hemmeligheter
+                  key: POSTGRES_URL
+          volumeMounts:
+            - name: nav-data
+              mountPath: /data
+      volumes:
+        - name: nav-data
+          persistentVolumeClaim:
+            claimName: nav-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ocr-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ocr-worker
+  template:
+    metadata:
+      labels:
+        app: ocr-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+    spec:
+      containers:
+        - name: worker
+          image: nav/lag1:lokal
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+            - name: METRIKK_PORT
+              value: "9101"
+            - name: INNTAK_STI
+              value: /data/inntak
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nav-hemmeligheter
+                  key: POSTGRES_URL
+          volumeMounts:
+            - name: nav-data
+              mountPath: /data
+            - name: nav-modeller
+              mountPath: /modeller
+      volumes:
+        - name: nav-data
+          persistentVolumeClaim:
+            claimName: nav-data
+        - name: nav-modeller
+          persistentVolumeClaim:
+            claimName: nav-modeller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nlp-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nlp-worker
+  template:
+    metadata:
+      labels:
+        app: nlp-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+    spec:
+      containers:
+        - name: worker
+          image: nav/lag2:lokal
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+            - name: METRIKK_PORT
+              value: "9101"
+            - name: INNTAK_STI
+              value: /data/inntak
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nav-hemmeligheter
+                  key: POSTGRES_URL
+          volumeMounts:
+            - name: nav-data
+              mountPath: /data
+            - name: nav-modeller
+              mountPath: /modeller
+      volumes:
+        - name: nav-data
+          persistentVolumeClaim:
+            claimName: nav-data
+        - name: nav-modeller
+          persistentVolumeClaim:
+            claimName: nav-modeller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: routing-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: routing-worker
+  template:
+    metadata:
+      labels:
+        app: routing-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+    spec:
+      containers:
+        - name: worker
+          image: nav/lag3:lokal
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+            - name: METRIKK_PORT
+              value: "9101"
+            - name: INNTAK_STI
+              value: /data/inntak
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nav-hemmeligheter
+                  key: POSTGRES_URL
+          volumeMounts:
+            - name: nav-data
+              mountPath: /data
+      volumes:
+        - name: nav-data
+          persistentVolumeClaim:
+            claimName: nav-data
