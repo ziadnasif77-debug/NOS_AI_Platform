@@ -118,8 +118,9 @@ def test_base_worker_teller_alle_utfall():
 def test_api_har_metrics_endepunkt():
     assert '"/metrics"' in HOVED
     assert "metrikk_middleware" in HOVED
-    # /metrics er åpen (Prometheus scraper uten nøkkel), /helse fortsatt åpen
-    assert '{"/helse", "/metrics"}' in HOVED
+    # Åpne stier: /helse, /metrics (Prometheus) og API-skjemaet
+    # (/docs, /redoc, /openapi.json) — skjema er ikke data.
+    assert '{"/helse", "/metrics", "/docs", "/redoc", "/openapi.json"}' in HOVED
 
 
 def test_api_bruker_delt_autentisering():

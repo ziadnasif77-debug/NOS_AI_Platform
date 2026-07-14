@@ -340,7 +340,7 @@ async def dokument_status(dokument_id: str):
 
 
 # ------------------------------------------------------------------ #
-#  GET /dokument/{dokument_id}/felter — aggregerte felter (UiPath)     #
+#  GET /dokument/{dokument_id}/felter — aggregerte felter (klienter)   #
 # ------------------------------------------------------------------ #
 
 @ruter.get("/dokument/{dokument_id}/felter")
@@ -441,14 +441,14 @@ async def dokument_felter(dokument_id: str):
 
 
 # ------------------------------------------------------------------ #
-#  GET /resultat/{job_id}/felter — robotvennlig kontrakt (UiPath)      #
+#  GET /resultat/{job_id}/felter — flat kontrakt per side (klienter)   #
 # ------------------------------------------------------------------ #
 
 @ruter.get("/resultat/{job_id}/felter")
 async def hent_felter(job_id: str):
     job_id = _valider_job_id(job_id)
     """
-    Flat, stabil forretningskontrakt for RPA-klienter (UiPath o.l.).
+    Flat, stabil forretningskontrakt for eksterne klienter (RPA o.l.).
     409 til jobben er DONE — roboten poller /jobb/{id} først.
     Fødselsnummer serveres kun her (autentisert), aldri i søkeindeksen.
     """

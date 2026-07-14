@@ -455,22 +455,22 @@ curl -X POST http://localhost:8000/sok \
   -d '{"sporsmal": "dagpenger 1985", "antall": 10}'
 ```
 
-### UiPath / RPA-integrasjon
+### API-integrasjon (RPA og eksterne systemer)
 
-Roboter bruker det asynkrone mønsteret «last opp → poll → hent» mot
-API-et, med et eget robotvennlig endepunkt som returnerer flate
-forretningsfelter:
+API-et er selvdokumenterende og verktøy-nøytralt: Swagger-UI på
+`/docs`, maskinlesbar OpenAPI-spesifikasjon på `/openapi.json` (åpne
+uten nøkkel — kun skjema, aldri data). Verktøy som UiPath og Power
+Automate importerer spesifikasjonen direkte.
+
+Asynkront mønster for alle klienter:
 
 ```
-POST /last-opp/                → 202 + job_id
-GET  /jobb/{job_id}            → poll til DONE/FAILED
-GET  /resultat/{job_id}/felter → { beslutning, felter: {navn, dato, ytelse, …}, konfidens, gjennomgang }
+POST /last-opp/                → 202 + dokument_id (én jobb per side)
+GET  /dokument/{id}/status     → poll til DONE/FAILED
+GET  /dokument/{id}/felter     → aggregerte forretningsfelter
 ```
 
-Klart til bruk i [`uipath/`](uipath/): Invoke Code-klar VB.NET
-(`LesDokument.vb`) og PowerShell-skript som verifiserer hele
-robotflyten før du åpner Studio (`test_robotflyt.ps1`).
-Full guide: [docs/UIPATH.md](docs/UIPATH.md).
+Full guide med kontraktsgarantier: [docs/API_INTEGRASJON.md](docs/API_INTEGRASJON.md).
 
 ---
 

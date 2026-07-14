@@ -14,7 +14,19 @@ from delt.autentisering import sjekk_forespoersel, auth_modus
 from delt import metrikker
 
 logger = konfigurer_logging("api-tjeneste")
-app = FastAPI(title="NAV Archive API")
+app = FastAPI(
+    title="NAV Archive API",
+    version="2.1",
+    description=(
+        "Dokumentbehandlings-API: last opp PDF, følg status, hent "
+        "strukturerte felter og søk i arkivet.\n\n"
+        "**Integrasjonsmønster (asynkront):** "
+        "`POST /last-opp/` → `GET /dokument/{id}/status` (poll) → "
+        "`GET /dokument/{id}/felter`.\n\n"
+        "RPA-verktøy (UiPath, Power Automate, …) kan importere denne "
+        "OpenAPI-spesifikasjonen direkte fra `/openapi.json`."
+    ),
+)
 
 # CORS: sett CORS_ORIGINS (kommaseparert) i produksjon — «*» er kun
 # akseptabelt for lokal utvikling.
@@ -34,7 +46,9 @@ if auth_modus() == "api_nokkel" and not API_NOKKEL:
         "eller bruk AUTH_MODUS=oidc for token-basert autentisering."
     )
 
-AAPNE_STIER = {"/helse", "/metrics"}
+# /docs, /redoc og /openapi.json er åpne: de eksponerer kun API-skjemaet
+# (ingen data) og gjør at ethvert verktøy kan utforske/importere API-et.
+AAPNE_STIER = {"/helse", "/metrics", "/docs", "/redoc", "/openapi.json"}
 
 
 @app.middleware("http")

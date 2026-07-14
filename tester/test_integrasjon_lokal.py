@@ -214,6 +214,18 @@ def test_idempotent_opplasting_gir_samme_jobb(api_klient, rc):
     assert rc.llen(CONFIG["redis"]["kooer"]["preprocess"]) == 1
 
 
+def test_openapi_spesifikasjonen_er_aapen(api_klient):
+    """Ethvert verktøy (UiPath, Power Automate, curl) skal kunne utforske
+    API-et uten nøkkel — skjemaet eksponerer ingen data."""
+    spek = api_klient.get("/openapi.json")
+    assert spek.status_code == 200
+    stier = spek.json()["paths"]
+    for sti in ["/last-opp/", "/dokument/{dokument_id}/status",
+                "/dokument/{dokument_id}/felter", "/jobb/{job_id}"]:
+        assert sti in stier, f"{sti} mangler i OpenAPI-spesifikasjonen"
+    assert api_klient.get("/docs").status_code == 200
+
+
 def test_metrics_endepunkt_er_aapent_og_teller(api_klient):
     """Prometheus skal kunne scrape /metrics uten nøkkel."""
     api_klient.get("/helse")
@@ -642,11 +654,11 @@ def test_kfp_steg_mangler_forrige_resultat_gir_feil(pg):
 
 
 # ------------------------------------------------------------------ #
-#  8. UiPath-kontrakten: /resultat/{id}/felter                         #
+#  8. Klientkontrakten: /resultat/{id}/felter                          #
 # ------------------------------------------------------------------ #
 
 def test_felter_endepunkt_full_robotflyt(api_klient, pg):
-    """Samme flyt som UiPath-roboten: jobb → DONE → flate felter."""
+    """Standard klientflyt (RPA/eksterne systemer): jobb → DONE → flate felter."""
     from tjenester.workers.kfp_steg import kjor_steg
     job_id = _ny_jobb(pg, state="NLP_PROCESSING")
     _sett_resultat(pg, job_id, "nlp_result", dict(GYLDIG_NLP_RESULTAT, job_id=job_id))
