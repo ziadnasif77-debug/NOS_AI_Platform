@@ -8,10 +8,13 @@ POSTGRES_URL = os.environ.get("POSTGRES_URL", CONFIG["postgres"]["url"])
 SQL = """
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
-CREATE TYPE job_state AS ENUM (
-    'UPLOADED', 'QUEUED', 'PREPROCESSING', 'OCR_PROCESSING',
-    'NLP_PROCESSING', 'VALIDATION', 'ROUTING', 'DONE', 'FAILED'
-);
+DO $$ BEGIN
+    CREATE TYPE job_state AS ENUM (
+        'UPLOADED', 'QUEUED', 'PREPROCESSING', 'OCR_PROCESSING',
+        'NLP_PROCESSING', 'VALIDATION', 'ROUTING', 'DONE', 'FAILED'
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS jobs (
     job_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -26,10 +29,20 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_error      TEXT,
     locked_by       TEXT,
     lock_expiry     TIMESTAMP,
+    -- Flersidige dokumenter: én jobb per side, gruppert på dokument_id
+    dokument_id     UUID,
+    side_nummer     INT DEFAULT 0,
+    antall_sider    INT DEFAULT 1,
     created_at      TIMESTAMP DEFAULT NOW(),
     updated_at      TIMESTAMP DEFAULT NOW(),
     completed_at    TIMESTAMP
 );
+
+-- Idempotente migreringer for eksisterende databaser
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS dokument_id  UUID;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS side_nummer  INT DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS antall_sider INT DEFAULT 1;
+CREATE INDEX IF NOT EXISTS jobs_dokument_id_idx ON jobs (dokument_id);
 
 CREATE TABLE IF NOT EXISTS results (
     job_id              UUID PRIMARY KEY REFERENCES jobs(job_id),

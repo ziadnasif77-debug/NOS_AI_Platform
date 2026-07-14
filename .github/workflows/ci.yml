@@ -44,7 +44,7 @@ jobs:
         run: |
           pip install --quiet pytest pyyaml pydantic psycopg2-binary redis \
             fastapi httpx python-multipart uvicorn requests \
-            opencv-python-headless numpy prometheus-client "PyJWT[crypto]"
+            opencv-python-headless numpy prometheus-client pymupdf "PyJWT[crypto]"
 
       - name: Enhetstester
         run: python -m pytest tester/ -q --ignore=tester/test_integrasjon_lokal.py

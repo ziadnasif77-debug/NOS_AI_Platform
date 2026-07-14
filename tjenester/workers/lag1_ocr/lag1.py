@@ -57,11 +57,14 @@ class OCRWorker(BaseWorker):
         job_id = job["job_id"]
         preprocess = PreprocessResultat.model_validate(job["forrige_resultat"])
         fil_sti = preprocess.preprocessed_path
+        # Marker krever PDF-inndata — bruk enkeltside-PDF-en fra lag0
+        # når den finnes, ellers fall tilbake til bildet.
+        pdf_sti = preprocess.side_pdf_sti or fil_sti
         dokumenttype = preprocess.document_type
         terskel = CONFIG["terskler"]["ocr_konfidens"] / 100.0
 
         tekst, konfidens, tokens, bokser, modell = self._kjor_ocr(
-            fil_sti, dokumenttype
+            fil_sti, dokumenttype, pdf_sti
         )
 
         godkjent = konfidens >= terskel
@@ -88,16 +91,17 @@ class OCRWorker(BaseWorker):
             confidence_approved=godkjent,
         ).model_dump()
 
-    def _kjor_ocr(self, fil_sti: str, dokumenttype: str):
+    def _kjor_ocr(self, fil_sti: str, dokumenttype: str, pdf_sti: str = None):
+        pdf_sti = pdf_sti or fil_sti
         if dokumenttype == HANDSKRIFT:
             if not self._trocr_available:
                 logger.warning("TrOCR ikke tilgjengelig — bruker PaddleOCR for HANDSKRIFT")
                 return self._paddleocr(fil_sti)
             return self._trocr(fil_sti)
         elif dokumenttype == TABELL:
-            return self._marker(fil_sti)
+            return self._marker(pdf_sti)
         elif dokumenttype == BLANDET:
-            return self._paddle_og_marker(fil_sti)
+            return self._paddle_og_marker(fil_sti, pdf_sti)
         else:
             return self._paddleocr(fil_sti)
 
@@ -144,9 +148,9 @@ class OCRWorker(BaseWorker):
             logger.warning("Marker OCR feilet: %s", exc)
             return "", 0.0, [], [], "marker-feil"
 
-    def _paddle_og_marker(self, fil_sti: str):
+    def _paddle_og_marker(self, fil_sti: str, pdf_sti: str = None):
         tekst_p, k_p, tokens_p, bokser_p, _ = self._paddleocr(fil_sti)
-        tekst_m, k_m, _, _, _ = self._marker(fil_sti)
+        tekst_m, k_m, _, _, _ = self._marker(pdf_sti or fil_sti)
         kombinert = f"{tekst_p}\n{tekst_m}".strip()
         snitt = (k_p + k_m) / 2
         return kombinert, snitt, tokens_p, bokser_p, "paddleocr+marker"

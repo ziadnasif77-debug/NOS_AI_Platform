@@ -128,7 +128,7 @@ def _gjenoppbygg_bm25(samling) -> None:
         while True:
             batch = samling.query(
                 expr='fil_id != ""',
-                output_fields=["fil_id", "tekst"],
+                output_fields=["fil_id", "side_nummer", "tekst"],
                 limit=grense,
                 offset=offset,
             )
@@ -140,7 +140,8 @@ def _gjenoppbygg_bm25(samling) -> None:
                 break
         with _bm25_lås:
             _bm25_dokumenter = [
-                {"fil_id": d["fil_id"], "tekst": d["tekst"]} for d in hentet
+                {"fil_id": d["fil_id"], "side_nummer": d.get("side_nummer", 0),
+                 "tekst": d["tekst"]} for d in hentet
             ]
             if _bm25_dokumenter:
                 bm25_indeks = BM25Okapi([d["tekst"].split() for d in _bm25_dokumenter])
@@ -228,17 +229,18 @@ async def indekser(data: dict):
     tekst = data.get("tekst", "")
     metadata = data.get("metadata", {})
     fil_id = metadata.get("fil_id", "")
+    side_nummer = int(metadata.get("side_nummer", 0) or 0)
     if not fil_id or not fil_id.replace("-", "").isalnum() or len(fil_id) > 200:
         raise HTTPException(status_code=400, detail="Ugyldig fil_id")
     try:
         vektor = _embedding_modell.encode(tekst[:2048], normalize_embeddings=True).tolist()
-        # Idempotent indeksering: fjern eventuell gammel versjon først —
-        # retries fra routing-workeren skal ikke gi duplikater i søket.
-        _samling.delete(f'fil_id == "{fil_id}"')
+        # Idempotent indeksering PER SIDE: (fil_id, side_nummer) er nøkkelen —
+        # retries skal ikke gi duplikater, og side 2 skal ikke slette side 1.
+        _samling.delete(f'fil_id == "{fil_id}" && side_nummer == {side_nummer}')
         _samling.insert([{
             "fil_id":       metadata.get("fil_id", ""),
             "filnavn":      data.get("filnavn", ""),
-            "side_nummer":  metadata.get("side_nummer", 0),
+            "side_nummer":  side_nummer,
             "tekst":        tekst[:65000],
             "navn":         metadata.get("navn") or "",
             "dato":         metadata.get("dato") or "",
@@ -248,8 +250,13 @@ async def indekser(data: dict):
             "vektor":       vektor,
         }])
         with _bm25_lås:
-            _bm25_dokumenter = [d for d in _bm25_dokumenter if d["fil_id"] != fil_id]
-            _bm25_dokumenter.append({"fil_id": fil_id, "tekst": tekst})
+            _bm25_dokumenter = [
+                d for d in _bm25_dokumenter
+                if not (d["fil_id"] == fil_id and d.get("side_nummer", 0) == side_nummer)
+            ]
+            _bm25_dokumenter.append(
+                {"fil_id": fil_id, "side_nummer": side_nummer, "tekst": tekst}
+            )
             _bm25_skitten = True   # lazy rebuild ved neste søk — ikke O(N) per insert
         _samling.flush()
         return {"status": "indeksert", "fil_id": fil_id}

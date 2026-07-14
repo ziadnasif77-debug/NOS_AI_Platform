@@ -65,23 +65,50 @@ def _valider_job_id(job_id: str) -> str:
         raise HTTPException(status_code=422, detail="Ugyldig job_id — må være UUID")
 
 
+def _antall_sider(innhold: bytes) -> int:
+    """Teller sider i PDF-en. Kaster HTTPException 400 ved korrupt fil."""
+    import fitz
+    try:
+        with fitz.open(stream=innhold, filetype="pdf") as dok:
+            antall = dok.page_count
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ugyldig eller korrupt PDF")
+    if antall < 1:
+        raise HTTPException(status_code=400, detail="PDF-en har ingen sider")
+    return antall
+
+
 def _idempotent_svar(pg, idempotens_nokkel: str):
-    """Slår opp eksisterende jobb for nøkkelen og bygger 200-responsen."""
+    """
+    Slår opp eksisterende dokument for nøkkelen og bygger 200-responsen.
+    Flersidig: nøkkelen for side 0 identifiserer dokumentet; alle
+    søsken-jobber hentes via dokument_id.
+    """
     with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            "SELECT job_id, state FROM jobs WHERE idempotency_key = %s",
-            (idempotens_nokkel,),
+            "SELECT job_id, state, dokument_id, antall_sider FROM jobs "
+            "WHERE idempotency_key = %s",
+            (f"{idempotens_nokkel}:side0",),
         )
         rad = cur.fetchone()
-    if rad is None:
-        return None
+        if rad is None:
+            return None
+        dokument_id = rad["dokument_id"] or rad["job_id"]
+        cur.execute(
+            "SELECT job_id FROM jobs WHERE dokument_id = %s ORDER BY side_nummer",
+            (dokument_id,),
+        )
+        job_ids = [str(r["job_id"]) for r in cur.fetchall()] or [str(rad["job_id"])]
     return JSONResponse(
         status_code=200,
         content={
-            "job_id": str(rad["job_id"]),
+            "dokument_id": str(dokument_id),
+            "job_id": job_ids[0],
+            "job_ids": job_ids,
+            "antall_sider": rad["antall_sider"] or len(job_ids),
             "state": rad["state"],
             "idempotent": True,
-            "sjekk_status": f"/jobb/{rad['job_id']}",
+            "sjekk_status": f"/dokument/{dokument_id}/status",
         },
     )
 
@@ -93,8 +120,11 @@ def _idempotent_svar(pg, idempotens_nokkel: str):
 @ruter.post("/last-opp/")
 async def last_opp(fil: UploadFile = File(...)):
     """
-    Laster opp PDF. Returnerer 202 med job_id.
-    Idempotent: samme fil i samme 5-min-vindu gir samme job_id.
+    Laster opp PDF. Flersidig PDF splittes i ÉN jobb per side —
+    hver side får full livssyklus, audit-spor og uavhengig feilhåndtering.
+    Returnerer 202 med dokument_id + job_ids (job_id = første side,
+    beholdt for bakoverkompatibilitet).
+    Idempotent: samme fil i samme 5-min-vindu gir samme dokument.
     """
     filnavn = fil.filename or ""
     if not filnavn.lower().endswith(".pdf"):
@@ -102,6 +132,7 @@ async def last_opp(fil: UploadFile = File(...)):
 
     innhold = await fil.read()
     idempotens_nokkel = _idempotens_nokkel(innhold)
+    antall_sider = _antall_sider(innhold)
 
     pg = _pg()
     fil_sti = None
@@ -113,63 +144,75 @@ async def last_opp(fil: UploadFile = File(...)):
         if eksisterende is not None:
             return eksisterende
 
-        job_id = str(uuid.uuid4())
-        fil_sti = Path(INNTAK_STI) / f"{job_id}.pdf"
+        dokument_id = str(uuid.uuid4())
+        fil_sti = Path(INNTAK_STI) / f"{dokument_id}.pdf"
         fil_sti.parent.mkdir(parents=True, exist_ok=True)
         with open(fil_sti, "wb") as f:
             f.write(innhold)
 
+        job_ids = []
         with pg.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO jobs (job_id, idempotency_key, state, file_name, file_path)
-                VALUES (%s, %s, 'UPLOADED', %s, %s)
-                """,
-                (job_id, idempotens_nokkel, filnavn, str(fil_sti)),
-            )
-            cur.execute(
-                """
-                INSERT INTO audit_log (job_id, event_type, to_state, worker_id, details)
-                VALUES (%s, 'OPPRETTET', 'UPLOADED', 'api', %s)
-                """,
-                (job_id, psycopg2.extras.Json({"filnavn": filnavn})),
-            )
-
-        with pg.cursor() as cur:
-            cur.execute(
-                "UPDATE jobs SET state = 'QUEUED', updated_at = NOW() WHERE job_id = %s",
-                (job_id,),
-            )
-            cur.execute(
-                """
-                INSERT INTO audit_log (job_id, event_type, from_state, to_state, worker_id)
-                VALUES (%s, 'STATE_ENDRING', 'UPLOADED', 'QUEUED', 'api')
-                """,
-                (job_id,),
-            )
+            for side in range(antall_sider):
+                job_id = str(uuid.uuid4())
+                job_ids.append(job_id)
+                cur.execute(
+                    """
+                    INSERT INTO jobs (job_id, idempotency_key, state, file_name,
+                                      file_path, dokument_id, side_nummer, antall_sider)
+                    VALUES (%s, %s, 'UPLOADED', %s, %s, %s, %s, %s)
+                    """,
+                    (job_id, f"{idempotens_nokkel}:side{side}", filnavn,
+                     str(fil_sti), dokument_id, side, antall_sider),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO audit_log (job_id, event_type, to_state, worker_id, details)
+                    VALUES (%s, 'OPPRETTET', 'UPLOADED', 'api', %s)
+                    """,
+                    (job_id, psycopg2.extras.Json(
+                        {"filnavn": filnavn, "dokument_id": dokument_id,
+                         "side_nummer": side, "antall_sider": antall_sider})),
+                )
+                cur.execute(
+                    "UPDATE jobs SET state = 'QUEUED', updated_at = NOW() WHERE job_id = %s",
+                    (job_id,),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO audit_log (job_id, event_type, from_state, to_state, worker_id)
+                    VALUES (%s, 'STATE_ENDRING', 'UPLOADED', 'QUEUED', 'api')
+                    """,
+                    (job_id,),
+                )
         # Commit all Postgres changes before pushing to Redis.
         # If the process crashes between commit and rpush, the ghost detector
-        # will re-queue the job within reconciliation.ghost_timeout_minutter.
+        # will re-queue the jobs within reconciliation.ghost_timeout_minutter.
         pg.commit()
         committet = True
 
         if KJOREMODUS == "kubeflow":
-            _start_kfp_kjoring(job_id)
+            for job_id in job_ids:
+                _start_kfp_kjoring(job_id)
         else:
             from config.config_loader import CONFIG
             rc = _redis_client()
-            payload = json.dumps({"job_id": job_id, "fil_sti": str(fil_sti)})
             ko = CONFIG["redis"]["kooer"]["preprocess"]
-            rc.rpush(ko, payload)
+            for side, job_id in enumerate(job_ids):
+                rc.rpush(ko, json.dumps(
+                    {"job_id": job_id, "fil_sti": str(fil_sti),
+                     "side_nummer": side}))
 
         return JSONResponse(
             status_code=202,
             content={
-                "job_id": job_id,
+                "dokument_id": dokument_id,
+                "job_id": job_ids[0],
+                "job_ids": job_ids,
+                "antall_sider": antall_sider,
                 "filnavn": filnavn,
                 "state": "QUEUED",
                 "idempotent": False,
-                "sjekk_status": f"/jobb/{job_id}",
+                "sjekk_status": f"/dokument/{dokument_id}/status",
             },
         )
 
@@ -239,6 +282,156 @@ async def hent_resultat(job_id: str):
         if rad is None:
             raise HTTPException(status_code=404, detail="Resultat ikke funnet")
         return dict(rad)
+    except HTTPException:
+        raise
+    except Exception as feil:
+        raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
+
+
+# ------------------------------------------------------------------ #
+#  GET /dokument/{dokument_id}/status — samlet status for alle sider   #
+# ------------------------------------------------------------------ #
+
+@ruter.get("/dokument/{dokument_id}/status")
+async def dokument_status(dokument_id: str):
+    """
+    Samlet tilstand for et flersidig dokument:
+      FAILED      — minst én side feilet
+      DONE        — alle sider ferdige
+      IN_PROGRESS — ellers
+    """
+    dokument_id = _valider_job_id(dokument_id)
+    pg = _pg()
+    try:
+        with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT job_id, side_nummer, state FROM jobs "
+                "WHERE dokument_id = %s ORDER BY side_nummer",
+                (dokument_id,),
+            )
+            sider = cur.fetchall()
+        if not sider:
+            raise HTTPException(status_code=404, detail="Dokument ikke funnet")
+
+        tilstander = [r["state"] for r in sider]
+        if "FAILED" in tilstander:
+            samlet = "FAILED"
+        elif all(t == "DONE" for t in tilstander):
+            samlet = "DONE"
+        else:
+            samlet = "IN_PROGRESS"
+        return {
+            "dokument_id": dokument_id,
+            "state": samlet,
+            "antall_sider": len(sider),
+            "ferdige_sider": sum(1 for t in tilstander if t == "DONE"),
+            "sider": [{"job_id": str(r["job_id"]),
+                       "side_nummer": r["side_nummer"],
+                       "state": r["state"]} for r in sider],
+        }
+    except HTTPException:
+        raise
+    except Exception as feil:
+        raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
+
+
+# ------------------------------------------------------------------ #
+#  GET /dokument/{dokument_id}/felter — aggregerte felter (UiPath)     #
+# ------------------------------------------------------------------ #
+
+@ruter.get("/dokument/{dokument_id}/felter")
+async def dokument_felter(dokument_id: str):
+    """
+    Aggregert forretningskontrakt for hele dokumentet:
+    felter = første ikke-tomme verdi per felt på tvers av sidene,
+    beslutning = strengeste av sidenes beslutninger
+    (REJECTED > REVIEW > APPROVED). 409 til alle sider er DONE.
+    """
+    dokument_id = _valider_job_id(dokument_id)
+    pg = _pg()
+    try:
+        with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT j.job_id, j.side_nummer, j.state, j.file_name,
+                       r.nlp_result, r.routing_decision, r.label_studio_project
+                FROM jobs j
+                LEFT JOIN results r ON r.job_id = j.job_id
+                WHERE j.dokument_id = %s
+                ORDER BY j.side_nummer
+                """,
+                (dokument_id,),
+            )
+            sider = cur.fetchall()
+        if not sider:
+            raise HTTPException(status_code=404, detail="Dokument ikke funnet")
+
+        tilstander = [r["state"] for r in sider]
+        if not all(t == "DONE" for t in tilstander):
+            return JSONResponse(status_code=409, content={
+                "dokument_id": dokument_id, "ferdig": False,
+                "ferdige_sider": sum(1 for t in tilstander if t == "DONE"),
+                "antall_sider": len(sider),
+                "state": "FAILED" if "FAILED" in tilstander else "IN_PROGRESS",
+            })
+
+        feltnavn = ["navn", "fodselsnummer", "dato", "adresse",
+                    "ytelse", "fylke", "dokumenttype", "utfall", "oppsummering"]
+        felter = {navn: None for navn in feltnavn}
+        beslutninger, per_side = [], []
+        for rad in sider:
+            nlp = rad["nlp_result"] or {}
+            entiteter = nlp.get("entities", {})
+            side_felter = {
+                "navn": entiteter.get("navn"),
+                "fodselsnummer": entiteter.get("fodselsnummer"),
+                "dato": entiteter.get("dato"),
+                "adresse": entiteter.get("adresse"),
+                "ytelse": entiteter.get("ytelse") or nlp.get("ytelse"),
+                "fylke": entiteter.get("fylke"),
+                "dokumenttype": nlp.get("document_class"),
+                "utfall": nlp.get("utfall"),
+                "oppsummering": nlp.get("summary"),
+            }
+            for navn in feltnavn:
+                if felter[navn] is None and side_felter[navn]:
+                    felter[navn] = side_felter[navn]
+            beslutninger.append(rad["routing_decision"])
+            per_side.append({
+                "side_nummer": rad["side_nummer"],
+                "job_id": str(rad["job_id"]),
+                "beslutning": rad["routing_decision"],
+                "felter": side_felter,
+            })
+
+        if "REJECTED" in beslutninger:
+            samlet_beslutning = "REJECTED"
+        elif "REVIEW" in beslutninger:
+            samlet_beslutning = "REVIEW"
+        else:
+            samlet_beslutning = "APPROVED"
+
+        return {
+            "dokument_id": dokument_id,
+            "ferdig": True,
+            "state": "DONE",
+            "filnavn": sider[0]["file_name"],
+            "antall_sider": len(sider),
+            "beslutning": samlet_beslutning,
+            "felter": felter,
+            "gjennomgang": {
+                "kreves": samlet_beslutning in ("REVIEW", "REJECTED"),
+                "sider_til_gjennomgang": [
+                    s["side_nummer"] for s, b in zip(per_side, beslutninger)
+                    if b in ("REVIEW", "REJECTED")
+                ],
+            },
+            "per_side": per_side,
+        }
     except HTTPException:
         raise
     except Exception as feil:

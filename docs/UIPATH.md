@@ -19,9 +19,12 @@ mens GPU-en jobber.
 
 | Steg | Kall | Svar |
 |------|------|------|
-| 1 | `POST /last-opp/` (multipart, felt `fil`, header `X-API-Key`) | `202` + `{job_id, state}` — `200` med `idempotent: true` hvis samme fil nylig er lastet opp |
-| 2 | `GET /jobb/{job_id}` | `{state}` — poll til `DONE` eller `FAILED` |
-| 3 | `GET /resultat/{job_id}/felter` | Flat forretnings-JSON (under) — `409` hvis ikke ferdig |
+| 1 | `POST /last-opp/` (multipart, felt `fil`, header `X-API-Key`) | `202` + `{dokument_id, job_ids, antall_sider}` — flersidig PDF blir én jobb per side. `200` med `idempotent: true` ved gjentatt opplasting |
+| 2 | `GET /dokument/{dokument_id}/status` | Aggregert: `DONE` når ALLE sider er ferdige, `FAILED` hvis én feilet |
+| 3 | `GET /dokument/{dokument_id}/felter` | Aggregert forretnings-JSON for hele dokumentet + `per_side`-liste — `409` til alt er ferdig |
+
+Per-side-endepunktene (`/jobb/{job_id}`, `/resultat/{job_id}/felter`)
+finnes fortsatt for feilsøking av enkeltsider.
 
 Svar fra `/resultat/{job_id}/felter` (stabil kontrakt for RPA):
 

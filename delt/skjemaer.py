@@ -57,6 +57,9 @@ class PreprocessResultat(BaseModel):
     quality_score: float
     quality_approved: bool
     preprocessed_path: str
+    # Enkeltside-PDF for motorer som krever PDF-inndata (Marker).
+    # preprocessed_path peker på siderendret PNG for bilde-baserte motorer.
+    side_pdf_sti: Optional[str] = None
     rejection_reason: Optional[str] = None
 
 

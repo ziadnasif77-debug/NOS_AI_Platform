@@ -59,7 +59,8 @@ class RoutingWorker(BaseWorker):
         self._lagre_routing_beslutning(job_id, beslutning, ls_project, pg_conn)
 
         if beslutning == "APPROVED":
-            self._send_til_milvus(job_id, nlp_res)
+            dokument_id, side_nummer = self._hent_side_info(job_id, pg_conn)
+            self._send_til_milvus(job_id, nlp_res, dokument_id, side_nummer)
         elif beslutning in ("REVIEW", "REJECTED") and ls_project:
             self.send_til_label_studio(
                 job_id=job_id,
@@ -125,11 +126,30 @@ class RoutingWorker(BaseWorker):
         max_workers=4, thread_name_prefix="milvus-indeksering"
     )
 
-    def _send_til_milvus(self, job_id: str, nlp_res):
-        """Milvus-indeksering i avgrenset bakgrunnspool — blokkerer ikke worker."""
-        self._indekserings_pool.submit(self._send_til_milvus_sync, job_id, nlp_res)
+    def _hent_side_info(self, job_id: str, pg) -> tuple:
+        """dokument_id + side_nummer fra Postgres — søket grupperes på
+        dokument, ikke på enkeltside-jobben."""
+        try:
+            with pg.cursor() as cur:
+                cur.execute(
+                    "SELECT dokument_id, side_nummer FROM jobs WHERE job_id = %s",
+                    (job_id,),
+                )
+                rad = cur.fetchone()
+            if rad:
+                return str(rad[0] or job_id), int(rad[1] or 0)
+        except Exception as exc:
+            logger.warning("Kunne ikke hente side-info for %s: %s", job_id, exc)
+        return job_id, 0
 
-    def _send_til_milvus_sync(self, job_id: str, nlp_res):
+    def _send_til_milvus(self, job_id: str, nlp_res, dokument_id=None, side_nummer=0):
+        """Milvus-indeksering i avgrenset bakgrunnspool — blokkerer ikke worker."""
+        self._indekserings_pool.submit(
+            self._send_til_milvus_sync, job_id, nlp_res,
+            dokument_id or job_id, side_nummer,
+        )
+
+    def _send_til_milvus_sync(self, job_id: str, nlp_res, dokument_id=None, side_nummer=0):
         import requests as req
         import time as _time
         sok_url = CONFIG.get("tjenester", {}).get("sok_url", "http://sok:8003")
@@ -138,8 +158,8 @@ class RoutingWorker(BaseWorker):
             "tekst": nlp_res.summary,
             "filnavn": entiteter.get("navn", ""),
             "metadata": {
-                "fil_id": job_id,
-                "side_nummer": 0,
+                "fil_id": dokument_id or job_id,
+                "side_nummer": side_nummer,
                 "navn": entiteter.get("navn", ""),
                 "dato": entiteter.get("dato", ""),
                 "ytelse": entiteter.get("ytelse", ""),

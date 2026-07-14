@@ -9,3 +9,4 @@ pyyaml
 kfp
 prometheus-client
 PyJWT[crypto]
+pymupdf

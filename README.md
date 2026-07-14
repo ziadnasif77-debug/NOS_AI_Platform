@@ -121,6 +121,22 @@ Alle andre overganger kaster `UgyldigTilstandsovergang`.
 
 ---
 
+## Flersidige dokumenter
+
+En opplastet PDF splittes i **én jobb per side** (`dokument_id` grupperer,
+`side_nummer` identifiserer). Hver side får full livssyklus, eget
+audit-spor og uavhengig feilhåndtering — én uleselig side stopper ikke
+resten av dokumentet.
+
+- Lag 0 rendrer riktig side til PNG via PyMuPDF (cv2 kan ikke lese PDF)
+  og skriver en enkeltside-PDF for Marker
+- Søkeindeksen lagrer `(dokument_id, side_nummer)` — treff peker på riktig side
+- Aggregerte endepunkter: `GET /dokument/{id}/status` (DONE når alle
+  sider er ferdige) og `GET /dokument/{id}/felter` (felter samlet på
+  tvers av sidene; strengeste beslutning vinner: REJECTED > REVIEW > APPROVED)
+
+---
+
 ## Workers
 
 ### BaseWorker (`tjenester/workers/base_worker.py`)
@@ -496,7 +512,7 @@ make label-studio            # Åpne Label Studio (http://localhost:8080)
 
 ## Testing
 
-### Enhetstester (218 totalt: 181 enhet + 37 integrasjon)
+### Enhetstester (222 totalt: 181 enhet + 41 integrasjon)
 
 ```bash
 python -m pytest tester/ -v
@@ -531,7 +547,7 @@ REDIS_URL=redis://localhost:6379/0 \
 INTEGRASJONSTEST=1 python -m pytest tester/test_integrasjon_lokal.py -v
 ```
 
-**Verifiserte scenarioer** (`test_integrasjon_lokal.py`, 37 tester) — utdrag:
+**Verifiserte scenarioer** (`test_integrasjon_lokal.py`, 41 tester) — utdrag:
 
 | # | Scenario | Verifisert |
 |---|----------|------------|

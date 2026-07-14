@@ -19,22 +19,22 @@ $hoder = @{ "X-API-Key" = $ApiNokkel }
 Write-Host "1) Laster opp $FilSti ..."
 $svar = Invoke-RestMethod -Uri "$ApiUrl/last-opp/" -Method Post -Headers $hoder `
     -Form @{ fil = Get-Item $FilSti }
-$jobbId = $svar.job_id
-Write-Host "   job_id: $jobbId (state: $($svar.state))"
+$jobbId = $svar.dokument_id
+Write-Host "   dokument_id: $jobbId ($($svar.antall_sider) side(r), state: $($svar.state))"
 
 Write-Host "2) Poller /jobb/$jobbId ..."
 $frist = (Get-Date).AddSeconds($TidsavbruddSekunder)
 do {
     Start-Sleep -Seconds 2
-    $status = Invoke-RestMethod -Uri "$ApiUrl/jobb/$jobbId" -Headers $hoder
+    $status = Invoke-RestMethod -Uri "$ApiUrl/dokument/$jobbId/status" -Headers $hoder
     Write-Host "   state: $($status.state)"
     if ((Get-Date) -gt $frist) { throw "Tidsavbrudd — siste tilstand: $($status.state)" }
 } while ($status.state -ne "DONE" -and $status.state -ne "FAILED")
 
-if ($status.state -eq "FAILED") { throw "Behandling feilet — sjekk $ApiUrl/audit/$jobbId" }
+if ($status.state -eq "FAILED") { throw "Behandling feilet — sjekk $ApiUrl/dokument/$jobbId/status" }
 
 Write-Host "3) Henter felter ..."
-$felter = Invoke-RestMethod -Uri "$ApiUrl/resultat/$jobbId/felter" -Headers $hoder
+$felter = Invoke-RestMethod -Uri "$ApiUrl/dokument/$jobbId/felter" -Headers $hoder
 $felter | ConvertTo-Json -Depth 5
 
 Write-Host ""

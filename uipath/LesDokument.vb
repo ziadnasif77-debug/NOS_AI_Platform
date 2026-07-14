@@ -32,14 +32,16 @@ Dim oppKropp As String = oppSvar.Content.ReadAsStringAsync().Result
 If CInt(oppSvar.StatusCode) <> 202 AndAlso CInt(oppSvar.StatusCode) <> 200 Then
     Throw New Exception("Opplasting feilet (" & CInt(oppSvar.StatusCode).ToString() & "): " & oppKropp)
 End If
-JobbId = Newtonsoft.Json.Linq.JObject.Parse(oppKropp)("job_id").ToString()
+Dim oppJson = Newtonsoft.Json.Linq.JObject.Parse(oppKropp)
+JobbId = oppJson("dokument_id").ToString()   ' dokument-id — dekker ALLE sidene
 
-' ── 2) Poll /jobb/{id} til DONE eller FAILED ───────────────────────
+' ── 2) Poll /dokument/{id}/status til DONE eller FAILED ────────────
+' Flersidig PDF = én jobb per side; status-endepunktet aggregerer alle.
 Dim frist As DateTime = DateTime.UtcNow.AddSeconds(TidsavbruddSekunder)
 Dim tilstand As String = ""
 Do
     System.Threading.Thread.Sleep(2000)
-    Dim stSvar = klient.GetAsync(ApiUrl & "/jobb/" & JobbId).Result
+    Dim stSvar = klient.GetAsync(ApiUrl & "/dokument/" & JobbId & "/status").Result
     Dim stKropp As String = stSvar.Content.ReadAsStringAsync().Result
     tilstand = Newtonsoft.Json.Linq.JObject.Parse(stKropp)("state").ToString()
     If DateTime.UtcNow > frist Then
@@ -48,11 +50,11 @@ Do
 Loop While tilstand <> "DONE" AndAlso tilstand <> "FAILED"
 
 If tilstand = "FAILED" Then
-    Throw New Exception("Behandling feilet for jobb " & JobbId & " — sjekk /audit/" & JobbId)
+    Throw New Exception("Behandling feilet for dokument " & JobbId)
 End If
 
-' ── 3) Hent flate forretningsfelter ────────────────────────────────
-Dim resSvar = klient.GetAsync(ApiUrl & "/resultat/" & JobbId & "/felter").Result
+' ── 3) Hent aggregerte forretningsfelter for hele dokumentet ───────
+Dim resSvar = klient.GetAsync(ApiUrl & "/dokument/" & JobbId & "/felter").Result
 ResultatJson = resSvar.Content.ReadAsStringAsync().Result
 If CInt(resSvar.StatusCode) <> 200 Then
     Throw New Exception("Kunne ikke hente felter (" & CInt(resSvar.StatusCode).ToString() & "): " & ResultatJson)

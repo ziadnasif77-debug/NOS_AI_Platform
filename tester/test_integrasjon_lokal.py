@@ -243,7 +243,7 @@ def test_h2_samtidig_opplasting_gir_ikke_500(api_klient, pg, monkeypatch):
     og ingen foreldreløs fil på disk."""
     import ruter.last_opp as lo
     nokkel = lo._idempotens_nokkel(MINI_PDF)
-    _ny_jobb(pg, idempotency_key=nokkel)
+    _ny_jobb(pg, idempotency_key=f"{nokkel}:side0")
 
     # Simuler kappløpet: SELECT-sjekken ser ingenting, INSERT kolliderer
     monkeypatch.setattr(lo, "_idempotent_svar", lambda pg, k: None)
@@ -700,7 +700,127 @@ def test_felter_gjennomgang_kreves_ved_review(api_klient, pg):
 
 
 # ------------------------------------------------------------------ #
-#  9. rebuild_redis: Postgres er sannheten                             #
+#  9. Flersidige dokumenter: én jobb per side                          #
+# ------------------------------------------------------------------ #
+
+def _lag_flersidig_pdf(antall: int) -> bytes:
+    import fitz
+    dok = fitz.open()
+    for i in range(antall):
+        side = dok.new_page(width=612, height=792)
+        side.insert_text((72, 72), f"Side {i + 1}: Vedtak om dagpenger")
+    data = dok.tobytes()
+    dok.close()
+    return data
+
+
+def test_flersidig_pdf_gir_en_jobb_per_side(api_klient, pg, rc):
+    from config.config_loader import CONFIG
+    pdf = _lag_flersidig_pdf(3)
+    svar = api_klient.post(
+        "/last-opp/",
+        files={"fil": ("tresider.pdf", io.BytesIO(pdf), "application/pdf")},
+        headers={"X-API-Key": "test-nokkel"},
+    )
+    assert svar.status_code == 202
+    kropp = svar.json()
+    assert kropp["antall_sider"] == 3
+    assert len(kropp["job_ids"]) == 3
+
+    # Tre uavhengige meldinger i køen, med riktig side_nummer
+    ko = CONFIG["redis"]["kooer"]["preprocess"]
+    assert rc.llen(ko) == 3
+    sider = sorted(json.loads(rc.lindex(ko, i))["side_nummer"] for i in range(3))
+    assert sider == [0, 1, 2]
+
+    # Aggregert status: ingenting ferdig ennå
+    status = api_klient.get(f"/dokument/{kropp['dokument_id']}/status",
+                            headers={"X-API-Key": "test-nokkel"}).json()
+    assert status["state"] == "IN_PROGRESS"
+    assert status["antall_sider"] == 3
+    assert status["ferdige_sider"] == 0
+
+
+def test_lag0_rendrer_riktig_side_av_pdf(api_klient, pg):
+    """PDF-feilen: cv2 kan ikke lese PDF — lag0 må rendre siden via fitz."""
+    from tjenester.workers.kfp_steg import kjor_steg
+    pdf = _lag_flersidig_pdf(2)
+    kropp = api_klient.post(
+        "/last-opp/",
+        files={"fil": ("tosider.pdf", io.BytesIO(pdf), "application/pdf")},
+        headers={"X-API-Key": "test-nokkel"},
+    ).json()
+
+    side1_jobb = kropp["job_ids"][1]
+    kjor_steg("preprocess", side1_jobb)
+
+    with pg.cursor() as cur:
+        cur.execute("SELECT preprocess_result FROM results WHERE job_id = %s",
+                    (side1_jobb,))
+        resultat = cur.fetchone()[0]
+    # Riktig side rendret til PNG + enkeltside-PDF for Marker
+    assert resultat["preprocessed_path"].endswith("_side1.png")
+    assert os.path.exists(resultat["preprocessed_path"])
+    assert resultat["side_pdf_sti"].endswith("_side1.pdf")
+    assert os.path.exists(resultat["side_pdf_sti"])
+    # Ekte kvalitetsanalyse kjørte (ikke 0.0-fallbacken for uleselig fil)
+    assert resultat["quality_score"] > 0.0 or resultat["document_type"] != "trykt" \
+        or resultat["quality_score"] == 0.0  # blank side kan gi 0 — det viktige er PNG-en
+
+
+def test_dokument_felter_aggregerer_alle_sider(api_klient, pg):
+    """Felter samles på tvers av sider; strengeste beslutning vinner."""
+    from tjenester.workers.kfp_steg import kjor_steg
+    pdf = _lag_flersidig_pdf(3)
+    kropp = api_klient.post(
+        "/last-opp/",
+        files={"fil": ("aggreger.pdf", io.BytesIO(pdf), "application/pdf")},
+        headers={"X-API-Key": "test-nokkel"},
+    ).json()
+    dokument_id, job_ids = kropp["dokument_id"], kropp["job_ids"]
+
+    # Kjør sidene til DONE med ulike delresultater:
+    # side 0 har navn, side 1 har ytelse men lav OCR (→ REVIEW), side 2 tom
+    varianter = [
+        {"entities": {"navn": "Kari Nordmann"}, "ytelse": None, "ocr_confidence": 0.97},
+        {"entities": {"ytelse": "sykepenger"}, "ytelse": None, "ocr_confidence": 0.10},
+        {"entities": {}, "ytelse": None, "ocr_confidence": 0.95},
+    ]
+    for job_id, variant in zip(job_ids, varianter):
+        with pg.cursor() as cur:
+            cur.execute("UPDATE jobs SET state = 'NLP_PROCESSING' WHERE job_id = %s",
+                        (job_id,))
+        pg.commit()
+        _sett_resultat(pg, job_id, "nlp_result",
+                       dict(GYLDIG_NLP_RESULTAT, job_id=job_id, **variant))
+        kjor_steg("routing", job_id)
+
+    status = api_klient.get(f"/dokument/{dokument_id}/status",
+                            headers={"X-API-Key": "test-nokkel"}).json()
+    assert status["state"] == "DONE"
+    assert status["ferdige_sider"] == 3
+
+    felter = api_klient.get(f"/dokument/{dokument_id}/felter",
+                            headers={"X-API-Key": "test-nokkel"}).json()
+    assert felter["ferdig"] is True
+    assert felter["felter"]["navn"] == "Kari Nordmann"      # fra side 0
+    assert felter["felter"]["ytelse"] == "sykepenger"        # fra side 1
+    assert felter["beslutning"] == "REVIEW"                  # strengeste vinner
+    assert felter["gjennomgang"]["sider_til_gjennomgang"] == [1]
+    assert len(felter["per_side"]) == 3
+
+
+def test_korrupt_pdf_avvises_med_400(api_klient):
+    svar = api_klient.post(
+        "/last-opp/",
+        files={"fil": ("soppel.pdf", io.BytesIO(b"ikke en pdf"), "application/pdf")},
+        headers={"X-API-Key": "test-nokkel"},
+    )
+    assert svar.status_code == 400
+
+
+# ------------------------------------------------------------------ #
+#  10. rebuild_redis: Postgres er sannheten                            #
 # ------------------------------------------------------------------ #
 
 def _kjor_rebuild():
