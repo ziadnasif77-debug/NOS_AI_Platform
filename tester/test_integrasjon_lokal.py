@@ -566,7 +566,60 @@ def test_kfp_steg_mangler_forrige_resultat_gir_feil(pg):
 
 
 # ------------------------------------------------------------------ #
-#  8. rebuild_redis: Postgres er sannheten                             #
+#  8. UiPath-kontrakten: /resultat/{id}/felter                         #
+# ------------------------------------------------------------------ #
+
+def test_felter_endepunkt_full_robotflyt(api_klient, pg):
+    """Samme flyt som UiPath-roboten: jobb → DONE → flate felter."""
+    from tjenester.workers.kfp_steg import kjor_steg
+    job_id = _ny_jobb(pg, state="NLP_PROCESSING")
+    _sett_resultat(pg, job_id, "nlp_result", dict(GYLDIG_NLP_RESULTAT, job_id=job_id))
+    kjor_steg("routing", job_id)
+
+    svar = api_klient.get(f"/resultat/{job_id}/felter",
+                          headers={"X-API-Key": "test-nokkel"})
+    assert svar.status_code == 200
+    kropp = svar.json()
+    assert kropp["ferdig"] is True
+    assert kropp["beslutning"] == "APPROVED"
+    assert kropp["felter"]["navn"] == "Ola Nordmann"
+    assert kropp["felter"]["ytelse"] == "dagpenger"
+    assert kropp["felter"]["fylke"] == "Oslo"
+    assert kropp["konfidens"]["ocr"] == 0.97
+    assert kropp["gjennomgang"]["kreves"] is False
+
+
+def test_felter_409_foer_ferdig(api_klient, pg):
+    job_id = _ny_jobb(pg, state="QUEUED")
+    svar = api_klient.get(f"/resultat/{job_id}/felter",
+                          headers={"X-API-Key": "test-nokkel"})
+    assert svar.status_code == 409
+    assert svar.json()["ferdig"] is False
+    assert svar.json()["state"] == "QUEUED"
+
+
+def test_felter_404_for_ukjent_jobb(api_klient):
+    svar = api_klient.get(f"/resultat/{uuid.uuid4()}/felter",
+                          headers={"X-API-Key": "test-nokkel"})
+    assert svar.status_code == 404
+
+
+def test_felter_gjennomgang_kreves_ved_review(api_klient, pg):
+    from tjenester.workers.kfp_steg import kjor_steg
+    job_id = _ny_jobb(pg, state="NLP_PROCESSING")
+    _sett_resultat(pg, job_id, "nlp_result",
+                   dict(GYLDIG_NLP_RESULTAT, job_id=job_id, ocr_confidence=0.10))
+    kjor_steg("routing", job_id)
+
+    kropp = api_klient.get(f"/resultat/{job_id}/felter",
+                           headers={"X-API-Key": "test-nokkel"}).json()
+    assert kropp["beslutning"] == "REVIEW"
+    assert kropp["gjennomgang"]["kreves"] is True
+    assert kropp["gjennomgang"]["label_studio_prosjekt"] is not None
+
+
+# ------------------------------------------------------------------ #
+#  9. rebuild_redis: Postgres er sannheten                             #
 # ------------------------------------------------------------------ #
 
 def test_rebuild_redis_gjenoppretter_koer(pg, rc):

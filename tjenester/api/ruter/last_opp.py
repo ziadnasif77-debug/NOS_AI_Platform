@@ -210,6 +210,76 @@ async def hent_resultat(job_id: str):
 
 
 # ------------------------------------------------------------------ #
+#  GET /resultat/{job_id}/felter — robotvennlig kontrakt (UiPath)      #
+# ------------------------------------------------------------------ #
+
+@ruter.get("/resultat/{job_id}/felter")
+async def hent_felter(job_id: str):
+    """
+    Flat, stabil forretningskontrakt for RPA-klienter (UiPath o.l.).
+    409 til jobben er DONE — roboten poller /jobb/{id} først.
+    Fødselsnummer serveres kun her (autentisert), aldri i søkeindeksen.
+    """
+    pg = _pg()
+    try:
+        with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT j.state, j.file_name,
+                       r.nlp_result, r.routing_decision, r.label_studio_project
+                FROM jobs j
+                LEFT JOIN results r ON r.job_id = j.job_id
+                WHERE j.job_id = %s
+                """,
+                (job_id,),
+            )
+            rad = cur.fetchone()
+        if rad is None:
+            raise HTTPException(status_code=404, detail="Jobb ikke funnet")
+        if rad["state"] != "DONE":
+            return JSONResponse(
+                status_code=409,
+                content={"job_id": job_id, "state": rad["state"], "ferdig": False},
+            )
+
+        nlp = rad["nlp_result"] or {}
+        entiteter = nlp.get("entities", {})
+        beslutning = rad["routing_decision"]
+        return {
+            "job_id": job_id,
+            "state": rad["state"],
+            "ferdig": True,
+            "filnavn": rad["file_name"],
+            "beslutning": beslutning,
+            "felter": {
+                "navn": entiteter.get("navn"),
+                "fodselsnummer": entiteter.get("fodselsnummer"),
+                "dato": entiteter.get("dato"),
+                "adresse": entiteter.get("adresse"),
+                "ytelse": entiteter.get("ytelse") or nlp.get("ytelse"),
+                "fylke": entiteter.get("fylke"),
+                "dokumenttype": nlp.get("document_class"),
+                "utfall": nlp.get("utfall"),
+                "oppsummering": nlp.get("summary"),
+            },
+            "konfidens": {
+                "ocr": nlp.get("ocr_confidence"),
+                "nlp": nlp.get("nlp_confidence"),
+            },
+            "gjennomgang": {
+                "kreves": beslutning in ("REVIEW", "REJECTED"),
+                "label_studio_prosjekt": rad["label_studio_project"],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as feil:
+        raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
+
+
+# ------------------------------------------------------------------ #
 #  GET /audit/{job_id}                                                #
 # ------------------------------------------------------------------ #
 

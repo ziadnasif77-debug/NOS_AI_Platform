@@ -439,6 +439,23 @@ curl -X POST http://localhost:8000/sok \
   -d '{"sporsmal": "dagpenger 1985", "antall": 10}'
 ```
 
+### UiPath / RPA-integrasjon
+
+Roboter bruker det asynkrone mønsteret «last opp → poll → hent» mot
+API-et, med et eget robotvennlig endepunkt som returnerer flate
+forretningsfelter:
+
+```
+POST /last-opp/                → 202 + job_id
+GET  /jobb/{job_id}            → poll til DONE/FAILED
+GET  /resultat/{job_id}/felter → { beslutning, felter: {navn, dato, ytelse, …}, konfidens, gjennomgang }
+```
+
+Klart til bruk i [`uipath/`](uipath/): Invoke Code-klar VB.NET
+(`LesDokument.vb`) og PowerShell-skript som verifiserer hele
+robotflyten før du åpner Studio (`test_robotflyt.ps1`).
+Full guide: [docs/UIPATH.md](docs/UIPATH.md).
+
 ---
 
 ## Make-kommandoer
