@@ -32,6 +32,14 @@ sys.path.insert(0, "tjenester/api")
 
 PG_URL = os.environ.get("POSTGRES_URL", "postgresql://nav:nav@localhost:5432/nav_archive")
 
+# Sikkerhetsvakt: testene TRUNCATE-er tabeller (inkl. audit_log).
+# Nekt å kjøre mot noe som ikke utvetydig er en lokal testdatabase.
+if not any(vert in PG_URL for vert in ("localhost", "127.0.0.1")):
+    raise RuntimeError(
+        "INTEGRASJONSTEST nektes: POSTGRES_URL peker ikke på localhost — "
+        "disse testene sletter data og skal aldri kjøres mot delte miljøer."
+    )
+
 # Minimal, gyldig PDF (én tom side)
 MINI_PDF = (
     b"%PDF-1.4\n"
@@ -219,6 +227,37 @@ def test_jobb_og_resultat_404(api_klient):
     hodene = {"X-API-Key": "test-nokkel"}
     assert api_klient.get(f"/jobb/{ukjent}", headers=hodene).status_code == 404
     assert api_klient.get(f"/resultat/{ukjent}", headers=hodene).status_code == 404
+
+
+def test_ugyldig_uuid_gir_422_ikke_500(api_klient):
+    """M7: rå streng i job_id skal valideres — ikke smelle i Postgres."""
+    hodene = {"X-API-Key": "test-nokkel"}
+    for sti in ["/jobb/ikke-en-uuid", "/resultat/abc",
+                "/resultat/abc/felter", "/audit/'; DROP TABLE jobs;--"]:
+        svar = api_klient.get(sti, headers=hodene)
+        assert svar.status_code == 422, f"{sti} ga {svar.status_code}"
+
+
+def test_h2_samtidig_opplasting_gir_ikke_500(api_klient, pg, monkeypatch):
+    """H2: taper INSERT-kappløpet → idempotent svar/409, aldri 500,
+    og ingen foreldreløs fil på disk."""
+    import ruter.last_opp as lo
+    nokkel = lo._idempotens_nokkel(MINI_PDF)
+    _ny_jobb(pg, idempotency_key=nokkel)
+
+    # Simuler kappløpet: SELECT-sjekken ser ingenting, INSERT kolliderer
+    monkeypatch.setattr(lo, "_idempotent_svar", lambda pg, k: None)
+
+    inntak = lo.INNTAK_STI
+    antall_foer = len(os.listdir(inntak)) if os.path.isdir(inntak) else 0
+    svar = api_klient.post(
+        "/last-opp/",
+        files={"fil": ("test.pdf", io.BytesIO(MINI_PDF), "application/pdf")},
+        headers={"X-API-Key": "test-nokkel"},
+    )
+    assert svar.status_code == 409
+    antall_etter = len(os.listdir(inntak)) if os.path.isdir(inntak) else 0
+    assert antall_etter == antall_foer, "foreldreløs fil etterlatt på disk"
 
 
 def test_redis_nede_ved_opplasting_gjenopprettes_av_ghost_detektor(api_klient, pg, rc, monkeypatch):
@@ -433,6 +472,43 @@ def test_uttomte_retries_gir_dlq_og_failed(pg, rc, monkeypatch):
     assert rc.llen(worker.dlq_name) == 1
 
 
+def test_c1_las_frigis_ved_feil_saa_retry_kan_plukkes(pg, monkeypatch):
+    """C1: etter feil skal låsen være frigitt — retry-meldingen skal
+    ikke konsumeres og forkastes av en fortsatt aktiv lås."""
+    from tjenester.workers.lag0_preprocessing.lag0 import PreprocessingWorker
+    worker = PreprocessingWorker()
+    monkeypatch.setattr(PreprocessingWorker, "process",
+                        lambda self, job, pg: (_ for _ in ()).throw(ValueError("smell")))
+    job_id = _ny_jobb(pg)
+
+    worker._behandle({"job_id": job_id, "fil_sti": "x", "retry_count": 0})
+
+    with pg.cursor() as cur:
+        cur.execute("SELECT locked_by, attempt_count, last_error FROM jobs WHERE job_id = %s",
+                    (job_id,))
+        locked_by, forsok, siste_feil = cur.fetchone()
+    assert locked_by is None, "låsen må være frigitt etter feil"
+    assert forsok == 1, "attempt_count skal telles varig i Postgres"
+    assert "smell" in siste_feil
+
+
+def test_c1_giftig_jobb_naar_dlq_selv_uten_payload_teller(pg, monkeypatch):
+    """C1: simulerer reconciliation-re-kø der payload-telleren er tapt —
+    databasens attempt_count skal likevel drive jobben til DLQ."""
+    from tjenester.workers.lag0_preprocessing.lag0 import PreprocessingWorker
+    worker = PreprocessingWorker()
+    monkeypatch.setattr(PreprocessingWorker, "process",
+                        lambda self, job, pg: (_ for _ in ()).throw(ValueError("gift")))
+    job_id = _ny_jobb(pg, attempt_count=5)
+
+    worker._behandle({"job_id": job_id, "fil_sti": "x", "retry_count": 0})
+
+    assert _state(pg, job_id) == "FAILED"
+    with pg.cursor() as cur:
+        cur.execute("SELECT count(*) FROM dead_letter_queue WHERE job_id = %s", (job_id,))
+        assert cur.fetchone()[0] == 1
+
+
 # ------------------------------------------------------------------ #
 #  6. Reconciliation: stuck, ghost og tapte jobber                     #
 # ------------------------------------------------------------------ #
@@ -588,6 +664,11 @@ def test_felter_endepunkt_full_robotflyt(api_klient, pg):
     assert kropp["konfidens"]["ocr"] == 0.97
     assert kropp["gjennomgang"]["kreves"] is False
 
+    # M11: terminal tilstand skal sette completed_at (SLA-rapportering)
+    with pg.cursor() as cur:
+        cur.execute("SELECT completed_at FROM jobs WHERE job_id = %s", (job_id,))
+        assert cur.fetchone()[0] is not None
+
 
 def test_felter_409_foer_ferdig(api_klient, pg):
     job_id = _ny_jobb(pg, state="QUEUED")
@@ -622,12 +703,8 @@ def test_felter_gjennomgang_kreves_ved_review(api_klient, pg):
 #  9. rebuild_redis: Postgres er sannheten                             #
 # ------------------------------------------------------------------ #
 
-def test_rebuild_redis_gjenoppretter_koer(pg, rc):
+def _kjor_rebuild():
     import subprocess
-    from config.config_loader import CONFIG
-    job_id = _ny_jobb(pg, state="QUEUED")
-    rc.flushdb()
-
     miljo = dict(os.environ, POSTGRES_URL=PG_URL)
     resultat = subprocess.run(
         [sys.executable, "skript/rebuild_redis.py"],
@@ -635,6 +712,51 @@ def test_rebuild_redis_gjenoppretter_koer(pg, rc):
     )
     assert resultat.returncode == 0, resultat.stderr
 
+
+def test_rebuild_redis_gjenoppretter_koer_med_full_kontrakt(pg, rc):
+    """C2: payloaden må følge worker-kontrakten — fil_sti + retry_count."""
+    from config.config_loader import CONFIG
+    job_id = _ny_jobb(pg, state="QUEUED", fil_sti="/data/inntak/x.pdf",
+                      attempt_count=2)
+    rc.flushdb()
+
+    _kjor_rebuild()
+
     ko = CONFIG["redis"]["kooer"]["preprocess"]
     assert rc.llen(ko) == 1
-    assert json.loads(rc.lindex(ko, 0))["job_id"] == job_id
+    payload = json.loads(rc.lindex(ko, 0))
+    assert payload["job_id"] == job_id
+    assert payload["fil_sti"] == "/data/inntak/x.pdf"
+    assert payload["retry_count"] == 2
+
+
+def test_rebuild_redis_inkluderer_forrige_resultat(pg, rc):
+    """C2: OCR-jobber må re-køes MED preprocess_result — ellers DLQ-løkke."""
+    from config.config_loader import CONFIG
+    job_id = _ny_jobb(pg, state="OCR_PROCESSING")
+    _sett_resultat(pg, job_id, "preprocess_result", {"job_id": job_id, "document_type": "trykt"})
+    rc.flushdb()
+
+    _kjor_rebuild()
+
+    ko = CONFIG["redis"]["kooer"]["ocr"]
+    assert rc.llen(ko) == 1
+    payload = json.loads(rc.lindex(ko, 0))
+    assert payload["forrige_resultat"]["document_type"] == "trykt"
+
+
+def test_rebuild_redis_markerer_inkonsistente_failed(pg, rc):
+    """C2: OCR-jobb UTEN preprocess_result skal bli FAILED, ikke re-køet."""
+    from config.config_loader import CONFIG
+    job_id = _ny_jobb(pg, state="OCR_PROCESSING")   # ingen results-rad
+    rc.flushdb()
+
+    _kjor_rebuild()
+
+    assert rc.llen(CONFIG["redis"]["kooer"]["ocr"]) == 0
+    assert _state(pg, job_id) == "FAILED"
+    with pg.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM audit_log WHERE job_id = %s "
+            "AND event_type = 'DATA_INKONSISTENS'", (job_id,))
+        assert cur.fetchone()[0] == 1

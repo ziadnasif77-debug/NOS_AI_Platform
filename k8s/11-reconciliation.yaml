@@ -1,6 +1,6 @@
 # ReconciliationWorker rydder utløpte låser og markerer tapte jobber.
-# NB (kubeflow-modus): ghost-detektorens re-kø går til Redis og plukkes
-# ikke opp av KFP — slike jobber må re-trigges manuelt eller via API-et.
+# I kubeflow-modus (KJOREMODUS=kubeflow) gjenopprettes jobber ved å
+# starte en ny KFP-run — i redis-modus ved re-kø til Redis.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,6 +20,13 @@ spec:
           image: nav/reconciliation:lokal
           imagePullPolicy: IfNotPresent
           env:
+            # I kubeflow-modus starter reconciliation KFP-runs i stedet
+            # for Redis-push — stegene er idempotente, så full re-kjøring
+            # fra preprocess er trygg uansett hvor jobben stoppet.
+            - name: KJOREMODUS
+              value: redis
+            - name: KFP_ENDPOINT
+              value: http://ml-pipeline:8888
             - name: REDIS_URL
               value: redis://redis:6379/0
             - name: POSTGRES_URL

@@ -57,6 +57,35 @@ def _idempotens_nokkel(innhold: bytes) -> str:
     return hashlib.sha256(innhold + str(tidsbøtte).encode()).hexdigest()
 
 
+def _valider_job_id(job_id: str) -> str:
+    """Ugyldig UUID skal gi 422 — ikke 500 fra Postgres."""
+    try:
+        return str(uuid.UUID(job_id))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=422, detail="Ugyldig job_id — må være UUID")
+
+
+def _idempotent_svar(pg, idempotens_nokkel: str):
+    """Slår opp eksisterende jobb for nøkkelen og bygger 200-responsen."""
+    with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT job_id, state FROM jobs WHERE idempotency_key = %s",
+            (idempotens_nokkel,),
+        )
+        rad = cur.fetchone()
+    if rad is None:
+        return None
+    return JSONResponse(
+        status_code=200,
+        content={
+            "job_id": str(rad["job_id"]),
+            "state": rad["state"],
+            "idempotent": True,
+            "sjekk_status": f"/jobb/{rad['job_id']}",
+        },
+    )
+
+
 # ------------------------------------------------------------------ #
 #  POST /last-opp/                                                    #
 # ------------------------------------------------------------------ #
@@ -75,26 +104,14 @@ async def last_opp(fil: UploadFile = File(...)):
     idempotens_nokkel = _idempotens_nokkel(innhold)
 
     pg = _pg()
+    fil_sti = None
+    committet = False
     try:
         pg.autocommit = False
 
-        with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT job_id, state FROM jobs WHERE idempotency_key = %s",
-                (idempotens_nokkel,),
-            )
-            eksisterende = cur.fetchone()
-
-        if eksisterende:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "job_id": str(eksisterende["job_id"]),
-                    "state": eksisterende["state"],
-                    "idempotent": True,
-                    "sjekk_status": f"/jobb/{eksisterende['job_id']}",
-                },
-            )
+        eksisterende = _idempotent_svar(pg, idempotens_nokkel)
+        if eksisterende is not None:
+            return eksisterende
 
         job_id = str(uuid.uuid4())
         fil_sti = Path(INNTAK_STI) / f"{job_id}.pdf"
@@ -134,6 +151,7 @@ async def last_opp(fil: UploadFile = File(...)):
         # If the process crashes between commit and rpush, the ghost detector
         # will re-queue the job within reconciliation.ghost_timeout_minutter.
         pg.commit()
+        committet = True
 
         if KJOREMODUS == "kubeflow":
             _start_kfp_kjoring(job_id)
@@ -155,8 +173,25 @@ async def last_opp(fil: UploadFile = File(...)):
             },
         )
 
+    except psycopg2.errors.UniqueViolation:
+        # To samtidige opplastinger av samme fil: den andre taper
+        # INSERT-kappløpet — svar idempotent i stedet for 500.
+        pg.rollback()
+        if fil_sti is not None:
+            Path(fil_sti).unlink(missing_ok=True)
+        svar = _idempotent_svar(pg, idempotens_nokkel)
+        if svar is not None:
+            return svar
+        raise HTTPException(status_code=409, detail="Samtidig opplasting — prøv igjen")
+    except HTTPException:
+        pg.rollback()
+        raise
     except Exception as feil:
         pg.rollback()
+        # Rydd kun bort filen hvis jobben IKKE er committet — etter commit
+        # eies filen av jobben (ghost-detektoren re-køer den).
+        if fil_sti is not None and not committet:
+            Path(fil_sti).unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=str(feil))
     finally:
         pg.close()
@@ -168,11 +203,13 @@ async def last_opp(fil: UploadFile = File(...)):
 
 @ruter.get("/jobb/{job_id}")
 async def hent_jobb(job_id: str):
+    job_id = _valider_job_id(job_id)
     pg = _pg()
     try:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT job_id, state, file_name, created_at, updated_at FROM jobs WHERE job_id = %s",
+                "SELECT job_id, state, file_name, created_at, updated_at, completed_at "
+                "FROM jobs WHERE job_id = %s",
                 (job_id,),
             )
             rad = cur.fetchone()
@@ -193,6 +230,7 @@ async def hent_jobb(job_id: str):
 
 @ruter.get("/resultat/{job_id}")
 async def hent_resultat(job_id: str):
+    job_id = _valider_job_id(job_id)
     pg = _pg()
     try:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -215,6 +253,7 @@ async def hent_resultat(job_id: str):
 
 @ruter.get("/resultat/{job_id}/felter")
 async def hent_felter(job_id: str):
+    job_id = _valider_job_id(job_id)
     """
     Flat, stabil forretningskontrakt for RPA-klienter (UiPath o.l.).
     409 til jobben er DONE — roboten poller /jobb/{id} først.
@@ -285,6 +324,7 @@ async def hent_felter(job_id: str):
 
 @ruter.get("/audit/{job_id}")
 async def hent_audit(job_id: str):
+    job_id = _valider_job_id(job_id)
     pg = _pg()
     try:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

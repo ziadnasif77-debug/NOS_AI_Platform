@@ -1,0 +1,76 @@
+# CI: enhetstester + integrasjonstester mot ekte Postgres/Redis
+# + validering av compose- og K8s-manifester.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  tester:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nav
+          POSTGRES_PASSWORD: nav
+          POSTGRES_DB: nav_archive
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nav"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer avhengigheter
+        run: |
+          pip install --quiet pytest pyyaml pydantic psycopg2-binary redis \
+            fastapi httpx python-multipart uvicorn requests \
+            opencv-python-headless numpy prometheus-client "PyJWT[crypto]"
+
+      - name: Enhetstester
+        run: python -m pytest tester/ -q --ignore=tester/test_integrasjon_lokal.py
+
+      - name: Initialiser databaseskjema
+        env:
+          POSTGRES_URL: postgresql://nav:nav@localhost:5432/nav_archive
+        run: python skript/init_db.py
+
+      - name: Integrasjonstester (ekte Postgres + Redis)
+        env:
+          POSTGRES_URL: postgresql://nav:nav@localhost:5432/nav_archive
+          REDIS_URL: redis://localhost:6379/0
+          INTEGRASJONSTEST: "1"
+        run: python -m pytest tester/test_integrasjon_lokal.py -q
+
+      - name: Valider docker-compose
+        run: docker compose config -q
+
+      - name: Valider Kubernetes-manifester
+        run: |
+          python - <<'EOF'
+          import yaml
+          from pathlib import Path
+          for fil in sorted(Path("k8s").glob("*.yaml")):
+              for dok in yaml.safe_load_all(fil.read_text()):
+                  assert dok is not None, f"tomt dokument i {fil}"
+          print("alle k8s-manifester er gyldig YAML")
+          EOF

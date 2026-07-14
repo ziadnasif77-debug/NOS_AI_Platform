@@ -2,6 +2,7 @@ services:
   # ─── Nye lagdelte tjenester ─────────────────────────────────────────────────
 
   lag0:
+    profiles: [legacy]
     build: ./tjenester/lag0_kvalitet
     volumes:
       - ./config:/config
@@ -14,6 +15,7 @@ services:
     restart: unless-stopped
 
   lag1:
+    profiles: [legacy]
     build: ./tjenester/lag1_klassifisering
     volumes:
       - ./config:/config
@@ -26,6 +28,7 @@ services:
     restart: unless-stopped
 
   lag2:
+    profiles: [legacy]
     build: ./tjenester/lag2_ocr
     volumes:
       - ./config:/config
@@ -48,6 +51,7 @@ services:
     restart: unless-stopped
 
   lag3:
+    profiles: [legacy]
     build: ./tjenester/lag3_nlp
     volumes:
       - ./config:/config
@@ -68,6 +72,7 @@ services:
     restart: unless-stopped
 
   lag4:
+    profiles: [legacy]
     build: ./tjenester/lag4_validering
     volumes:
       - ./config:/config
@@ -79,6 +84,7 @@ services:
     restart: unless-stopped
 
   lag5:
+    profiles: [legacy]
     build: ./tjenester/lag5_kryssvalidering
     volumes:
       - ./config:/config
@@ -92,6 +98,7 @@ services:
     restart: unless-stopped
 
   ruter:
+    profiles: [legacy]
     build: ./tjenester/ruter
     volumes:
       - ./config:/config

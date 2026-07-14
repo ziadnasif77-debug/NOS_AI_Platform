@@ -12,6 +12,12 @@ import numpy as np
 
 sys.path.insert(0, "/app")
 from delt.verktøy import konfigurer_logging
+from delt.autentisering import sjekk_forespoersel
+from delt import metrikker
+try:
+    from fusjon import rrf_fusjoner          # container: /app/fusjon.py
+except ImportError:
+    from tjenester.sok.fusjon import rrf_fusjoner  # repo-kjøring/tester
 
 logger = konfigurer_logging("sok-tjeneste")
 
@@ -22,7 +28,7 @@ if not API_NOKKEL:
         "Sett miljøvariabelen API_NOKKEL i produksjon."
     )
 
-AAPNE_STIER_SOK = {"/helse"}
+AAPNE_STIER_SOK = {"/helse", "/metrics"}
 
 MODELLER_STI = os.environ.get("MODELLER_STI", "/modeller")
 MILVUS_VERT = os.environ.get("MILVUS_VERT", "milvus")
@@ -39,9 +45,13 @@ _samling = None
 _embedding_modell = None
 _embedding_tilgjengelig = False
 
-bm25_korpus: list = []
-bm25_fil_ids: list = []
+# BM25 holdes i minnet med lazy rebuild: innsetting markerer indeksen
+# som skitten, og den gjenoppbygges først ved neste søk. Dette fjerner
+# O(N)-rebuild per dokument. Ved millionvolum skal BM25 flyttes til
+# Milvus sparse-vektorer — se docs/HYBRID_ARKITEKTUR.md.
+_bm25_dokumenter: list = []       # [{"fil_id": ..., "tekst": ...}]
 bm25_indeks = None
+_bm25_skitten = False
 _bm25_lås = threading.Lock()
 
 
@@ -110,7 +120,7 @@ def _last_embedding_modell():
 
 
 def _gjenoppbygg_bm25(samling) -> None:
-    global bm25_indeks, bm25_korpus, bm25_fil_ids
+    global bm25_indeks, _bm25_dokumenter, _bm25_skitten
     try:
         samling.load()
         hentet = []
@@ -128,11 +138,14 @@ def _gjenoppbygg_bm25(samling) -> None:
             offset += len(batch)
             if len(batch) < grense:
                 break
-        bm25_korpus = [d["tekst"].split() for d in hentet]
-        bm25_fil_ids = [d["fil_id"] for d in hentet]
-        if bm25_korpus:
-            bm25_indeks = BM25Okapi(bm25_korpus)
-        logger.info("BM25 gjenoppbygd: %d dokumenter.", len(bm25_korpus))
+        with _bm25_lås:
+            _bm25_dokumenter = [
+                {"fil_id": d["fil_id"], "tekst": d["tekst"]} for d in hentet
+            ]
+            if _bm25_dokumenter:
+                bm25_indeks = BM25Okapi([d["tekst"].split() for d in _bm25_dokumenter])
+            _bm25_skitten = False
+        logger.info("BM25 gjenoppbygd: %d dokumenter.", len(_bm25_dokumenter))
     except Exception as feil:
         logger.warning("BM25-gjenoppbygging feilet (fortsetter med tom indeks): %s", feil)
 
@@ -173,17 +186,23 @@ app = FastAPI(title="NAV Soketjeneste", lifespan=lifespan)
 
 @app.middleware("http")
 async def api_nokkel_middleware(forespørsel: Request, neste):
-    """Krev X-API-Key header på alle endepunkter unntatt /helse."""
-    if API_NOKKEL:
-        sti = forespørsel.url.path
-        if sti not in AAPNE_STIER_SOK:
-            nokkel = forespørsel.headers.get("X-API-Key", "")
-            if nokkel != API_NOKKEL:
-                return JSONResponse(
-                    {"feil": "Ugyldig eller manglende API-nøkkel"},
-                    status_code=401,
-                )
+    """
+    Krev X-API-Key header på alle endepunkter unntatt /helse og /metrics.
+    Bruker delt.autentisering (konstant-tid-sammenligning, OIDC-støtte).
+    """
+    sti = forespørsel.url.path
+    if sti not in AAPNE_STIER_SOK:
+        feil = sjekk_forespoersel(forespørsel.headers, API_NOKKEL)
+        if feil:
+            return JSONResponse({"feil": feil}, status_code=401)
     return await neste(forespørsel)
+
+
+@app.get("/metrics")
+async def metrics():
+    from fastapi.responses import Response
+    payload, content_type = metrikker.metrikk_tekst()
+    return Response(content=payload, media_type=content_type)
 
 
 # ------------------------------------------------------------------ #
@@ -205,11 +224,17 @@ def _krev_milvus():
 @app.post("/indekser")
 async def indekser(data: dict):
     _krev_milvus()
-    global bm25_indeks, bm25_korpus, bm25_fil_ids
+    global bm25_indeks, _bm25_dokumenter, _bm25_skitten
     tekst = data.get("tekst", "")
     metadata = data.get("metadata", {})
+    fil_id = metadata.get("fil_id", "")
+    if not fil_id or not fil_id.replace("-", "").isalnum() or len(fil_id) > 200:
+        raise HTTPException(status_code=400, detail="Ugyldig fil_id")
     try:
         vektor = _embedding_modell.encode(tekst[:2048], normalize_embeddings=True).tolist()
+        # Idempotent indeksering: fjern eventuell gammel versjon først —
+        # retries fra routing-workeren skal ikke gi duplikater i søket.
+        _samling.delete(f'fil_id == "{fil_id}"')
         _samling.insert([{
             "fil_id":       metadata.get("fil_id", ""),
             "filnavn":      data.get("filnavn", ""),
@@ -223,11 +248,11 @@ async def indekser(data: dict):
             "vektor":       vektor,
         }])
         with _bm25_lås:
-            bm25_korpus.append(tekst.split())
-            bm25_fil_ids.append(metadata.get("fil_id", ""))
-            bm25_indeks = BM25Okapi(bm25_korpus)
+            _bm25_dokumenter = [d for d in _bm25_dokumenter if d["fil_id"] != fil_id]
+            _bm25_dokumenter.append({"fil_id": fil_id, "tekst": tekst})
+            _bm25_skitten = True   # lazy rebuild ved neste søk — ikke O(N) per insert
         _samling.flush()
-        return {"status": "indeksert", "fil_id": metadata.get("fil_id")}
+        return {"status": "indeksert", "fil_id": fil_id}
     except HTTPException:
         raise
     except Exception as feil:
@@ -260,7 +285,11 @@ async def sok(data: dict):
             sok_kwargs["expr"] = uttrykk
         vektor_resultater = _samling.search(**sok_kwargs)
         bm25_resultater = _bm25_sok(sporsmal, antall * 3)
-        kombinerte = _rrf_fusjoner(vektor_resultater[0], bm25_resultater)[:antall]
+        with _bm25_lås:
+            dokumenter = list(_bm25_dokumenter)
+        kombinerte = rrf_fusjoner(
+            vektor_resultater[0], bm25_resultater, dokumenter
+        )[:antall]
         return {"resultater": kombinerte, "totalt": len(kombinerte)}
     except HTTPException:
         raise
@@ -277,7 +306,7 @@ async def helse():
         "tjeneste": "sok",
         "milvus": "tilgjengelig" if _milvus_tilgjengelig else "utilgjengelig",
         "embedding_modell": "klar" if _embedding_tilgjengelig else "utilgjengelig",
-        "dokumenter_i_bm25": len(bm25_korpus),
+        "dokumenter_i_bm25": len(_bm25_dokumenter),
     }
 
 
@@ -286,7 +315,7 @@ async def statistikk():
     _krev_milvus()
     return {
         "totalt_dokumenter": _samling.num_entities,
-        "bm25_dokumenter": len(bm25_korpus),
+        "bm25_dokumenter": len(_bm25_dokumenter),
     }
 
 
@@ -328,22 +357,16 @@ def _bygg_filter(filtre: dict) -> str:
 
 
 def _bm25_sok(sporsmal: str, antall: int) -> list:
-    if bm25_indeks is None:
+    global bm25_indeks, _bm25_skitten
+    with _bm25_lås:
+        if _bm25_skitten and _bm25_dokumenter:
+            bm25_indeks = BM25Okapi([d["tekst"].split() for d in _bm25_dokumenter])
+            _bm25_skitten = False
+        indeks = bm25_indeks
+    if indeks is None:
         return []
-    poeng = bm25_indeks.get_scores(sporsmal.split())
+    poeng = indeks.get_scores(sporsmal.split())
     return list(np.argsort(poeng)[::-1][:antall])
-
-
-def _rrf_fusjoner(vektor_treff: list, bm25_treff: list, k: int = 60) -> list:
-    poeng: dict = {}
-    for rang, treff in enumerate(vektor_treff):
-        fil_id = treff.entity.get("fil_id")
-        poeng[fil_id] = poeng.get(fil_id, 0) + 1.0 / (k + rang + 1)
-    for rang, indeks in enumerate(bm25_treff):
-        if indeks < len(bm25_fil_ids):
-            fil_id = bm25_fil_ids[indeks]
-            poeng[fil_id] = poeng.get(fil_id, 0) + 1.0 / (k + rang + 1)
-    return sorted(poeng.items(), key=lambda x: x[1], reverse=True)
 
 
 if __name__ == "__main__":

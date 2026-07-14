@@ -60,7 +60,8 @@ def test_sok_tjeneste_gir_advarsel_uten_api_nokkel():
 def test_helse_er_eneste_aapne_sti_i_sok():
     """Soketjenesten: kun /helse er åpent."""
     src = _les("tjenester/sok/hoved.py")
-    assert 'AAPNE_STIER_SOK = {"/helse"}' in src
+    # /metrics er åpen for Prometheus-scraping — bevisst unntak
+    assert 'AAPNE_STIER_SOK = {"/helse", "/metrics"}' in src
 
 
 # ------------------------------------------------------------------ #

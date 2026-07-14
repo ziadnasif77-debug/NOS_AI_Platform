@@ -6,7 +6,6 @@ import sys
 import os
 import logging
 import socket
-import threading
 
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
@@ -17,15 +16,10 @@ from tjenester.workers.base_worker import BaseWorker
 logger = logging.getLogger(__name__)
 
 WORKER_ID = f"lag1-{socket.gethostname()}"
-_GPU_SEM = None
 
-
-def _gpu_semaphore():
-    global _GPU_SEM
-    if _GPU_SEM is None:
-        maks = CONFIG["gpu"].get("maks_ocr_jobber", 2)
-        _GPU_SEM = threading.Semaphore(maks)
-    return _GPU_SEM
+# NB: GPU-samtidighet begrenses av antall worker-replicas og K8s
+# GPU-limits — en in-process-semafor i en enkelt-trådet worker
+# begrenset ingenting og er fjernet.
 
 
 class OCRWorker(BaseWorker):
@@ -66,10 +60,9 @@ class OCRWorker(BaseWorker):
         dokumenttype = preprocess.document_type
         terskel = CONFIG["terskler"]["ocr_konfidens"] / 100.0
 
-        with _gpu_semaphore():
-            tekst, konfidens, tokens, bokser, modell = self._kjor_ocr(
-                fil_sti, dokumenttype
-            )
+        tekst, konfidens, tokens, bokser, modell = self._kjor_ocr(
+            fil_sti, dokumenttype
+        )
 
         godkjent = konfidens >= terskel
         if not godkjent:

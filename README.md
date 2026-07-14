@@ -109,7 +109,7 @@ UPLOADED → QUEUED → PREPROCESSING → OCR_PROCESSING → NLP_PROCESSING → 
 
 | Overgang | Utløser |
 |----------|---------|
-| `UPLOADED → QUEUED` | API etter redis rpush |
+| `UPLOADED → QUEUED` | API (commit før redis rpush) |
 | `QUEUED → PREPROCESSING` | PreprocessingWorker blpop |
 | `PREPROCESSING → OCR_PROCESSING` | OCRWorker blpop |
 | `OCR_PROCESSING → NLP_PROCESSING` | NLPWorker blpop |
@@ -136,7 +136,7 @@ Abstrakt basisklasse alle workers arver:
 - Sender til Label Studio prosjekt 1 hvis kvalitet < terskel
 
 ### OCRWorker
-- GPU-semaphore: maks `CONFIG["gpu"]["maks_ocr_jobber"]` samtidige
+- GPU-samtidighet styres av worker-replicas + K8s GPU-limits (in-process-semafor fjernet — no-op i enkelt-trådet worker)
 - Ruter til riktig modell basert på dokumenttype
 - Sender til Label Studio prosjekt 2 ved lav konfidens
 
@@ -496,7 +496,7 @@ make label-studio            # Åpne Label Studio (http://localhost:8080)
 
 ## Testing
 
-### Enhetstester (167 totalt: 141 enhet + 26 integrasjon)
+### Enhetstester (218 totalt: 181 enhet + 37 integrasjon)
 
 ```bash
 python -m pytest tester/ -v
@@ -518,6 +518,8 @@ python -m pytest tester/ -v
 | `test_sec_rel_obs.py` | API-auth, FNR-fjerning, commit-før-push, audit-synlighet |
 | `test_hardening.py` | Env-overrides, DB-feilhåndtering, config-opprydding |
 | `test_kubeflow_modus.py` | kfp_steg, KJOREMODUS-gating, K8s-manifester |
+| `test_observabilitet_auth.py` | Prometheus-metrikker, OIDC (ekte JWT-validering) |
+| `test_audit_fikser.py` | Regresjon for audit-funn: lås/retry, rebuild-kontrakt, RRF-dokumenter, OIDC-roller |
 
 ### Integrasjonstester (ekte Postgres + Redis, ingen mocks)
 
@@ -529,7 +531,7 @@ REDIS_URL=redis://localhost:6379/0 \
 INTEGRASJONSTEST=1 python -m pytest tester/test_integrasjon_lokal.py -v
 ```
 
-**Verifiserte scenarioer** (`test_integrasjon_lokal.py`, 26 tester):
+**Verifiserte scenarioer** (`test_integrasjon_lokal.py`, 37 tester) — utdrag:
 
 | # | Scenario | Verifisert |
 |---|----------|------------|
@@ -597,7 +599,8 @@ komplett audit-spor. NLP-steget ble simulert med injisert resultat
 - **Offline:** Alle AI-modeller kjører lokalt — ingen data forlater serveren
 - **Autentisering (to moduser via `AUTH_MODUS`):**
   - `api_nokkel` (standard): `X-API-Key` på alle endepunkter unntatt `/helse` og `/metrics` — sammenlignet i konstant tid (`hmac.compare_digest`, mot timing-angrep)
-  - `oidc`: Bearer-token (JWT) validert mot institusjonens identitetsleverandør (Azure AD, Maskinporten, Keycloak, …). Sett `OIDC_JWKS_URL`, `OIDC_ISSUER` og `OIDC_AUDIENCE`. Signatur, utløp, issuer og audience verifiseres per forespørsel; JWKS-nøkler caches.
+  - `oidc`: Bearer-token (JWT) validert mot institusjonens identitetsleverandør. Valgfri autorisasjon: `OIDC_PAAKREVD_ROLLE` krever rollen i tokenets `roles`-claim (Azure AD, Maskinporten, Keycloak, …). Sett `OIDC_JWKS_URL`, `OIDC_ISSUER` og `OIDC_AUDIENCE`. Signatur, utløp, issuer og audience verifiseres per forespørsel; JWKS-nøkler caches.
+- **CORS:** `CORS_ORIGINS` (kommaseparert) begrenser tillatte opphav i produksjon
 - **Audit-logg:** Slettes aldri (NAV-krav) — komplett sporbarhet for alle tilstandsskifter
 - **Idempotens:** Duplikate opplastinger gir ingen duplikate jobber
 - **GDPR:** Fødselsnummer, navn og adresse behandles kun internt — validering via Mod11 uten ekstern oppkobling. Fødselsnummer lagres ikke i søkeindeksen (Milvus).

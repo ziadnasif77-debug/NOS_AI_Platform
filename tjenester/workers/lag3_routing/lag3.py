@@ -7,10 +7,10 @@ import os
 import json
 import logging
 import socket
-import threading
 
 import psycopg2
 import psycopg2.extras
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
@@ -119,15 +119,15 @@ class RoutingWorker(BaseWorker):
             )
         pg.commit()
 
+    # Avgrenset pool i stedet for én tråd per dokument — hindrer
+    # trådeksplosjon under last. Køen i poolen gir naturlig backpressure.
+    _indekserings_pool = ThreadPoolExecutor(
+        max_workers=4, thread_name_prefix="milvus-indeksering"
+    )
+
     def _send_til_milvus(self, job_id: str, nlp_res):
-        """Starter Milvus-indeksering i bakgrunnstråd — blokkerer ikke worker."""
-        t = threading.Thread(
-            target=self._send_til_milvus_sync,
-            args=(job_id, nlp_res),
-            daemon=True,
-            name=f"milvus-{job_id[:8]}",
-        )
-        t.start()
+        """Milvus-indeksering i avgrenset bakgrunnspool — blokkerer ikke worker."""
+        self._indekserings_pool.submit(self._send_til_milvus_sync, job_id, nlp_res)
 
     def _send_til_milvus_sync(self, job_id: str, nlp_res):
         import requests as req
@@ -158,6 +158,10 @@ class RoutingWorker(BaseWorker):
                 if forsok < 3:
                     _time.sleep(forsok * 2)
         logger.error("Milvus-indeksering feilet etter 3 forsøk for job_id=%s", job_id)
+        # Varig spor: uten dette forsvinner APPROVED-dokumenter stille
+        # fra søket. Audit-recorden gjør tapet synlig og re-indekserbart.
+        self._audit(job_id, "INDEKSERING_FEILET",
+                    details={"grunn": "milvus_utilgjengelig", "forsok": 3})
 
 
 if __name__ == "__main__":

@@ -160,10 +160,17 @@ class BaseWorker(ABC):
                 raise UgyldigTilstandsovergang(
                     f"{gjeldende} → {ny_tilstand} er ikke tillatt"
                 )
-            cur.execute(
-                "UPDATE jobs SET state = %s, updated_at = NOW() WHERE job_id = %s",
-                (ny_tilstand, job_id),
-            )
+            if ny_tilstand in TERMINAL_TILSTANDER:
+                cur.execute(
+                    "UPDATE jobs SET state = %s, updated_at = NOW(), "
+                    "completed_at = NOW() WHERE job_id = %s",
+                    (ny_tilstand, job_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE jobs SET state = %s, updated_at = NOW() WHERE job_id = %s",
+                    (ny_tilstand, job_id),
+                )
             self._audit(job_id, "STATE_ENDRING", from_state=gjeldende,
                         to_state=ny_tilstand, pg=pg)
 
@@ -217,16 +224,51 @@ class BaseWorker(ABC):
         retry_count = job.get("retry_count", 0)
         max_retries = CONFIG["redis"].get("max_retries", 3)
 
-        if retry_count < max_retries:
+        # Varig forsøkstelling i Postgres: payloadens retry_count går tapt
+        # når reconciliation re-køer jobben — jobs.attempt_count gjør ikke
+        # det. Uten denne ville en giftig jobb aldri nå DLQ (evig løkke
+        # stuck → re-kø → feil → stuck).
+        db_forsok = self._tell_forsok(job_id, error, pg)
+
+        if retry_count < max_retries and db_forsok <= max_retries:
             backoff = BACKOFF[min(retry_count, len(BACKOFF) - 1)]
             job["retry_count"] = retry_count + 1
             self._audit(job_id, "RETRY", details={"retry": retry_count + 1,
+                                                   "forsok_totalt": db_forsok,
                                                    "feil": str(error)})
             metrikker.tell_jobb(self.queue_name, "retry")
+            # Frigi låsen FØR re-kø — ellers blir retry-meldingen konsumert
+            # og forkastet av _las_jobb mens låsen fortsatt er aktiv.
+            try:
+                self._frigi_las(job_id, pg)
+                pg.commit()
+            except Exception as las_exc:
+                logger.error("Kunne ikke frigi lås for %s: %s", job_id, las_exc)
             time.sleep(backoff)
             self._redis.rpush(self.queue_name, json.dumps(job))
         else:
-            self._send_til_dlq(job, error, retry_count, pg)
+            self._send_til_dlq(job, error, max(retry_count, db_forsok), pg)
+
+    def _tell_forsok(self, job_id: str, error: Exception, pg) -> int:
+        """Øker jobs.attempt_count og lagrer siste feil. Returnerer ny verdi."""
+        try:
+            with pg.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE jobs
+                    SET attempt_count = attempt_count + 1, last_error = %s
+                    WHERE job_id = %s
+                    RETURNING attempt_count
+                    """,
+                    (str(error)[:2000], job_id),
+                )
+                rad = cur.fetchone()
+            pg.commit()
+            return rad[0] if rad else 1
+        except Exception as exc:
+            logger.error("Kunne ikke oppdatere attempt_count for %s: %s", job_id, exc)
+            pg.rollback()
+            return 1
 
     def _send_til_dlq(self, job: dict, error: Exception, retry_count: int, pg):
         job_id = job["job_id"]
@@ -261,10 +303,17 @@ class BaseWorker(ABC):
     def _oppdater_state_direkte(self, job_id: str, ny_tilstand: str, fra_tilstand: str = None):
         with psycopg2.connect(self._pg_url) as pg:
             with pg.cursor() as cur:
-                cur.execute(
-                    "UPDATE jobs SET state = %s, updated_at = NOW() WHERE job_id = %s",
-                    (ny_tilstand, job_id),
-                )
+                if ny_tilstand in TERMINAL_TILSTANDER:
+                    cur.execute(
+                        "UPDATE jobs SET state = %s, updated_at = NOW(), "
+                        "completed_at = NOW() WHERE job_id = %s",
+                        (ny_tilstand, job_id),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE jobs SET state = %s, updated_at = NOW() WHERE job_id = %s",
+                        (ny_tilstand, job_id),
+                    )
             pg.commit()
 
     # ------------------------------------------------------------------ #

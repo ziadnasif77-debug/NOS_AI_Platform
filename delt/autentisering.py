@@ -8,10 +8,12 @@ AUTH_MODUS styrer mekanismen:
                           (Azure AD, Maskinporten, Keycloak, …)
 
 OIDC-miljøvariabler:
-  OIDC_JWKS_URL  — utstederens JWKS-endepunkt
-                   (f.eks. https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys)
-  OIDC_ISSUER    — forventet «iss»-claim
-  OIDC_AUDIENCE  — forventet «aud»-claim
+  OIDC_JWKS_URL       — utstederens JWKS-endepunkt
+                        (f.eks. https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys)
+  OIDC_ISSUER         — forventet «iss»-claim
+  OIDC_AUDIENCE       — forventet «aud»-claim
+  OIDC_PAAKREVD_ROLLE — valgfri: rolle som må finnes i «roles»-claimet
+                        (autorisasjon, ikke bare autentisering)
 """
 import os
 import hmac
@@ -58,11 +60,20 @@ def sjekk_forespoersel(headers, api_nokkel: str):
         if not auth.startswith("Bearer "):
             return "Manglende Bearer-token"
         try:
-            valider_oidc_token(auth[len("Bearer "):])
-            return None
+            krav = valider_oidc_token(auth[len("Bearer "):])
         except Exception as exc:
             logger.warning("OIDC-validering feilet: %s", exc)
             return "Ugyldig token"
+        # Autorisasjon: gyldig token er ikke nok hvis en rolle kreves
+        paakrevd_rolle = os.environ.get("OIDC_PAAKREVD_ROLLE")
+        if paakrevd_rolle:
+            roller = krav.get("roles") or []
+            if isinstance(roller, str):
+                roller = roller.split()
+            if paakrevd_rolle not in roller:
+                logger.warning("Token mangler påkrevd rolle %r", paakrevd_rolle)
+                return "Manglende rolle"
+        return None
 
     # api_nokkel-modus: tom nøkkel = åpen (utvikling) — advares ved oppstart
     if not api_nokkel:

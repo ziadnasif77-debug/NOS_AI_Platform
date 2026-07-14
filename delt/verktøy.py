@@ -8,6 +8,8 @@ from pathlib import Path
 def konfigurer_logging(tjenestenavn: str) -> logging.Logger:
     logger = logging.getLogger(tjenestenavn)
     logger.setLevel(logging.INFO)
+    if logger.handlers:   # unngå duplikate handlers ved gjentatte kall
+        return logger
     handler = logging.StreamHandler()
     formatter = logging.Formatter(
         f"%(asctime)s [{tjenestenavn}] %(levelname)s: %(message)s",

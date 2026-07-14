@@ -149,13 +149,12 @@ def test_cv2_fallback_kode_inneholder_advarsel():
 #  M3 — Milvus-indeksering blokkerer ikke worker                      #
 # ------------------------------------------------------------------ #
 
-def test_send_til_milvus_starter_daemon_thread():
-    """_send_til_milvus skal starte en daemon-tråd, ikke blokkere."""
+def test_send_til_milvus_bruker_avgrenset_pool():
+    """_send_til_milvus skal bruke avgrenset pool (M3) — ikke én tråd
+    per dokument, og ikke blokkere workeren."""
     src = _les("tjenester/workers/lag3_routing/lag3.py")
-    assert "threading.Thread" in src, \
-        "_send_til_milvus skal bruke threading.Thread"
-    assert "daemon=True" in src, \
-        "Milvus-tråden skal være daemon slik at den ikke hindrer prosessen i å avslutte"
+    assert "ThreadPoolExecutor" in src, \
+        "_send_til_milvus skal bruke avgrenset ThreadPoolExecutor"
     assert "_send_til_milvus_sync" in src, \
         "Synkron logikk skal være i _send_til_milvus_sync"
 

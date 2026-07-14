@@ -16,9 +16,12 @@ from delt import metrikker
 logger = konfigurer_logging("api-tjeneste")
 app = FastAPI(title="NAV Archive API")
 
+# CORS: sett CORS_ORIGINS (kommaseparert) i produksjon — «*» er kun
+# akseptabelt for lokal utvikling.
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

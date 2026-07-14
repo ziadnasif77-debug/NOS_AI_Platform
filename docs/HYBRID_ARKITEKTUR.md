@@ -107,7 +107,8 @@ tilstandsmaskin. Bytte frem/tilbake = én miljøvariabel + rollout.
 
 | Strategi | Løsning |
 |----------|---------|
-| **Kø** | Redis lists (rpush/blpop) — enkelt, raskt, rebuildes fra Postgres (`rebuild_redis.py`). Redis Streams er neste steg hvis consumer groups trengs |
+| **Kø** | Redis lists (rpush/blpop) — enkelt, raskt, rebuildes fra Postgres (`rebuild_redis.py`, samme payload-kontrakt som reconciliation). Redis Streams er neste steg hvis consumer groups trengs |
+| **BM25** | In-memory med lazy rebuild (skitten-flagg) — OK opp til ~100k dokumenter. Ved millionvolum: flytt til Milvus sparse-BM25 (arkitektur-beslutning, planlagt) |
 | **Caching** | Modeller: lastet én gang per worker-prosess. Idempotens: sha256 + 5-min-bøtte i Postgres. JWKS-nøkler: cachet i prosess |
 | **Retry** | 3 forsøk med backoff 1s/3s/10s per steg, teller i payload |
 | **DLQ** | `dead_letter_queue`-tabell (payload-snapshot + feiltype) + Redis-speil + `FAILED`-state + audit |

@@ -7,3 +7,4 @@ numpy
 requests
 pydantic
 torch
+prometheus-client

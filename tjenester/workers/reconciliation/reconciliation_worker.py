@@ -74,7 +74,7 @@ class ReconciliationWorker:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT job_id, state, file_path
+                SELECT job_id, state, file_path, attempt_count
                 FROM jobs
                 WHERE locked_by IS NOT NULL
                   AND lock_expiry < NOW()
@@ -87,6 +87,7 @@ class ReconciliationWorker:
             self._frigi_og_re_koe_atomisk(
                 rad["job_id"], rad["state"], rad.get("file_path"), pg,
                 audit_event="RECONCILIATION_STUCK",
+                attempt_count=rad.get("attempt_count") or 0,
             )
 
         return len(rader)
@@ -100,7 +101,7 @@ class ReconciliationWorker:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT job_id, state, file_path
+                SELECT job_id, state, file_path, attempt_count
                 FROM jobs
                 WHERE state NOT IN ('DONE', 'FAILED', 'UPLOADED')
                   AND locked_by IS NULL
@@ -120,6 +121,7 @@ class ReconciliationWorker:
                 self._frigi_og_re_koe_atomisk(
                     rad["job_id"], rad["state"], rad.get("file_path"), pg,
                     audit_event="RECONCILIATION_GHOST",
+                    attempt_count=rad.get("attempt_count") or 0,
                 )
                 antall += 1
 
@@ -134,7 +136,7 @@ class ReconciliationWorker:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT job_id, file_path
+                SELECT job_id, file_path, attempt_count
                 FROM jobs
                 WHERE state = 'UPLOADED'
                   AND created_at < %s
@@ -147,7 +149,8 @@ class ReconciliationWorker:
             job_id = rad["job_id"]
             fil_sti = rad.get("file_path", "")
             ko_nokkel = CONFIG["redis"]["kooer"]["preprocess"]
-            payload = json.dumps({"job_id": str(job_id), "fil_sti": fil_sti})
+            payload = {"job_id": str(job_id), "fil_sti": fil_sti,
+                       "retry_count": rad.get("attempt_count") or 0}
 
             # Atomisk: state-oppdatering + audit i én transaksjon
             with pg.cursor() as cur:
@@ -164,8 +167,8 @@ class ReconciliationWorker:
                      psycopg2.extras.Json({})),
                 )
             pg.commit()
-            # Redis-push etter commit — ghost detector gjenoppretter ved neste runde hvis dette feiler
-            self._redis.rpush(ko_nokkel, payload)
+            # Videresending etter commit — ghost detector gjenoppretter ved neste runde hvis dette feiler
+            self._send_videre(job_id, ko_nokkel, payload)
 
         return len(rader)
 
@@ -173,7 +176,8 @@ class ReconciliationWorker:
     #  Hjelpemetoder                                                       #
     # ------------------------------------------------------------------ #
 
-    def _frigi_og_re_koe_atomisk(self, job_id, state, file_path, pg, audit_event: str):
+    def _frigi_og_re_koe_atomisk(self, job_id, state, file_path, pg,
+                                 audit_event: str, attempt_count: int = 0):
         """
         Unlock + audit-insert i én Postgres-transaksjon, deretter Redis-push.
 
@@ -229,11 +233,42 @@ class ReconciliationWorker:
             )
         pg.commit()
 
-        # Redis-push etter vellykket commit
-        p = {"job_id": str(job_id), "fil_sti": file_path or ""}
+        # Videresending etter vellykket commit. retry_count settes fra
+        # varig attempt_count slik at giftige jobber når DLQ selv om
+        # payload-telleren gikk tapt (C1-fiksen).
+        p = {"job_id": str(job_id), "fil_sti": file_path or "",
+             "retry_count": attempt_count}
         if forrige is not None:
             p["forrige_resultat"] = forrige
-        self._redis.rpush(ko_nokkel, json.dumps(p))
+        self._send_videre(job_id, ko_nokkel, p)
+
+    def _send_videre(self, job_id, ko_nokkel, payload: dict):
+        """
+        Videresender en reparert jobb. I redis-modus: rpush til køen.
+        I kubeflow-modus: start en ny pipeline-run — stegene er idempotente
+        (fullførte steg hopper over via tilstandsmaskinen), så en full
+        re-kjøring fra preprocess er trygg uansett hvor jobben stoppet.
+        """
+        import os as _os
+        if _os.environ.get("KJOREMODUS", "redis") == "kubeflow":
+            try:
+                import kfp
+                endepunkt = _os.environ.get("KFP_ENDPOINT", "http://ml-pipeline:8888")
+                sti = _os.environ.get("KFP_PIPELINE_STI",
+                                      "/app/kubeflow/dokument_pipeline.yaml")
+                kfp.Client(host=endepunkt).create_run_from_pipeline_package(
+                    sti,
+                    arguments={"job_id": str(job_id)},
+                    run_name=f"recon-{str(job_id)[:8]}",
+                    enable_caching=False,
+                )
+                return
+            except Exception as exc:
+                logger.error(
+                    "KFP-gjenoppretting feilet for %s: %s — faller tilbake til Redis-kø",
+                    job_id, exc,
+                )
+        self._redis.rpush(ko_nokkel, json.dumps(payload))
 
     def _re_koe(self, job_id, file_path, state, ko_nokkel, pg=None):
         forrige = self._hent_forrige_resultat(job_id, state, pg) if pg else None
