@@ -501,7 +501,7 @@ make start-workers           # Start alle worker-containere
 make start-reconciliation    # Start ReconciliationWorker
 
 # ─── Tester ──────────────────────────────────────────────────────────
-make test                    # Kjør alle 64 tester
+make test                    # Kjør alle tester (250: 208 enhet + 42 integrasjon)
 make test-state-machine      # Test tilstandsmaskin
 make test-idempotency        # Test idempotens-logikk
 
@@ -546,6 +546,7 @@ python -m pytest tester/ -v
 | `test_kubeflow_modus.py` | kfp_steg, KJOREMODUS-gating, K8s-manifester |
 | `test_observabilitet_auth.py` | Prometheus-metrikker, OIDC (ekte JWT-validering) |
 | `test_audit_fikser.py` | Regresjon for audit-funn: lås/retry, rebuild-kontrakt, RRF-dokumenter, OIDC-roller |
+| `test_tekstuttrekk.py` | Deterministisk uttrekkslag: mod11-sjekksummer, mønstre for 8 felter, sammenslåing med modell-entiteter |
 
 ### Integrasjonstester (ekte Postgres + Redis, ingen mocks)
 
@@ -671,8 +672,11 @@ nav/
 ├── config/
 │   └── config.yaml                         # Sentralkonfig
 ├── delt/
-│   ├── konstanter.py                        # V2.1: STATE_OVERGANGER, LOVLIGE_OVERGANGER, REDIS_KOOER
+│   ├── konstanter.py                        # V2.1: STATE_OVERGANGER, LOVLIGE_OVERGANGER, REDIS_KOOER, NORSKE_FYLKER/YTELSER
 │   ├── skjemaer.py                          # Pydantic-modeller
+│   ├── tekstuttrekk.py                      # Deterministisk feltuttrekk: mod11, mønstre, utvid_entiteter()
+│   ├── metrikker.py                         # Prometheus-metrikker (graceful no-op uten prometheus_client)
+│   ├── autentisering.py                     # AUTH_MODUS=api_nokkel|oidc
 │   └── verktøy.py
 ├── tjenester/
 │   ├── workers/
@@ -704,6 +708,10 @@ nav/
 │   ├── test_contracts.py
 │   └── (test_config, test_lag0, test_lag4, test_ruter)
 └── docs/
-    ├── v2_1_analyse.md
-    └── v2_1_migration_guide.md
+    ├── API_INTEGRASJON.md                   # Verktøy-nøytral RPA/integrasjonsguide
+    ├── HYBRID_ARKITEKTUR.md                 # Redis-produksjon + Kubeflow-trening
+    ├── KUBEFLOW.md                          # Kubeflow-modus: oppsett og begrensninger
+    ├── kodeanalyse.md                       # Historisk kodeaudit (funn siden fikset — se README/commits)
+    ├── refaktorering_analyse.md             # Historisk funksjonskartlegging (legacy-tjenester)
+    └── v2_1_analyse.md                      # Historisk V2.1-migreringsnotat
 ```

@@ -1,5 +1,13 @@
 # NAV Archive Intelligence System — V2.1 Analyse
 
+> **Historisk migreringsnotat** fra overgangen til V2.1-arkitekturen
+> (Postgres som kilde til sannhet, BaseWorker, DLQ, reconciliation).
+> Alle punkter under «V2.1 Endringer» er fullført og er nå beskrevet
+> som gjeldende arkitektur i README.md. Siden er skrevet er systemet
+> også utvidet med flersidige PDF-er, deterministisk feltuttrekk,
+> hybrid Kubeflow-arkitektur, observability og OIDC — se README.md for
+> nåværende stand.
+
 ## Kartlegging av eksisterende kode
 
 ### `config/`

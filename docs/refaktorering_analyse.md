@@ -1,5 +1,12 @@
 # Refaktoreringsanalyse — NAV Archive Intelligence System
 
+> **Historisk øyeblikksbilde av legacy HTTP-tjenestene** (`tjenester/ocr`,
+> `tjenester/nlp`), skrevet før V2.1-worker-arkitekturen (`tjenester/workers/`)
+> ble driftssatt. Legacy-tjenestene kjører fortsatt bak `[legacy]`-profilen
+> i `docker-compose.yml`, men mottar ingen trafikk — se README.md,
+> seksjonen «Legacy-lag (null trafikk)». Kartleggingen under er beholdt
+> som referanse, ikke som beskrivelse av gjeldende produksjonsflyt.
+
 ## 1. Funksjoner i `tjenester/ocr/hoved.py`
 
 | Funksjon | Ansvar |

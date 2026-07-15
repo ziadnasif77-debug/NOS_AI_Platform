@@ -3,6 +3,16 @@ Generert av: Claude Code
 Dato: 2026-06-24
 Basert på: fullstendig scan av faktisk kildekode — ingen antagelser
 
+> **Historisk øyeblikksbilde — IKKE dagens tilstand.** Alle kritiske
+> bugs (B1-B4), funksjonsfeil (F1-F5) og arkitekturelle gap (A1-A6)
+> listet under er fikset i senere commits (self-transition, kolonne-
+> mismatch, validation→routing-gapet, LayoutLMv3/NB-BERT-uttrekk
+> erstattet av `delt/tekstuttrekk.py`, `import psycopg2.extras`, DLQ
+> for routing, m.fl.). Se README.md for gjeldende arkitektur og
+> `docs/refaktorering_analyse.md`/`v2_1_analyse.md` for tilsvarende
+> historiske notater. Dokumentet beholdes som revisjonsspor, ikke som
+> driftsdokumentasjon.
+
 ---
 
 ## DEL 1 — Systemoversikt
