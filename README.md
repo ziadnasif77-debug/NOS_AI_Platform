@@ -158,6 +158,16 @@ Abstrakt basisklasse alle workers arver:
 
 ### NLPWorker (inkluderer validering)
 - Ruter NLP-modell: PRINTED/TABLE + layout → LayoutLMv3; lang tekst → Borealis; ellers → NB-BERT
+- **Deterministisk uttrekkslag** (`delt/tekstuttrekk.py`) oppå modellene — mønstre og mod11-sjekksummer, mer presist enn NER for strukturerte felter:
+
+  | Felt | Metode |
+  |------|--------|
+  | fodselsnummer | 11 sifre + dobbel mod11-sjekksum |
+  | kontonummer | 11 sifre (ev. dddd.dd.ddddd) + konto-mod11 |
+  | dato | numeriske formater + norske månedsnavn → dd.mm.yyyy |
+  | telefon | 8 sifre, +47-prefiks, hopper over haler av fnr/konto |
+  | epost, postnummer/poststed, belop (kr/NOK), saksnummer, kontornavn (NAV-kontor) | mønstre |
+  | ytelse, fylke | nøkkelord mot kanoniske lister i `delt/konstanter.py` — erstatter den gamle «enhver ORG = ytelse»-gjetningen |
 - Intern validering (ingen HTTP): Mod11 fødselsnummer, dato 1900–innværende år (dynamisk), obligatoriske felt, norske fylker
 - Kryssvalidering (kun hvis `CONFIG["lag"]["lag5_kryssvalidering"] = true`)
 - Sender til Label Studio prosjekt 4 ved valideringsfeil
@@ -512,7 +522,7 @@ make label-studio            # Åpne Label Studio (http://localhost:8080)
 
 ## Testing
 
-### Enhetstester (222 totalt: 181 enhet + 41 integrasjon)
+### Enhetstester (250 totalt: 208 enhet + 42 integrasjon)
 
 ```bash
 python -m pytest tester/ -v

@@ -380,7 +380,9 @@ async def dokument_felter(dokument_id: str):
             })
 
         feltnavn = ["navn", "fodselsnummer", "dato", "adresse",
-                    "ytelse", "fylke", "dokumenttype", "utfall", "oppsummering"]
+                    "ytelse", "fylke", "telefon", "epost", "kontonummer",
+                    "belop", "saksnummer", "kontornavn", "postnummer",
+                    "poststed", "dokumenttype", "utfall", "oppsummering"]
         felter = {navn: None for navn in feltnavn}
         beslutninger, per_side = [], []
         for rad in sider:
@@ -393,6 +395,14 @@ async def dokument_felter(dokument_id: str):
                 "adresse": entiteter.get("adresse"),
                 "ytelse": entiteter.get("ytelse") or nlp.get("ytelse"),
                 "fylke": entiteter.get("fylke"),
+                "telefon": entiteter.get("telefon"),
+                "epost": entiteter.get("epost"),
+                "kontonummer": entiteter.get("kontonummer"),
+                "belop": entiteter.get("belop"),
+                "saksnummer": entiteter.get("saksnummer"),
+                "kontornavn": entiteter.get("kontornavn"),
+                "postnummer": entiteter.get("postnummer"),
+                "poststed": entiteter.get("poststed"),
                 "dokumenttype": nlp.get("document_class"),
                 "utfall": nlp.get("utfall"),
                 "oppsummering": nlp.get("summary"),
@@ -490,6 +500,14 @@ async def hent_felter(job_id: str):
                 "adresse": entiteter.get("adresse"),
                 "ytelse": entiteter.get("ytelse") or nlp.get("ytelse"),
                 "fylke": entiteter.get("fylke"),
+                "telefon": entiteter.get("telefon"),
+                "epost": entiteter.get("epost"),
+                "kontonummer": entiteter.get("kontonummer"),
+                "belop": entiteter.get("belop"),
+                "saksnummer": entiteter.get("saksnummer"),
+                "kontornavn": entiteter.get("kontornavn"),
+                "postnummer": entiteter.get("postnummer"),
+                "poststed": entiteter.get("poststed"),
                 "dokumenttype": nlp.get("document_class"),
                 "utfall": nlp.get("utfall"),
                 "oppsummering": nlp.get("summary"),

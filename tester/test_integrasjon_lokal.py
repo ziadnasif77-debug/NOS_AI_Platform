@@ -676,6 +676,11 @@ def test_felter_endepunkt_full_robotflyt(api_klient, pg):
     assert kropp["konfidens"]["ocr"] == 0.97
     assert kropp["gjennomgang"]["kreves"] is False
 
+    # Deterministiske felter eksponeres i kontrakten (None når ikke funnet)
+    for felt in ["telefon", "epost", "kontonummer", "belop",
+                 "saksnummer", "kontornavn", "postnummer", "poststed"]:
+        assert felt in kropp["felter"], f"{felt} mangler i felter-kontrakten"
+
     # M11: terminal tilstand skal sette completed_at (SLA-rapportering)
     with pg.cursor() as cur:
         cur.execute("SELECT completed_at FROM jobs WHERE job_id = %s", (job_id,))

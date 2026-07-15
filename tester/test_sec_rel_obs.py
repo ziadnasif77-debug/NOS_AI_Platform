@@ -106,18 +106,20 @@ def test_indekser_insert_mangler_fodselsnummer():
 # ------------------------------------------------------------------ #
 
 def test_lovlige_ytelser_whitelist_finnes():
-    """LOVLIGE_YTELSER whitelist skal eksistere i soketjenesten."""
+    """LOVLIGE_YTELSER skal finnes og peke på den kanoniske listen."""
     src = _les("tjenester/sok/hoved.py")
     assert "LOVLIGE_YTELSER" in src
-    assert "dagpenger" in src
-    assert "sykepenger" in src
+    from delt.konstanter import NORSKE_YTELSER
+    assert "dagpenger" in NORSKE_YTELSER
+    assert "sykepenger" in NORSKE_YTELSER
 
 
 def test_lovlige_fylker_whitelist_finnes():
-    """LOVLIGE_FYLKER whitelist skal eksistere i soketjenesten."""
+    """LOVLIGE_FYLKER skal finnes og peke på den kanoniske listen."""
     src = _les("tjenester/sok/hoved.py")
     assert "LOVLIGE_FYLKER" in src
-    assert "Oslo" in src
+    from delt.konstanter import NORSKE_FYLKER
+    assert "Oslo" in NORSKE_FYLKER
 
 
 def test_bygg_filter_validerer_ytelse():

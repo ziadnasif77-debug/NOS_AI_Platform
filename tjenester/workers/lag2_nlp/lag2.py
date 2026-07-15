@@ -12,20 +12,14 @@ from typing import Optional
 
 sys.path.insert(0, "/app")
 from config.config_loader import CONFIG
-from delt.konstanter import TRYKT, TABELL
+from delt.konstanter import TRYKT, TABELL, NORSKE_FYLKER
 from delt.skjemaer import OCRResultat, NLPResultat, ValideringsResultat, AnomalyResultat
+from delt.tekstuttrekk import utvid_entiteter, er_gyldig_fnr
 from tjenester.workers.base_worker import BaseWorker
 
 logger = logging.getLogger(__name__)
 
 WORKER_ID = f"lag2-{socket.gethostname()}"
-
-NORSKE_FYLKER = {
-    "Oslo", "Viken", "Innlandet", "Vestfold og Telemark",
-    "Agder", "Rogaland", "Vestland", "Møre og Romsdal",
-    "Trøndelag", "Nordland", "Troms og Finnmark",
-    "Troms", "Finnmark",
-}
 
 OBLIGATORISKE_FELT = {
     "dagpenger": ["navn", "fodselsnummer", "dato"],
@@ -118,6 +112,11 @@ class NLPWorker(BaseWorker):
         entiteter, dokklasse, ytelse, nlp_konfidens, modell = self._ekstraher(
             tekst, tokens, bokser, dokumenttype, bilde_sti
         )
+        # Deterministisk lag: sjekksum-/mønsterfelter (fnr, konto, dato,
+        # telefon, e-post, beløp, saksnr, kontor, postnr) — matematikk
+        # slår gjetning for strukturerte felter.
+        entiteter = utvid_entiteter(tekst, entiteter)
+        ytelse = entiteter.get("ytelse") or ytelse
 
         utfall = self._bestem_utfall(entiteter, tekst)
         oppsummering = self._lag_oppsummering(entiteter, dokklasse, utfall)
@@ -252,7 +251,13 @@ class NLPWorker(BaseWorker):
             elif "LOC" in label or "FYLKE" in label:
                 entiteter.setdefault("fylke", verdi)
             elif "ORG" in label:
-                entiteter.setdefault("ytelse", verdi)
+                # ORG er IKKE automatisk en ytelse: NAV-kontor gjenkjennes
+                # på navn, ytelser valideres mot den kanoniske listen i
+                # utvid_entiteter — resten lagres som organisasjon.
+                if verdi.upper().startswith("NAV"):
+                    entiteter.setdefault("kontornavn", verdi)
+                else:
+                    entiteter.setdefault("organisasjon", verdi)
             elif "DATE" in label or "DATO" in label:
                 entiteter.setdefault("dato", verdi)
         return entiteter
@@ -301,17 +306,7 @@ class NLPWorker(BaseWorker):
         return {"gyldig": len(feil) == 0, "feil": feil}
 
     def _valider_fnr(self, fnr: str) -> bool:
-        if not fnr or not fnr.isdigit() or len(fnr) != 11:
-            return False
-        vekter1 = [3, 7, 6, 1, 8, 9, 4, 5, 2]
-        vekter2 = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
-
-        def k(sifre, v):
-            s = sum(int(sifre[i]) * v[i] for i in range(len(v)))
-            r = 11 - (s % 11)
-            return 0 if r == 11 else r
-
-        return k(fnr, vekter1) == int(fnr[9]) and k(fnr, vekter2) == int(fnr[10])
+        return er_gyldig_fnr(fnr)
 
     def _valider_dato(self, dato: str) -> bool:
         if not dato:

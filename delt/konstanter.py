@@ -63,3 +63,18 @@ LOVLIGE_OVERGANGER = set(STATE_OVERGANGER.items()) | {
 }
 
 TERMINAL_TILSTANDER = {"DONE", "FAILED"}
+
+# ─── Kanoniske domenelister (én kilde — brukes av NLP, søk og uttrekk) ──────
+
+NORSKE_FYLKER = {
+    "Oslo", "Viken", "Innlandet", "Vestfold og Telemark",
+    "Agder", "Rogaland", "Vestland", "Møre og Romsdal",
+    "Trøndelag", "Nordland", "Troms og Finnmark",
+    "Troms", "Finnmark",
+}
+
+NORSKE_YTELSER = {
+    "dagpenger", "sykepenger", "uforetrygd", "arbeidsavklaringspenger",
+    "foreldrepenger", "overgangsstonad", "barnetrygd", "kontantstotte",
+    "alderspensjon", "uforepensjon",
+}

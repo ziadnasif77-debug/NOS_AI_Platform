@@ -330,17 +330,9 @@ async def statistikk():
 #  Hjelpemetoder                                                        #
 # ------------------------------------------------------------------ #
 
-LOVLIGE_YTELSER = {
-    "dagpenger", "sykepenger", "uforetrygd", "arbeidsavklaringspenger",
-    "foreldrepenger", "overgangsstonad", "barnetrygd", "kontantstotte",
-    "alderspensjon", "uforepensjon",
-}
-
-LOVLIGE_FYLKER = {
-    "Oslo", "Viken", "Innlandet", "Vestfold og Telemark",
-    "Agder", "Rogaland", "Vestland", "Møre og Romsdal",
-    "Trøndelag", "Nordland", "Troms og Finnmark", "Troms", "Finnmark",
-}
+# Kanoniske lister fra delt/konstanter.py — én kilde til sannhet
+from delt.konstanter import NORSKE_YTELSER as LOVLIGE_YTELSER
+from delt.konstanter import NORSKE_FYLKER as LOVLIGE_FYLKER
 
 
 def _bygg_filter(filtre: dict) -> str:
