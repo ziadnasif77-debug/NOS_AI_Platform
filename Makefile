@@ -1,4 +1,9 @@
-.PHONY: start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
+.PHONY: oppsett start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
+
+# Ett-kommando lokalt førstegangsoppsett: .env, datamapper, GPU-sjekk.
+# Laster IKKE ned modeller (kjør last-ned-modeller separat, ~17 GB).
+oppsett:
+	bash skript/oppsett.sh
 
 start:
 	docker compose up -d

@@ -335,26 +335,26 @@ git clone https://github.com/ziadnasif77-debug/nav.git
 cd nav
 ```
 
-### 2. Opprett `.env`-fil
+### 2. Kjør ett-kommando lokalt oppsett
 ```bash
-cp .env.example .env
-# Sett minst: API_NOKKEL, LABEL_STUDIO_API_KEY, GPU_ENHET
+make oppsett
 ```
+Gjør automatisk: oppretter `.env` (fra `.env.example`, med `API_NOKKEL`
+satt), oppretter alle datamapper, og sjekker om GPU-en din faktisk er
+synlig for Docker (NVIDIA-driver + NVIDIA Container Toolkit) — dette
+kan kun sjekkes på din egen maskin, ikke i et sky-/CI-miljø.
 
 ### 3. Last ned AI-modeller
 ```bash
-make last-ned-modeller   # ~17 GB, én gang
+make last-ned-modeller   # ~17 GB, én gang — trygt å avbryte og gjenoppta
 ```
+Bruker `snapshot_download` som gjenopptar delvis nedlastede filer automatisk
+ved ny kjøring — ingen behov for å slette og starte på nytt ved avbrudd.
 
 ### 4. Initialiser databasen
 ```bash
 make start       # starter postgres
 make init-db     # oppretter alle tabeller og enum-typer
-```
-
-### 5. Opprett datamapper
-```bash
-mkdir -p data/{inntak,behandlet,gjennomgang,finjustering,logger}
 ```
 
 ---
@@ -487,6 +487,9 @@ Full guide med kontraktsgarantier: [docs/API_INTEGRASJON.md](docs/API_INTEGRASJO
 ## Make-kommandoer
 
 ```bash
+# ─── Førstegangsoppsett ──────────────────────────────────────────────
+make oppsett                 # .env + datamapper + GPU-sjekk (kjøres på din maskin)
+
 # ─── Infrastruktur ───────────────────────────────────────────────────
 make start                   # Start alle Docker-tjenester
 make stopp                   # Stop alle tjenester
