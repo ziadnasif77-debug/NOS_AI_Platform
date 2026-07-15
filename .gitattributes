@@ -1,0 +1,7 @@
+# Shell-skript MÅ ha LF — Windows' autocrlf=true konverterer ellers til
+# CRLF ved checkout, som gir "invalid option" i bash (f.eks. `set -o pipefail`).
+*.sh text eol=lf
+Makefile text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
