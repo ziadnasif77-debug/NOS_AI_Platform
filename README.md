@@ -18,6 +18,7 @@ Et produksjonsklart AI-pipeline for automatisk digitalisering, analyse og søk i
 - [Oppstart](#oppstart)
 - [API-dokumentasjon](#api-dokumentasjon)
 - [Make-kommandoer](#make-kommandoer)
+- [Sikkerhetskopi og gjenoppretting](#sikkerhetskopi-og-gjenoppretting)
 - [Testing](#testing)
 - [SLA-mål](#sla-mål)
 - [Sikkerhet og GDPR](#sikkerhet-og-gdpr)
@@ -159,6 +160,7 @@ Abstrakt basisklasse alle workers arver:
 ### NLPWorker (inkluderer validering)
 - Ruter NLP-modell: tekst > 200 tegn → Borealis (åpen LLM-uttrekking, alle felter dokumentet inneholder); ellers LayoutLMv3 (ved layout) eller NB-BERT
 - **Anti-hallusinasjon** (`utvid_entiteter`): modellverdier for sjekksumfelter (fnr, konto) må bestå mod11; ytelse/fylke må finnes i kanoniske lister (fylke også i teksten); kontornavn må starte med NAV
+- **Model serving-modus**: settes `LLM_URL` kalles Borealis over OpenAI-protokollen (vLLM/TGI/Triton) i stedet for lokal lasting — workeren blir lett og horisontalt skalerbar
 - **Deterministisk uttrekkslag** (`delt/tekstuttrekk.py`) oppå modellene — mønstre og mod11-sjekksummer, mer presist enn NER for strukturerte felter:
 
   | Felt | Metode |
@@ -315,6 +317,24 @@ Alle modeller kjører **100 % offline** etter første nedlasting (~17 GB totalt)
 - `len(tekst) > 200` → Borealis (åpen LLM-feltuttrekking — finner alle felter dokumentet inneholder, ikke bare en fast liste; 4-bit NF4-kvantisert for 8 GB GPU)
 - TRYKT/TABELL + tokens+bokser (når Borealis mangler) → LayoutLMv3
 - ellers → NB-BERT
+
+### Model serving (valgfritt)
+
+Borealis kan serveres som egen tjeneste med **vLLM** (OpenAI-kompatibel
+API) i stedet for å lastes i NLP-workeren:
+
+```bash
+docker compose --profile llm up -d llm   # start vLLM-serveren
+# sett i .env:  LLM_URL=http://llm:8000/v1
+docker compose up -d nlp_worker          # workeren blir HTTP-klient
+```
+
+Gevinster: én modell-lasting (worker-restart tar sekunder, ikke
+minutter), continuous batching, og NLP-workerne kan skaleres
+horisontalt uten å eie GPU-en. Protokollen er standard OpenAI —
+bytt til TGI/Triton uten kodeendring. I K8s: [k8s/16-llm.yaml](k8s/16-llm.yaml).
+Faller LLM-tjenesten bort ruter workeren automatisk til NB-BERT
+(fallback-kjeden er uendret).
 
 ---
 
@@ -511,7 +531,7 @@ make sikkerhetskopi-verifiser FIL=...   # Kontroller sha256 + lesbarhet
 make gjenopprett FIL=... [DB=navn]      # Gjenopprett (DB= for øvelse)
 
 # ─── Tester ──────────────────────────────────────────────────────────
-make test                    # Kjør alle tester (250: 208 enhet + 42 integrasjon)
+make test                    # Kjør alle tester (269: 227 enhet + 42 integrasjon)
 make test-state-machine      # Test tilstandsmaskin
 make test-idempotency        # Test idempotens-logikk
 
@@ -530,9 +550,31 @@ make label-studio            # Åpne Label Studio (http://localhost:8080)
 
 ---
 
+## Sikkerhetskopi og gjenoppretting
+
+Postgres er eneste kilde til sannhet — strategien følger av det:
+**daglig verifisert `pg_dump`** (dumpen får ikke endelig navn før
+`pg_restore --list` har lest den) med **GFS-retention 7/4/6**, sha256
+ved siden av hver dump, inkrementell kopi av originaldokumenter og
+hendelseslogging i `audit_log`. Redis og Milvus sikkerhetskopieres
+bevisst *ikke* (transport / avledet — gjenoppbygges fra Postgres).
+
+```bash
+make sikkerhetskopi          # verifisert kopi nå
+make gjenopprett FIL=... DB=nav_archive_restore_test   # øvelse
+make gjenopprett FIL=...     # katastrofe (husk: make rebuild-redis!)
+```
+
+Lokalt kjører en backup-daemon hver 24. time; i K8s en CronJob kl. 02:00
+([k8s/15-sikkerhetskopi.yaml](k8s/15-sikkerhetskopi.yaml)). RPO 24 t
+(konfigurerbart), RTO minutter. Full strategi, katastrofeprosedyre og
+begrunnelser: **[docs/SIKKERHETSKOPI.md](docs/SIKKERHETSKOPI.md)**.
+
+---
+
 ## Testing
 
-### Enhetstester (250 totalt: 208 enhet + 42 integrasjon)
+### Enhetstester (269 totalt: 227 enhet + 42 integrasjon)
 
 ```bash
 python -m pytest tester/ -v
@@ -556,7 +598,9 @@ python -m pytest tester/ -v
 | `test_kubeflow_modus.py` | kfp_steg, KJOREMODUS-gating, K8s-manifester |
 | `test_observabilitet_auth.py` | Prometheus-metrikker, OIDC (ekte JWT-validering) |
 | `test_audit_fikser.py` | Regresjon for audit-funn: lås/retry, rebuild-kontrakt, RRF-dokumenter, OIDC-roller |
-| `test_tekstuttrekk.py` | Deterministisk uttrekkslag: mod11-sjekksummer, mønstre for 8 felter, sammenslåing med modell-entiteter |
+| `test_tekstuttrekk.py` | Deterministisk uttrekkslag: mod11-sjekksummer, mønstre for 8 felter, sammenslåing med modell-entiteter, anti-hallusinasjon |
+| `test_sikkerhetskopi.py` | GFS-retention (7/4/6), dump-filnavn, sha256 |
+| `test_llm_klient.py` | Åpen LLM-uttrekking: JSON-parsing, nøkkelnormalisering, utflating, feltordning |
 
 ### Integrasjonstester (ekte Postgres + Redis, ingen mocks)
 
@@ -702,8 +746,14 @@ nav/
 │   │   ├── hoved.py
 │   │   └── ruter/
 │   │       └── last_opp.py                  # V2.1: idempotens, /jobb, /resultat, /audit
+│   ├── backup/                              # Backup-daemon (pg_dump + retention)
 │   ├── sok/
 │   └── (legacy: ocr, nlp, lag0–lag5, ruter)
+├── k8s/                                     # Kubernetes-manifester (01–16)
+│   ├── 14-autoskalering.yaml                # KEDA på Redis-kølengde
+│   ├── 15-sikkerhetskopi.yaml               # Backup-CronJob 02:00
+│   └── 16-llm.yaml                          # Model serving (vLLM)
+├── overvaaking/                             # Prometheus + Grafana + Promtail
 ├── skript/
 │   ├── init_db.py                           # V2.1: opprett 4 Postgres-tabeller
 │   ├── rebuild_redis.py                     # V2.1: rebuild Redis fra Postgres
