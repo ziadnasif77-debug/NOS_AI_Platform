@@ -101,7 +101,11 @@ LABEL_STUDIO_URL = os.environ.get("GJENNOMGANG_URL", "http://label-studio:8080")
 
 
 @app.get("/helse")
-async def helse():
+def helse():
+    # Sync def (IKKE async): FastAPI kjører den i threadpool, så de
+    # blokkerende requests-kallene aldri fryser event-loopen. Med
+    # `async def` blokkerte 4 × 5s-timeouts HELE API-et i opptil 20s
+    # per helsesjekk (avdekket ved migrering til Docker CE).
     tjenester = {}
     for navn, url in [
         ("ocr", f"{OCR_URL}/helse"),
@@ -110,7 +114,7 @@ async def helse():
         ("label-studio", f"{LABEL_STUDIO_URL}/health"),
     ]:
         try:
-            svar = requests.get(url, timeout=5)
+            svar = requests.get(url, timeout=2)
             tjenester[navn] = svar.json().get("status", "ok")
         except Exception:
             tjenester[navn] = "ikke tilgjengelig"
@@ -118,7 +122,7 @@ async def helse():
 
 
 @app.get("/statistikk")
-async def statistikk():
+def statistikk():   # sync def → threadpool (blokkerende requests-kall)
     try:
         svar = requests.get(f"{SOK_URL}/statistikk", timeout=10)
         return svar.json()
@@ -129,7 +133,7 @@ async def statistikk():
 
 
 @app.get("/dokument/{job_id}")
-async def hent_dokument(job_id: str):
+def hent_dokument(job_id: str):   # sync def → threadpool (blokkerende requests-kall)
     try:
         uuid.UUID(job_id)                       # valider før proxy (F4-10)
     except (ValueError, AttributeError):
