@@ -43,13 +43,22 @@ produksjon med persondata.
 | **Ytelse** | 7.0 | Opplasting 1000 sider 1,9 s målt (fase 5). Trekk: tilkobling-per-jobb uten pool (F2-1) er første flaskehals ved skala. |
 | **Sikkerhet** | 5.5 | Solid grunnmur (konstant-tid, parameterisert SQL, OIDC, ingen SSRF/traversal). Trekk: ingen filstørrelse/rate-limit (F4-1..4), `str(exc)`-lekkasje (F4-5), fail-open nøkkel (F4-6). |
 | **Skalerbarhet** | 5.5 | KEDA + GPU-strategi forberedt. Trekk: RWO-PVC blokkerer horisontal spredning (F5-4), tilkoblingstak (F2-1), audit_log-vekst uten indeks (F2-6). |
-| **AI-pipeline** | 6.0 | mod11/RRF/deterministisk-over-modell korrekt (fase 3). Trekk: hardkodet konfidens (F3-1, kritisk), anti-hallusinering-hull (F3-2), ikke-deterministisk fylke (F3-3), engelsk OCR på norsk (F3-4). |
+| **AI-pipeline** | 5.0 ⬇ | **Nedjustert fra 6.0 etter gjennomgang:** F3-1 (falsk kvalitetsport for håndskrift/tabell) er trolig rapportens farligste tekniske funn og rammer selve kjerneverdien (fange usikre dokumenter). En pipeline hvis kvalitetsport er en illusjon for to dokumenttyper kan ikke skåre over midt på treet, uansett hvor korrekt mod11/RRF/deterministisk-uttrekk er. Positivt (fase 3): mod11 matematisk korrekt, RRF kanonisk, deterministisk-over-modell riktig prinsipp. Negativt: F3-1 (kritisk), F3-2 (anti-hallusinering-hull), F3-3 (ikke-deterministisk fylke), F3-4 (engelsk OCR). |
 | **Produksjonsklarhet** | 5.0 | Backup/oppbevaring/model-serving live-bevist. Trekk: ingen .dockerignore (F5-1), Postgres eksponert (F5-2), ingen graceful shutdown (F2-2), manglende probes/limits i K8s (F5-7,8), GDPR-hull (F4-12). |
 
-**Snitt: 6.4/10** — «avansert prototype / tidlig produksjon», konsistent med
-brukerens egen vurdering ved oppstart.
+**Snitt: 6.2/10** (etter nedjustering av AI-pipeline 6.0→5.0 pga. F3-1) —
+«avansert prototype / tidlig produksjon», konsistent med brukerens egen
+vurdering ved oppstart.
 
 ## 3. Alle funn etter alvorlighet
+
+> **Om klassifisering:** hvert enkelt funn er trippel-klassifisert
+> (`bekreftet ved kjøring` / `utledet fra kode` / `policy-beslutning`) i sin
+> kilde-fasefil (phase-1…6 — verifisert: alle 51 funn har eksplisitt
+> `Klassifisering:`-linje). KRITISK-tabellen under gjentar klassifiseringen
+> inline; HØY/MIDDELS/LAV-listene er kompakte pekere til fasefilene der hvert
+> punkts klassifisering står. De fleste HØY/MIDDELS er `utledet fra kode`
+> unntatt der annet er merket (f.eks. F2-2 «bekreftet live»).
 
 ### KRITISK
 | ID | Funn | Klassifisering |
@@ -58,7 +67,7 @@ brukerens egen vurdering ved oppstart.
 | F4-12 | Filnavn-PII overlever for alltid i audit_log | bekreftet ved kjøring |
 | F4-13 | Retensjonstid 150 d ikke juridisk avklart (90/150/180) | policy-beslutning |
 | F5-1 | Ingen .dockerignore (hemmeligheter i build-kontekst) | bekreftet ved kjøring |
-| F5-2 | Postgres publisert til host, credentials nav/nav | utledet fra kode |
+| F5-2 | Postgres publisert til host, credentials nav/nav | bekreftet ved kjøring (`docker port` → `0.0.0.0:5432`) |
 | F5-3 | Ingen minnegrenser i compose (OOM på delt GPU) | utledet fra kode |
 | F5-4 | K8s RWO-PVC monteres av flere pods (deploy henger) | utledet fra kode |
 | F4-1 | Ingen maks filstørrelse (minne-DoS) | utledet fra kode |
@@ -102,13 +111,24 @@ allerede advart), F5-16, F6-1/F6-4/F6-5.
 | 1 | `.dockerignore` (F5-1) | Kritisk sikkerhet | Minutter |
 | 2 | `lang="no"` i PaddleOCR (F3-4) | Bedre OCR på alt | 1 linje |
 | 3 | Bind Postgres til 127.0.0.1 (F5-2) | Lukker innbruddsvektor | 1 linje |
-| 4 | Maks filstørrelse + sidegrense (F4-1/F4-2) | Stopper DoS | Timer |
-| 5 | Fjern `str(exc)` fra responser (F4-5) | Stopper info-lekkasje | Timer |
-| 6 | `AND locked_by=%s` i _frigi_las (F4-4/F2-4) | Lukker race | 1 linje |
-| 7 | UNIQUE(dokument_id,side_nummer) + reconciliation-indekser (F1-5/F2-6) | Skala + integritet | Timer |
-| 8 | Fjern filnavn fra audit / hash det (F4-12) | Lukker GDPR-hull | Timer |
-| 9 | Ekte modellkonfidens (F3-1) | Redder kvalitetsporten | Dager (modellarbeid) |
-| 10 | Connection pool / pgbouncer (F2-1) | Skala-flaskehals | Dager |
+| 4 | **SIGTERM-handler i run-løkken (F2-2)** | **Stopper jobbtap ved hver deploy** | **~10 linjer** |
+| 5 | **Slutt å logge råt filnavn til audit (F4-12, fremover-fiks)** | **Lukker GDPR-hull for NYE dokumenter** | **1-2 linjer** |
+| 6 | Maks filstørrelse + sidegrense (F4-1/F4-2) | Stopper DoS | Timer |
+| 7 | Fjern `str(exc)` fra responser (F4-5) | Stopper info-lekkasje | Timer |
+| 8 | `AND locked_by=%s` i _frigi_las (F4-4/F2-4) | Lukker race | 1 linje |
+| 9 | UNIQUE(dokument_id,side_nummer) + reconciliation-indekser (F1-5/F2-6) | Skala + integritet | Timer |
+| 10 | Retroaktiv rydding av filnavn i eksisterende audit (F4-12) | Lukker GDPR-hull for GAMLE data | Timer + NAV-avklaring |
+| 11 | Connection pool / pgbouncer (F2-1) | Skala-flaskehals | Dager |
+
+> **VIKTIG om F3-1 (falsk kvalitetsport):** dette er systemets **#1 farligste
+> funn** (seksjon 4), men står bevisst LAVT i effekt÷innsats-tabellen fordi
+> ekte modellkonfidens krever dager med modellarbeid (`output_scores=True`,
+> softmax-utledning per modell). Innsatsen senker rangen — den senker IKKE
+> alvorligheten. Rekkefølge betyr «hva gir mest per krone», ikke «hva er
+> viktigst». F3-1 må planlegges som eget arbeidsstykke uavhengig av
+> quick-wins-lista, og inntil det er gjort bør håndskrift/tabell-dokumenter
+> **tvinges til gjennomgang uansett konfidens** (midlertidig 1-linjes
+> mitigering: rut alltid HANDSKRIFT/Marker-resultater til Label Studio).
 
 ## 6. Refaktorering vs. omskriving
 
@@ -122,30 +142,46 @@ allerede advart), F5-16, F6-1/F6-4/F6-5.
 - `tekstuttrekk.py` → utvid anti-hallusinering til alle mønsterfelter (F3-2);
   `finn_fylke` deterministisk (F3-3)
 
-**Bevisst beholdt som er:** legacy-lagene (39 filer, null trafikk) — ikke
-refaktorer, men vurder å fjerne fra repoet hvis de aldri skal brukes.
+**Bevisst beholdt som er:** legacy-tjenestene (7 HTTP-tjenester, 13 py-filer +
+Dockerfiles/krav = 39 filer i legacy-kategorien, null trafikk — jf. fase 0 K1)
+— ikke refaktorer, men vurder å fjerne fra repoet hvis de aldri skal brukes.
 
 ## 7. Beslutninger som krever DERES team / NAV (ikke Claude Code)
 
-Disse er **ikke kodefeil** — de krever juridisk/organisatorisk avklaring:
+**Viktig avgrensning (F4-12 skal IKKE stå her udelt):** GDPR-hullet med filnavn
+i audit_log har to deler som må skilles:
+- **Fremover-fiksen er en ren kodefeil — starter NÅ, uten å vente på NAV:**
+  slutt å skrive råt filnavn til `audit_log.details` (bruk hash/dokument_id).
+  Dette er riktig uansett hva NAV bestemmer om retensjon. Ligger som tiltak
+  #5 i effekt÷innsats-lista (1-2 linjer). Krever ingen ekstern avklaring.
+- **Bare det retroaktive + varigheten krever NAV** (punkt 1 og 3 under).
+
+Følgende er **ikke kodefeil** — de krever juridisk/organisatorisk avklaring:
 
 1. **Oppbevaringstid (F4-13):** Hva er den juridisk bindende maksimale
-   lagringstiden for disse dokumentene? 90 dager (3 mnd), 150, eller 6 måneder?
-   Koden må settes til det bekreftede tallet, og backup-budsjettet (F4-14)
-   justeres deretter. **Arkivloven vs. GDPR-minimering må avklares** — statlige
-   arkivkrav kan faktisk PÅBY lengre lagring enn GDPR tillater; da trengs
-   juridisk avklaring om hvilket regime som gjelder disse spesifikke dokumentene.
-2. **Backup-innhold som persondata (F4-14):** Godtar juristene at pg_dump-er
-   inneholder persondata i inntil retensjonsgrensen? Skal dumpene krypteres og
-   ha eget slettebudsjett?
-3. **audit_log-innhold (F4-12):** NAV-kravet «audit slettes aldri» — er det
-   forenlig med at audit ikke skal inneholde persondata? Bekreft at anonymisert
-   audit (kun dokument_id, ikke filnavn/tekst) tilfredsstiller sporbarhetskravet.
-4. **Kvalitetsport-terskler (relatert F3-1):** Når ekte konfidens innføres —
-   hvilke terskler er juridisk/faglig forsvarlige for auto-APPROVED av
-   persondokumenter uten menneskelig gjennomgang?
-5. **Autorisasjonsmodell (F4-9):** Skal alle klienter dele én nøkkel, eller
-   kreves rolleskille (lese vs. slette/GDPR-sletting)?
+   lagringstiden? De tre tallene i omløp: **90 dager** (3 mnd, tidligere oppgitt
+   NAV-krav), **150 dager** (dagens kode-default, `oppbevaring.py:37`), **180
+   dager** = det samlede budsjett-TAKET (oppbevaring + eldste backup-kopi, der
+   «180» er valgt fordi 6 måneders arkivvindu ≈ 180 dager). Disse er ikke
+   forsonet. **Arkivloven vs. GDPR-minimering må avklares** — statlige arkivkrav
+   kan PÅBY lengre lagring enn GDPR tillater.
+2. **Retroaktiv rydding av eksisterende audit-filnavn (F4-12, del 2):** De
+   filnavnene som ALLEREDE er logget — skal de slettes/hashes retroaktivt?
+   Teknisk trivielt (`UPDATE audit_log SET details = details - 'filnavn'`), men
+   om audit «aldri skal endres» er et NAV-prinsipp, trengs godkjenning for å
+   røre historiske rader.
+3. **audit_log-innhold prinsipielt (F4-12, del 3):** NAV-kravet «audit slettes
+   aldri» vs. «audit skal ikke inneholde persondata» — bekreft at anonymisert
+   audit (kun dokument_id) tilfredsstiller sporbarhetskravet.
+4. **Backup-innhold som persondata (F4-14):** Godtar juristene at pg_dump-er
+   inneholder persondata inntil retensjonsgrensen? Bør dumpene krypteres og få
+   eget hardt slettebudsjett? (Merk: `BACKUP_MAANEDLIGE=0` er allerede satt i
+   koden — bekreftet ved kjøring — så aritmetikken 150+~28 ≤ 180 holder i dag,
+   MEN det finnes ingen kode som HÅNDHEVER at pg_dump-er ikke overlever
+   budsjettet; det hviler på GFS-tallene. Se F4-14, fortsatt «middels».)
+5. **Kvalitetsport-terskler (relatert F3-1):** Når ekte konfidens innføres —
+   hvilke terskler er faglig forsvarlige for auto-APPROVED uten gjennomgang?
+6. **Autorisasjonsmodell (F4-9):** Delt nøkkel eller rolleskille (lese vs. slette)?
 
 ---
 

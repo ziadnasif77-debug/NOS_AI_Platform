@@ -30,7 +30,8 @@ hemmeligheter i image-lag.
 **Fil:** `docker-compose.yml:276-277` (`5432:5432`) + `:273-274` (`nav`/`nav`).
 Hele databasen med NAV-dokumenter nåbar fra host-nettet med gjettbare
 credentials. **Fiks:** `127.0.0.1:5432:5432` (kun lokal) + passord fra secret.
-**Klassifisering:** utledet fra kode.
+**Klassifisering:** bekreftet ved kjøring — `docker port nav-postgres-1` gir
+`5432/tcp -> 0.0.0.0:5432` (publisert på ALLE grensesnitt, ikke bare localhost).
 
 ### F5-3 · KRITISK · Ingen minnegrenser i compose — OOM-risiko på delt GPU
 **Fil:** `docker-compose.yml` (ingen `mem_limit`/`deploy.resources.limits`).
