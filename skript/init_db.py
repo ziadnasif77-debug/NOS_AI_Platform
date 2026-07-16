@@ -81,11 +81,24 @@ CREATE TABLE IF NOT EXISTS dead_letter_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_state      ON jobs(state);
-CREATE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs(idempotency_key);
+-- idx_jobs_idempotency fjernet (F2-9): idempotency_key har allerede UNIQUE →
+-- implisitt indeks. Duplikat koster kun skrive-overhead.
 CREATE INDEX IF NOT EXISTS idx_jobs_lock_expiry ON jobs(lock_expiry) WHERE locked_by IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_audit_job        ON audit_log(job_id);
 CREATE INDEX IF NOT EXISTS idx_audit_time       ON audit_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_dlq_job          ON dead_letter_queue(job_id);
+
+-- F2-6: reconciliation-spørringer full-scanner uten disse ved 60M rader.
+-- ettersend_label_studio filtrerer på audit_log.event_type og
+-- results.routing_decision; ghost/tapt-deteksjon på jobs(state,updated_at).
+CREATE INDEX IF NOT EXISTS idx_audit_event      ON audit_log(event_type, id);
+CREATE INDEX IF NOT EXISTS idx_jobs_state_upd    ON jobs(state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_results_beslutning ON results(routing_decision)
+    WHERE routing_decision IN ('REVIEW', 'REJECTED');
+
+-- F1-5/F2-9: deklarativ garanti mot duplikate sider i et dokument.
+CREATE UNIQUE INDEX IF NOT EXISTS unik_dokument_side
+    ON jobs(dokument_id, side_nummer) WHERE dokument_id IS NOT NULL;
 """
 
 def init_db():

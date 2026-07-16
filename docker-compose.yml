@@ -270,11 +270,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: nav
-      POSTGRES_PASSWORD: nav
+      POSTGRES_USER: ${POSTGRES_USER:-nav}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nav}
       POSTGRES_DB: nav_archive
     ports:
-      - "5432:5432"
+      # Kun lokal tilgang — databasen med persondata skal ALDRI være
+      # nåbar fra host-nettet. Overstyr POSTGRES_BIND for eksponering.
+      - "${POSTGRES_BIND:-127.0.0.1}:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -416,7 +418,7 @@ services:
     volumes:
       - milvus_data:/var/lib/milvus
     ports:
-      - "${MILVUS_PORT:-19530}:19530"
+      - "${MILVUS_BIND:-127.0.0.1}:${MILVUS_PORT:-19530}:19530"
     depends_on:
       - etcd
       - minio

@@ -1,0 +1,38 @@
+# Hindrer at store/sensitive filer havner i Docker build-konteksten.
+# Alle images bygges med `context: .` (repo-rot) — uten denne fila ville
+# data/ (PDF-er), modeller/ (~17 GB) og .env (hemmeligheter) sendes inn.
+
+# Hemmeligheter — skal ALDRI i et image-lag
+.env
+.env.*
+!.env.example
+
+# Store data-/modellmapper (montert som volum i runtime, ikke bakt inn)
+data/
+modeller/
+
+# Versjonskontroll og IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+.claude/
+
+# Python-artefakter
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# Tester og dokumentasjon trengs ikke i produksjonsimages
+tester/
+docs/
+
+# Midlertidige filer
+*.log
+*.tmp
+*.bak
+dump.rdb

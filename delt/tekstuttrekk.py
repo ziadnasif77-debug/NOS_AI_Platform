@@ -202,7 +202,9 @@ def finn_ytelse(tekst: str):
 
 
 def finn_fylke(tekst: str):
-    for fylke in NORSKE_FYLKER:
+    # Lengste navn først → «Troms og Finnmark» matches før «Troms», og
+    # resultatet blir deterministisk (NORSKE_FYLKER er et set/uordnet).
+    for fylke in sorted(NORSKE_FYLKER, key=len, reverse=True):
         if re.search(rf"\b{re.escape(fylke)}\b", tekst):
             return fylke
     return None
@@ -249,6 +251,33 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
     konto_verdi = re.sub(r"\D", "", str(resultat.get("kontonummer") or ""))
     if resultat.get("kontonummer") and not er_gyldig_kontonummer(konto_verdi):
         resultat.pop("kontonummer")
+
+    # F3-2: mønsterfelter der deterministisk søk ikke fant noe, men modellen
+    # likevel leverte en verdi — verifiser modellverdien mot samme format,
+    # ellers forkast (hindrer hallusinert telefon/epost/dato/beløp/saksnr).
+    _mønster_validatorer = {
+        "telefon":    lambda v: bool(re.fullmatch(r"\+?\d[\d ]{6,14}", v.strip())),
+        "epost":      lambda v: bool(re.fullmatch(r"[\w.+-]+@[\w-]+\.[\w.]{2,}", v.strip())),
+        "dato":       lambda v: finn_dato(v) is not None,
+        "saksnummer": lambda v: finn_saksnummer(f"saksnr {v}") is not None
+                                or bool(re.search(r"\d", v)),
+    }
+    for felt, gyldig in _mønster_validatorer.items():
+        verdi = resultat.get(felt)
+        # deterministisk treff (allerede satt over) er alltid gyldig; kun
+        # felter som IKKE ble satt deterministisk kan komme fra modellen
+        if verdi is not None and deterministiske.get(felt) is None:
+            try:
+                if not gyldig(str(verdi)):
+                    resultat.pop(felt)
+            except Exception:
+                resultat.pop(felt)
+    # beløp: modellverdi må være tallbar
+    if resultat.get("belop") is not None and deterministiske.get("belop") is None:
+        try:
+            float(str(resultat["belop"]).replace(",", ".").replace(" ", ""))
+        except (ValueError, TypeError):
+            resultat.pop("belop")
 
     # kontornavn betyr NAV-kontor — alt annet er en organisasjon, ikke kontor
     if resultat.get("kontornavn") and not str(resultat["kontornavn"]).upper().startswith("NAV"):

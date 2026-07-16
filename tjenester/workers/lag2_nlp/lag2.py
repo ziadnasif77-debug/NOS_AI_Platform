@@ -327,18 +327,42 @@ class NLPWorker(BaseWorker):
             utgang[0][inn_lengde:], skip_special_tokens=True
         )
 
+    @staticmethod
+    def _forste_json_objekt(svar: str):
+        """Finner det FØRSTE balanserte {...}-objektet (teller klammer) —
+        robust mot prosa og flere objekter der grådig regex feiler."""
+        start = svar.find("{")
+        if start == -1:
+            return None
+        dybde = 0
+        for i in range(start, len(svar)):
+            if svar[i] == "{":
+                dybde += 1
+            elif svar[i] == "}":
+                dybde -= 1
+                if dybde == 0:
+                    return svar[start:i + 1]
+        return None
+
     def _parse_borealis_json(self, svar: str) -> dict:
         """Åpen parsing: alle nøkler beholdes (normalisert til snake_case),
         nøstede objekter flates ut, lister slås sammen. Tomme verdier
         forkastes. Maks 40 felter — mot runaway-generering."""
-        treff = re.search(r"\{.*\}", svar, re.DOTALL)
-        if not treff:
-            return {}
-        try:
-            rådata = json.loads(treff.group(0))
-        except json.JSONDecodeError:
-            return {}
+        # F3-6: prøv hele svaret først (vanligste tilfelle), deretter
+        # balanserte klammer — ikke grådig \{.*\} som ved flere objekter
+        # fanger ugyldig JSON og taper ALT stille.
+        rådata = None
+        for kandidat in (svar.strip(), self._forste_json_objekt(svar)):
+            if not kandidat:
+                continue
+            try:
+                rådata = json.loads(kandidat)
+                break
+            except json.JSONDecodeError:
+                continue
         if not isinstance(rådata, dict):
+            if rådata is None:
+                logger.debug("Borealis-svar ga ingen parsebar JSON: %.120s", svar)
             return {}
 
         def _norm_nokkel(k) -> str:

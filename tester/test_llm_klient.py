@@ -74,3 +74,18 @@ def test_ordne_kanoniske_forst_deretter_alfabetisk():
     nokler = list(ordne(None, entiteter))
     assert nokler[:2] == ["navn", "dato"]          # kanonisk rekkefølge
     assert nokler[2:] == ["avdeling", "butikk", "ordrenummer"]  # alfabetisk
+
+
+# ── Regresjon F3-6: robust JSON-parsing (flere objekter / prosa) ──
+
+def test_f3_6_flere_objekter_taper_ikke_alt():
+    # grådig \{.*\} ville fanget "{...} tekst {...}" → ugyldig → {}.
+    # Nå skal FØRSTE objekt parses.
+    svar = '{"navn": "Ola"} og forresten {"noe": "annet"}'
+    r = parse(None, svar)
+    assert r.get("navn") == "Ola"
+
+
+def test_f3_6_prosa_rundt_json():
+    r = parse(None, 'Her er resultatet:\n{"belop": "500"}\nHåper det hjelper.')
+    assert r.get("belop") == "500"

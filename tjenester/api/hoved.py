@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import uuid
 import uvicorn
 import requests
 from fastapi import FastAPI, HTTPException, Request
@@ -121,13 +122,18 @@ async def statistikk():
     try:
         svar = requests.get(f"{SOK_URL}/statistikk", timeout=10)
         return svar.json()
-    except Exception as feil:
-        raise HTTPException(status_code=503, detail=f"Soketjeneste utilgjengelig: {feil}")
+    except Exception:
+        logger.exception("Statistikk mot søketjeneste feilet")
+        raise HTTPException(status_code=503, detail="Søketjeneste utilgjengelig")
 
 
 
 @app.get("/dokument/{job_id}")
 async def hent_dokument(job_id: str):
+    try:
+        uuid.UUID(job_id)                       # valider før proxy (F4-10)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=422, detail="Ugyldig id — må være UUID")
     try:
         svar = requests.post(
             f"{SOK_URL}/sok",
@@ -140,8 +146,9 @@ async def hent_dokument(job_id: str):
         return resultat
     except HTTPException:
         raise
-    except Exception as feil:
-        raise HTTPException(status_code=503, detail=str(feil))
+    except Exception:
+        logger.exception("Dokumentoppslag mot søketjeneste feilet")
+        raise HTTPException(status_code=503, detail="Søketjeneste utilgjengelig")
 
 
 if __name__ == "__main__":

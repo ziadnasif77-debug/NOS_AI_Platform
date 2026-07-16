@@ -1,7 +1,10 @@
+import logging
 import os
+import uuid
 import requests
 from fastapi import APIRouter, HTTPException
 
+logger = logging.getLogger(__name__)
 ruter = APIRouter(prefix="/gjennomgang", tags=["gjennomgang"])
 
 GJENNOMGANG_URL = os.environ.get("GJENNOMGANG_URL", "http://label-studio:8080")
@@ -28,13 +31,18 @@ async def hent_ko():
             "antall_venter": antall,
             "label_studio_url": os.environ.get("LABEL_STUDIO_URL", "http://localhost:8080"),
         }
-    except Exception as feil:
-        raise HTTPException(status_code=503, detail=str(feil))
+    except Exception:
+        logger.exception("Kunne ikke hente gjennomgangskø fra Label Studio")
+        raise HTTPException(status_code=503, detail="Gjennomgangstjeneste utilgjengelig")
 
 
 @ruter.post("/korriger/{fil_id}")
 async def korriger(fil_id: str, data: dict):
     """Sender en manuell korreksjon direkte til Label Studio."""
+    try:
+        uuid.UUID(fil_id)                       # valider fil_id (F4-10)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=422, detail="Ugyldig fil_id — må være UUID")
     try:
         prosjekt_id = os.environ.get("LABEL_STUDIO_OCR_PROSJEKT_ID", "1")
         svar = requests.post(
@@ -45,5 +53,8 @@ async def korriger(fil_id: str, data: dict):
         )
         svar.raise_for_status()
         return svar.json()
-    except Exception as feil:
-        raise HTTPException(status_code=503, detail=str(feil))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Korreksjon til Label Studio feilet")
+        raise HTTPException(status_code=503, detail="Gjennomgangstjeneste utilgjengelig")

@@ -264,7 +264,8 @@ async def indekser(data: dict):
         raise
     except Exception as feil:
         logger.error("Indekseringsfeil: %s", feil)
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil")
+        raise HTTPException(status_code=500, detail="Intern feil")
 
 
 @app.delete("/dokument/{fil_id}")
@@ -284,15 +285,21 @@ async def slett_dokument(fil_id: str):
         return {"status": "slettet", "fil_id": fil_id}
     except Exception as feil:
         logger.error("Slettefeil for %s: %s", fil_id, feil)
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil")
+        raise HTTPException(status_code=500, detail="Intern feil")
 
 
 @app.post("/sok")
 async def sok(data: dict):
     _krev_milvus()
-    sporsmal = data.get("sporsmal", "")
+    sporsmal = str(data.get("sporsmal", ""))[:1000]
     filtre = data.get("filtre", {})
-    antall = data.get("antall", 10)
+    # Bind antall server-side også (forsvar i dybden — F4-3): en direkte
+    # klient mot søketjenesten skal heller ikke kunne be om limit=millioner.
+    try:
+        antall = max(1, min(int(data.get("antall", 10)), 100))
+    except (TypeError, ValueError):
+        antall = 10
     try:
         sporsmaal_vektor = _embedding_modell.encode(sporsmal, normalize_embeddings=True).tolist()
         uttrykk = _bygg_filter(filtre)
@@ -322,7 +329,8 @@ async def sok(data: dict):
         raise
     except Exception as feil:
         logger.error("Sokefeil: %s", feil)
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil")
+        raise HTTPException(status_code=500, detail="Intern feil")
 
 
 @app.get("/helse")

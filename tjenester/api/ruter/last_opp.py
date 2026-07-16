@@ -7,6 +7,7 @@ GET  /audit/{job_id}    — audit-logg fra Postgres
 """
 import hashlib
 import json
+import logging
 import os
 import time
 import uuid
@@ -18,9 +19,14 @@ import redis
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
+logger = logging.getLogger(__name__)
 ruter = APIRouter(tags=["opplasting"])
 
 INNTAK_STI = os.environ.get("INNTAK_STI", "/data/inntak")
+
+# Ressursgrenser mot DoS/amplifisering (F4-1, F4-2)
+MAKS_OPPLASTING_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "100")) * 1024 * 1024
+MAKS_SIDER = int(os.environ.get("MAKS_SIDER_PER_DOKUMENT", "2000"))
 
 # KJOREMODUS styrer hvordan jobber sendes videre etter opplasting:
 #   redis    (standard) — rpush til queue:preprocess, workers plukker via blpop
@@ -75,7 +81,24 @@ def _antall_sider(innhold: bytes) -> int:
         raise HTTPException(status_code=400, detail="Ugyldig eller korrupt PDF")
     if antall < 1:
         raise HTTPException(status_code=400, detail="PDF-en har ingen sider")
+    if antall > MAKS_SIDER:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Dokumentet har for mange sider ({antall} > {MAKS_SIDER})")
     return antall
+
+
+async def _les_med_grense(fil: UploadFile) -> bytes:
+    """Strømmer opplastingen i biter og avviser (413) over grensen — hindrer
+    at én kjempefil leses helt inn i minnet og dreper API-prosessen."""
+    biter = bytearray()
+    while chunk := await fil.read(1024 * 1024):
+        biter.extend(chunk)
+        if len(biter) > MAKS_OPPLASTING_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Filen er for stor (maks {MAKS_OPPLASTING_BYTES // 1024 // 1024} MB)")
+    return bytes(biter)
 
 
 def _idempotent_svar(pg, idempotens_nokkel: str):
@@ -130,7 +153,7 @@ async def last_opp(fil: UploadFile = File(...)):
     if not filnavn.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Kun PDF-filer er støttet")
 
-    innhold = await fil.read()
+    innhold = await _les_med_grense(fil)
     idempotens_nokkel = _idempotens_nokkel(innhold)
     antall_sider = _antall_sider(innhold)
 
@@ -169,8 +192,13 @@ async def last_opp(fil: UploadFile = File(...)):
                     INSERT INTO audit_log (job_id, event_type, to_state, worker_id, details)
                     VALUES (%s, 'OPPRETTET', 'UPLOADED', 'api', %s)
                     """,
+                    # GDPR (F4-12): audit_log slettes ALDRI. Råt filnavn kan
+                    # inneholde persondata (fnr/navn i filnavnet) → lagre kun
+                    # en hash + dokument_id. Selve filnavnet lagres i
+                    # jobs.file_name som anonymiseres av oppbevaringsjobben.
                     (job_id, psycopg2.extras.Json(
-                        {"filnavn": filnavn, "dokument_id": dokument_id,
+                        {"filnavn_hash": hashlib.sha256(filnavn.encode()).hexdigest()[:16],
+                         "dokument_id": dokument_id,
                          "side_nummer": side, "antall_sider": antall_sider})),
                 )
                 cur.execute(
@@ -235,7 +263,8 @@ async def last_opp(fil: UploadFile = File(...)):
         # eies filen av jobben (ghost-detektoren re-køer den).
         if fil_sti is not None and not committet:
             Path(fil_sti).unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()
 
@@ -262,7 +291,8 @@ async def hent_jobb(job_id: str):
     except HTTPException:
         raise
     except Exception as feil:
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()
 
@@ -285,7 +315,8 @@ async def hent_resultat(job_id: str):
     except HTTPException:
         raise
     except Exception as feil:
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()
 
@@ -334,7 +365,8 @@ async def dokument_status(dokument_id: str):
     except HTTPException:
         raise
     except Exception as feil:
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()
 
@@ -457,7 +489,8 @@ async def dokument_felter(dokument_id: str):
     except HTTPException:
         raise
     except Exception as feil:
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()
 
@@ -575,7 +608,8 @@ async def dokument_tekst(
     except HTTPException:
         raise
     except Exception as feil:
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()
 
@@ -654,7 +688,8 @@ async def hent_felter(job_id: str):
     except HTTPException:
         raise
     except Exception as feil:
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()
 
@@ -679,6 +714,7 @@ async def hent_audit(job_id: str):
             rader = cur.fetchall()
         return [dict(r) for r in rader]
     except Exception as feil:
-        raise HTTPException(status_code=500, detail=str(feil))
+        logger.exception("Intern feil i endepunkt")
+        raise HTTPException(status_code=500, detail="Intern feil")
     finally:
         pg.close()

@@ -211,3 +211,33 @@ def test_utvid_alle_nye_felter_samtidig():
     assert r["poststed"] == "Oslo"
     assert r["ytelse"] == "dagpenger"
     assert r["fylke"] == "Oslo"
+
+
+# ── Regresjon for revisjonsfikser (F3-2 anti-hallusinering, F3-3 fylke) ──
+
+def test_f3_3_fylke_deterministisk_lengste_forst():
+    # «Troms og Finnmark» skal alltid gi hele navnet, ikke «Troms»
+    assert finn_fylke("Sak i Troms og Finnmark fylke") == "Troms og Finnmark"
+
+
+def test_f3_2_forkaster_hallusinert_telefon():
+    # modellen finner på telefon uten kilde i teksten → skal forkastes
+    r = utvid_entiteter("Brev uten telefonnummer", {"telefon": "ikke-et-nummer"})
+    assert "telefon" not in r
+
+
+def test_f3_2_forkaster_hallusinert_epost():
+    r = utvid_entiteter("Brev uten epost", {"epost": "bare tekst"})
+    assert "epost" not in r
+
+
+def test_f3_2_forkaster_hallusinert_belop():
+    r = utvid_entiteter("Brev uten beløp", {"belop": "kjempemye"})
+    assert "belop" not in r
+
+
+def test_f3_2_beholder_gyldig_modell_epost_uten_determ_treff():
+    # gyldig epost som modellen fant (determ. finner den også her, men test
+    # at gyldig format overlever)
+    r = utvid_entiteter("Kontakt", {"epost": "ola@nav.no"})
+    assert r.get("epost") == "ola@nav.no"

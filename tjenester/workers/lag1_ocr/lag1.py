@@ -68,15 +68,23 @@ class OCRWorker(BaseWorker):
             fil_sti, dokumenttype, pdf_sti
         )
 
-        godkjent = konfidens >= terskel
+        # F3-1-mitigering: kun PaddleOCR gir EKTE modellkonfidens (snitt av
+        # linjescorer). TrOCR/Marker returnerer en hardkodet konstant (0.88/
+        # 0.90) som ellers alltid ville passert terskelen og auto-godkjent
+        # selv usikker håndskrift. Inntil ekte konfidens er implementert
+        # (output_scores), tvinges disse til menneskelig gjennomgang.
+        konfidens_er_ekte = modell in ("paddleocr", "paddleocr+marker")
+        godkjent = konfidens >= terskel and konfidens_er_ekte
         if not godkjent:
             project_id = CONFIG["label_studio"]["prosjekter"]["ocr_konfidens"]
+            grunn = ("lav_ocr_konfidens" if konfidens_er_ekte
+                     else "estimert_konfidens_krever_gjennomgang")
             self.send_til_label_studio(
                 job_id=job_id,
                 image_path=fil_sti,
                 ocr_text=tekst,
                 project_id=project_id,
-                stage="lav_ocr_konfidens",
+                stage=grunn,
             )
 
         return OCRResultat(
@@ -109,7 +117,10 @@ class OCRWorker(BaseWorker):
     def _paddleocr(self, fil_sti: str):
         try:
             from paddleocr import PaddleOCR
-            ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+            # Norske dokumenter → norsk/latinsk språkmodell. "en" forringer
+            # æ/ø/å og norske ord, som forgifter alt nedstrøms (NER, uttrekk,
+            # embedding). PaddleOCR bruker latinsk modell for lang="no".
+            ocr = PaddleOCR(use_angle_cls=True, lang="no", show_log=False)
             resultat = ocr.ocr(fil_sti, cls=True)
             if not resultat or not resultat[0]:
                 return "", 0.0, [], [], "paddleocr"

@@ -9,6 +9,7 @@ import os
 import json
 import time
 import uuid
+import signal
 import logging
 import hashlib
 from abc import ABC, abstractmethod
@@ -50,15 +51,26 @@ class BaseWorker(ABC):
         self.done_state = done_state
         self._redis = redis.from_url(CONFIG["redis"]["url"])
         self._pg_url = CONFIG["postgres"]["url"]
+        self._stopp = False
 
     # ------------------------------------------------------------------ #
     #  Hoved-løkke                                                         #
     # ------------------------------------------------------------------ #
 
+    def _be_om_stopp(self, signum, _frame):
+        """SIGTERM/SIGINT-handler: sett flagg og la in-flight jobb fullføre."""
+        logger.info("%s mottok signal %s — fullfører in-flight jobb og stopper",
+                    self.worker_id, signum)
+        self._stopp = True
+
     def run(self):
         logger.info("%s starter, lytter på %s", self.worker_id, self.queue_name)
+        signal.signal(signal.SIGTERM, self._be_om_stopp)
+        signal.signal(signal.SIGINT, self._be_om_stopp)
         metrikker.start_metrikk_server()
-        while True:
+        # BLPOP med kort timeout (5s) gjør at løkken sjekker _stopp jevnlig;
+        # en jobb som ER plukket ut fullføres av _behandle før neste runde.
+        while not self._stopp:
             try:
                 raw = self._redis.blpop(self.queue_name, timeout=5)
                 if raw is None:
@@ -69,6 +81,7 @@ class BaseWorker(ABC):
             except Exception as exc:
                 logger.exception("Uventet feil i %s: %s", self.worker_id, exc)
                 time.sleep(1)
+        logger.info("%s stoppet rent (graceful shutdown)", self.worker_id)
 
     def _behandle(self, job: dict):
         job_id = job["job_id"]
@@ -139,10 +152,14 @@ class BaseWorker(ABC):
             return cur.rowcount == 1
 
     def _frigi_las(self, job_id: str, pg):
+        # Eierskapssjekk: kun DENNE workeren kan frigi sin egen lås. Uten
+        # dette kan en sen worker A (hvis lås utløp og B re-claimet jobben)
+        # nullstille B sin ferske lås — kilde til dobbeltbehandling.
         with pg.cursor() as cur:
             cur.execute(
-                "UPDATE jobs SET locked_by = NULL, lock_expiry = NULL WHERE job_id = %s",
-                (job_id,),
+                "UPDATE jobs SET locked_by = NULL, lock_expiry = NULL "
+                "WHERE job_id = %s AND locked_by = %s",
+                (job_id, self.worker_id),
             )
 
     # ------------------------------------------------------------------ #
@@ -304,9 +321,13 @@ class BaseWorker(ABC):
         with psycopg2.connect(self._pg_url) as pg:
             with pg.cursor() as cur:
                 if ny_tilstand in TERMINAL_TILSTANDER:
+                    # Terminal (DONE/FAILED): frigi låsen samtidig — ellers
+                    # ender FAILED-rader med stale locked_by (misvisende i
+                    # overvåkning). Én atomisk UPDATE.
                     cur.execute(
                         "UPDATE jobs SET state = %s, updated_at = NOW(), "
-                        "completed_at = NOW() WHERE job_id = %s",
+                        "completed_at = NOW(), locked_by = NULL, "
+                        "lock_expiry = NULL WHERE job_id = %s",
                         (ny_tilstand, job_id),
                     )
                 else:
