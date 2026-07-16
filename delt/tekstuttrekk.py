@@ -132,8 +132,13 @@ def finn_epost(tekst: str):
 
 
 def finn_postnummer_sted(tekst: str):
-    """«0181 Oslo» → (postnummer, poststed)."""
-    treff = re.search(r"\b(\d{4})\s+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)\b", tekst)
+    """«0181 Oslo» → (postnummer, poststed). Flerords-steder med «i»
+    («8610 Mo i Rana») fanges også — uten å sluke neste setningsord."""
+    treff = re.search(
+        r"\b(\d{4})[ \t]+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+"
+        r"(?:[ \t][iI][ \t][A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)?)\b",
+        tekst,
+    )
     if treff:
         return treff.group(1), treff.group(2)
     return None, None
@@ -234,14 +239,36 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
         resultat["postnummer"] = postnummer
         resultat["poststed"] = poststed
 
-    # Whitelist-baserte felter: fyll kun hull, og forkast modellverdier
-    # som ikke finnes i de kanoniske listene.
-    ytelse = finn_ytelse(tekst)
-    if ytelse and str(resultat.get("ytelse", "")).lower() not in NORSKE_YTELSER:
-        resultat["ytelse"] = ytelse
+    # Anti-hallusinasjon: modellverdier for sjekksumfelter må bestå samme
+    # matematikk som de deterministiske — ellers forkastes de. (De
+    # deterministiske treffene over er allerede validert, så dette rammer
+    # kun ukontrollerte modellverdier.)
+    fnr_verdi = re.sub(r"\D", "", str(resultat.get("fodselsnummer") or ""))
+    if resultat.get("fodselsnummer") and not er_gyldig_fnr(fnr_verdi):
+        resultat.pop("fodselsnummer")
+    konto_verdi = re.sub(r"\D", "", str(resultat.get("kontonummer") or ""))
+    if resultat.get("kontonummer") and not er_gyldig_kontonummer(konto_verdi):
+        resultat.pop("kontonummer")
 
+    # kontornavn betyr NAV-kontor — alt annet er en organisasjon, ikke kontor
+    if resultat.get("kontornavn") and not str(resultat["kontornavn"]).upper().startswith("NAV"):
+        resultat.pop("kontornavn")
+
+    # Whitelist-baserte felter: gyldig modellverdi beholdes; ugyldig
+    # erstattes av deterministisk treff fra teksten, eller forkastes helt.
+    if str(resultat.get("ytelse", "")).lower() not in NORSKE_YTELSER:
+        ytelse = finn_ytelse(tekst)
+        if ytelse:
+            resultat["ytelse"] = ytelse
+        else:
+            resultat.pop("ytelse", None)
+
+    # fylke må både være et ekte fylke OG faktisk stå i teksten —
+    # et fylke modellen ikke kan kildeføre er gjetning.
     fylke = finn_fylke(tekst)
-    if fylke and resultat.get("fylke") not in NORSKE_FYLKER:
+    if fylke:
         resultat["fylke"] = fylke
+    elif "fylke" in resultat:
+        resultat.pop("fylke")
 
     return resultat

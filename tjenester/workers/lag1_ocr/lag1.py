@@ -16,6 +16,7 @@ from tjenester.workers.base_worker import BaseWorker
 logger = logging.getLogger(__name__)
 
 WORKER_ID = f"lag1-{socket.gethostname()}"
+MODELLER_STI = os.environ.get("MODELLER_STI", "/modeller")
 
 # NB: GPU-samtidighet begrenses av antall worker-replicas og K8s
 # GPU-limits — en in-process-semafor i en enkelt-trådet worker
@@ -42,7 +43,7 @@ class OCRWorker(BaseWorker):
         """Laster TrOCR én gang ved oppstart — ikke per dokument."""
         try:
             from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-            modell_sti = CONFIG["modeller"]["trocr"]
+            modell_sti = f"{MODELLER_STI}/{CONFIG['modeller']['trocr']}"
             self._trocr_processor = TrOCRProcessor.from_pretrained(modell_sti)
             self._trocr_model = VisionEncoderDecoderModel.from_pretrained(modell_sti)
             self._trocr_model.eval()

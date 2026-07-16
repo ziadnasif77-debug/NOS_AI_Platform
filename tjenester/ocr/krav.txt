@@ -1,5 +1,5 @@
 htrflow
-marker-pdf
+marker-pdf<1.0.0
 opencv-python-headless
 watchdog
 requests
@@ -9,5 +9,5 @@ pydantic
 fastapi
 uvicorn
 PyMuPDF
-paddleocr
+paddleocr<3.0.0
 redis

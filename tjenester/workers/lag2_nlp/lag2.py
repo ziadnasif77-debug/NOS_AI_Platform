@@ -5,8 +5,10 @@ Kombinerer lag3_nlp + lag4_validering + lag5_kryssvalidering.
 import sys
 import os
 import re
+import json
 import logging
 import socket
+import torch
 from datetime import datetime
 from typing import Optional
 
@@ -20,6 +22,8 @@ from tjenester.workers.base_worker import BaseWorker
 logger = logging.getLogger(__name__)
 
 WORKER_ID = f"lag2-{socket.gethostname()}"
+MODELLER_STI = os.environ.get("MODELLER_STI", "/modeller")
+GPU_ENHET = CONFIG["gpu"]["enhet"]
 
 OBLIGATORISKE_FELT = {
     "dagpenger": ["navn", "fodselsnummer", "dato"],
@@ -42,7 +46,8 @@ class NLPWorker(BaseWorker):
         self._layoutlm_processor = None
         self._layoutlm_model = None
         self._layoutlmv3_available = False
-        self._borealis_pipeline = None
+        self._borealis_tokenizer = None
+        self._borealis_model = None
         self._borealis_available = False
         self._nb_bert_pipeline = None
         self._nb_bert_available = False
@@ -52,13 +57,15 @@ class NLPWorker(BaseWorker):
         """Laster alle NLP-modeller én gang ved oppstart — ikke per dokument."""
         try:
             from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification
-            modell_sti = CONFIG["modeller"]["layoutlmv3"]
+            modell_sti = f"{MODELLER_STI}/{CONFIG['modeller']['layoutlmv3']}"
             self._layoutlm_processor = LayoutLMv3Processor.from_pretrained(
                 modell_sti, apply_ocr=False
             )
             self._layoutlm_model = LayoutLMv3ForTokenClassification.from_pretrained(
-                modell_sti, num_labels=6, ignore_mismatched_sizes=True
+                modell_sti, num_labels=6, ignore_mismatched_sizes=True,
+                dtype=torch.float16,
             )
+            self._layoutlm_model.to(GPU_ENHET)
             self._layoutlm_model.eval()
             self._layoutlmv3_available = True
             logger.info("LayoutLMv3 lastet.")
@@ -66,19 +73,34 @@ class NLPWorker(BaseWorker):
             logger.warning("LayoutLMv3 lasting feilet: %s", exc)
 
         try:
-            from transformers import pipeline
-            self._borealis_pipeline = pipeline(
-                "ner", model=CONFIG["modeller"]["borealis"], aggregation_strategy="simple"
+            from transformers import (
+                AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig,
             )
+            borealis_sti = f"{MODELLER_STI}/{CONFIG['modeller']['borealis']}"
+            self._borealis_tokenizer = AutoTokenizer.from_pretrained(borealis_sti)
+            # 4-bit NF4: ~2.6 GB i stedet for ~8 GB — nødvendig for at
+            # 4B-modellen skal dele GPU med LayoutLMv3 og NB-BERT.
+            kvantisering = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+            self._borealis_model = AutoModelForCausalLM.from_pretrained(
+                borealis_sti, quantization_config=kvantisering,
+                device_map=GPU_ENHET, attn_implementation="eager",
+            )
+            self._borealis_model.eval()
             self._borealis_available = True
-            logger.info("Borealis NER lastet.")
+            logger.info("Borealis (LLM) lastet.")
         except Exception as exc:
             logger.warning("Borealis lasting feilet: %s", exc)
 
         try:
             from transformers import pipeline
             self._nb_bert_pipeline = pipeline(
-                "ner", model=CONFIG["modeller"]["nb_bert_ner"], aggregation_strategy="simple"
+                "ner", model=f"{MODELLER_STI}/{CONFIG['modeller']['nb_bert_ner']}",
+                aggregation_strategy="simple",
+                device=GPU_ENHET, torch_dtype=torch.float16,
             )
             self._nb_bert_available = True
             logger.info("NB-BERT-NER lastet.")
@@ -116,6 +138,7 @@ class NLPWorker(BaseWorker):
         # telefon, e-post, beløp, saksnr, kontor, postnr) — matematikk
         # slår gjetning for strukturerte felter.
         entiteter = utvid_entiteter(tekst, entiteter)
+        entiteter = self._ordne_entiteter(entiteter)
         ytelse = entiteter.get("ytelse") or ytelse
 
         utfall = self._bestem_utfall(entiteter, tekst)
@@ -157,14 +180,24 @@ class NLPWorker(BaseWorker):
     # ------------------------------------------------------------------ #
 
     def _ekstraher(self, tekst, tokens, bokser, dokumenttype, bilde_sti=""):
+        # Borealis (LLM) gjør åpen feltuttrekking — den generelle motoren
+        # som finner alle felter dokumentet faktisk inneholder.
+        # LayoutLMv3 krever et finjustert klassifiseringshode og brukes
+        # kun når LLM-en ikke er tilgjengelig.
+        if len(tekst) > 200 and self._borealis_available:
+            return self._borealis(tekst)
         har_layout = bool(tokens) and bool(bokser)
         if dokumenttype in (TRYKT, TABELL) and har_layout and self._layoutlmv3_available:
             return self._layoutlmv3(bilde_sti, tokens, bokser, tekst)
-        elif len(tekst) > 500 and self._borealis_available:
-            return self._borealis(tekst)
-        else:
-            return self._nb_bert(tekst)
+        return self._nb_bert(tekst)
 
+    # Kanoniske nøkler — brukes i prompten og for å ordne resultatet.
+    # Alt annet dokumentet inneholder trekkes ut med beskrivende nøkler.
+    _KANONISKE_FELT = [
+        "navn", "fodselsnummer", "dato", "adresse", "postnummer", "poststed",
+        "telefon", "epost", "fylke", "ytelse", "saksnummer", "kontornavn",
+        "belop", "kontonummer", "organisasjon",
+    ]
     _ETIKETTER = ["NAVN", "FODSELSNUMMER", "DATO", "ADRESSE", "SIGNATUR", "O"]
     _ID_TIL_ETIKETT = dict(enumerate(["NAVN", "FODSELSNUMMER", "DATO", "ADRESSE", "SIGNATUR", "O"]))
 
@@ -218,12 +251,84 @@ class NLPWorker(BaseWorker):
 
     def _borealis(self, tekst):
         try:
-            ner_res = self._borealis_pipeline(tekst[:1024])
-            entiteter = self._konverter_ner(ner_res)
-            return entiteter, "brev", entiteter.get("ytelse"), 0.87, "borealis"
+            prompt = (
+                "Du analyserer et dokument. Trekk ut ALLE viktige felter du "
+                "finner i teksten under, som ETT flatt JSON-objekt.\n"
+                "- Bruk beskrivende norske nøkler i snake_case "
+                "(f.eks. ordrenummer, butikk, total_belop, betalingsmetode).\n"
+                "- Bruk disse kanoniske nøklene når feltet finnes: "
+                + ", ".join(self._KANONISKE_FELT) + ".\n"
+                "- Ta også med nøkkelen dokumenttype: en kort kategori som "
+                "brev, vedtak, faktura, kvittering, ordrebekreftelse, soknad.\n"
+                "- Ta KUN med felter som faktisk står i teksten — ikke gjett, "
+                "og utelat felter som mangler.\n"
+                "- Svar KUN med JSON-objektet, ingen annen tekst.\n\n"
+                f"Dokument:\n{tekst[:3000]}\n\nJSON:"
+            )
+            innganger = self._borealis_tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                add_generation_prompt=True, return_tensors="pt", return_dict=True,
+            ).to(GPU_ENHET)
+            with torch.no_grad():
+                utgang = self._borealis_model.generate(
+                    **innganger, max_new_tokens=512, do_sample=False,
+                    pad_token_id=self._borealis_tokenizer.eos_token_id,
+                )
+            inn_lengde = innganger["input_ids"].shape[-1]
+            svar = self._borealis_tokenizer.decode(
+                utgang[0][inn_lengde:], skip_special_tokens=True
+            )
+            entiteter = self._parse_borealis_json(svar)
+            dokklasse = entiteter.pop("dokumenttype", None) or "brev"
+            return entiteter, dokklasse, entiteter.get("ytelse"), 0.87, "borealis"
         except Exception as exc:
             logger.warning("Borealis feilet: %s — bruker NB-BERT", exc)
             return self._nb_bert(tekst)
+
+    def _parse_borealis_json(self, svar: str) -> dict:
+        """Åpen parsing: alle nøkler beholdes (normalisert til snake_case),
+        nøstede objekter flates ut, lister slås sammen. Tomme verdier
+        forkastes. Maks 40 felter — mot runaway-generering."""
+        treff = re.search(r"\{.*\}", svar, re.DOTALL)
+        if not treff:
+            return {}
+        try:
+            rådata = json.loads(treff.group(0))
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(rådata, dict):
+            return {}
+
+        def _norm_nokkel(k) -> str:
+            k = str(k).strip().lower().replace(" ", "_").replace("-", "_")
+            return re.sub(r"[^a-z0-9æøå_]", "", k)
+
+        entiteter: dict = {}
+        for k, v in rådata.items():
+            if len(entiteter) >= 40:
+                break
+            nokkel = _norm_nokkel(k)
+            if not nokkel or v in (None, "", "null", [], {}):
+                continue
+            if isinstance(v, dict):
+                for uk, uv in v.items():
+                    if uv in (None, "", "null") or len(entiteter) >= 40:
+                        continue
+                    entiteter.setdefault(f"{nokkel}_{_norm_nokkel(uk)}", str(uv).strip())
+            elif isinstance(v, list):
+                entiteter[nokkel] = ", ".join(
+                    str(x).strip() for x in v if x not in (None, "")
+                )
+            else:
+                entiteter[nokkel] = str(v).strip()
+        return entiteter
+
+    def _ordne_entiteter(self, entiteter: dict) -> dict:
+        """Ordner feltene: kanoniske felter først (i fast rekkefølge),
+        deretter dokumentspesifikke felter alfabetisk."""
+        kanonisk = {k: entiteter[k] for k in self._KANONISKE_FELT if k in entiteter}
+        ovrige = {k: entiteter[k] for k in sorted(entiteter) if k not in kanonisk}
+        return {**kanonisk, **ovrige}
 
     def _nb_bert(self, tekst):
         if not self._nb_bert_available:
