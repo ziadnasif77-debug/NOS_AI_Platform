@@ -27,6 +27,7 @@ resources:
   - 13-workers.yaml
   # 14-autoskalering.yaml krever KEDA — appliseres separat (se filen)
   - 15-sikkerhetskopi.yaml
+  - 17-oppbevaring.yaml
   # 16-llm.yaml krever GPU-node — appliser når model serving tas i bruk:
   #   kubectl apply -f k8s/16-llm.yaml -n kubeflow
   # og sett LLM_URL=http://llm:8000/v1 i workers-deploymenten (13)

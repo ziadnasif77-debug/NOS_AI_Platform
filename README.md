@@ -19,6 +19,7 @@ Et produksjonsklart AI-pipeline for automatisk digitalisering, analyse og søk i
 - [API-dokumentasjon](#api-dokumentasjon)
 - [Make-kommandoer](#make-kommandoer)
 - [Sikkerhetskopi og gjenoppretting](#sikkerhetskopi-og-gjenoppretting)
+- [Oppbevaringsbegrensning (6 måneder)](#oppbevaringsbegrensning-6-måneder)
 - [Testing](#testing)
 - [SLA-mål](#sla-mål)
 - [Sikkerhet og GDPR](#sikkerhet-og-gdpr)
@@ -572,6 +573,29 @@ begrunnelser: **[docs/SIKKERHETSKOPI.md](docs/SIKKERHETSKOPI.md)**.
 
 ---
 
+## Oppbevaringsbegrensning (6 måneder)
+
+NAV tillater ikke dokumentlagring over 6 måneder. En daglig
+oppbevaringsjobb sletter **alt dokumentinnhold** eldre enn
+`OPPBEVARING_MAKS_DAGER` (standard 150): originalfiler, `results`-rader
+(OCR-tekst + entiteter), DLQ-snapshots, søkeindeksen (Milvus) og
+backup-speilet. `jobs`-raden anonymiseres men beholdes som statistikk;
+`audit_log` beholdes for alltid (inneholder aldri dokumentinnhold).
+Hver sletting bevises med `SLETTET_OPPBEVARING` i audit-loggen.
+
+Budsjettet inkluderer sikkerhetskopiene:
+`150 dager + eldste backup-kopi (~28) ≤ 180`.
+
+```bash
+make oppbevaring-torrkjoring   # revisjon: hva ville blitt slettet?
+make oppbevaring               # slett nå
+```
+
+Full analyse av hvor persondata lever og etterlevelsesbevis:
+**[docs/OPPBEVARING.md](docs/OPPBEVARING.md)**.
+
+---
+
 ## Testing
 
 ### Enhetstester (269 totalt: 227 enhet + 42 integrasjon)
@@ -599,7 +623,8 @@ python -m pytest tester/ -v
 | `test_observabilitet_auth.py` | Prometheus-metrikker, OIDC (ekte JWT-validering) |
 | `test_audit_fikser.py` | Regresjon for audit-funn: lås/retry, rebuild-kontrakt, RRF-dokumenter, OIDC-roller |
 | `test_tekstuttrekk.py` | Deterministisk uttrekkslag: mod11-sjekksummer, mønstre for 8 felter, sammenslåing med modell-entiteter, anti-hallusinasjon |
-| `test_sikkerhetskopi.py` | GFS-retention (7/4/6), dump-filnavn, sha256 |
+| `test_sikkerhetskopi.py` | GFS-retention, dump-filnavn, sha256 |
+| `test_oppbevaring.py` | 6-månedersregelen: frist, stisamling, fil_id-validering, tørrkjøring, backup-speilrydding |
 | `test_llm_klient.py` | Åpen LLM-uttrekking: JSON-parsing, nøkkelnormalisering, utflating, feltordning |
 
 ### Integrasjonstester (ekte Postgres + Redis, ingen mocks)
@@ -686,6 +711,7 @@ komplett audit-spor. NLP-steget ble simulert med injisert resultat
 - **Sikkerhetskopi:** Daglig verifisert `pg_dump` med GFS-retention (7/4/6) + inkrementell kopi av originaldokumenter; backup-hendelser logges i audit_log. Full strategi og gjenopprettingsprosedyre: [docs/SIKKERHETSKOPI.md](docs/SIKKERHETSKOPI.md)
 - **Idempotens:** Duplikate opplastinger gir ingen duplikate jobber
 - **GDPR:** Fødselsnummer, navn og adresse behandles kun internt — validering via Mod11 uten ekstern oppkobling. Fødselsnummer lagres ikke i søkeindeksen (Milvus).
+- **Oppbevaringsbegrensning:** Alt dokumentinnhold slettes automatisk etter maks 150 dager (budsjett 180 inkl. backup) — se [docs/OPPBEVARING.md](docs/OPPBEVARING.md)
 
 ---
 
@@ -747,6 +773,7 @@ nav/
 │   │   └── ruter/
 │   │       └── last_opp.py                  # V2.1: idempotens, /jobb, /resultat, /audit
 │   ├── backup/                              # Backup-daemon (pg_dump + retention)
+│   ├── oppbevaring/                         # 6-månedersregelen (sletting av innhold)
 │   ├── sok/
 │   └── (legacy: ocr, nlp, lag0–lag5, ruter)
 ├── k8s/                                     # Kubernetes-manifester (01–16)

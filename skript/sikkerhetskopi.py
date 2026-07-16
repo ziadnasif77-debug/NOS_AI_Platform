@@ -35,10 +35,15 @@ BACKUP_STI = os.environ.get("BACKUP_STI", "/backup")
 DATA_STI = os.environ.get("DATA_STI", "/data")
 POSTGRES_URL = os.environ.get("POSTGRES_URL", "")
 
-# GFS-retention (kan overstyres via miljø)
+# GFS-retention (kan overstyres via miljø).
+# OBS oppbevaringsbudsjett (docs/OPPBEVARING.md): eldste sikkerhetskopi
+# + OPPBEVARING_MAKS_DAGER skal være ≤ 180 dager (NAV-kravet). Standard
+# 7/4/0 gir eldste kopi ~28 dager; 150 + 28 ≤ 180. Månedlige kopier er
+# derfor AV som standard — skru på kun der 6-månedersregelen ikke gjelder.
 DAGLIGE = int(os.environ.get("BACKUP_DAGLIGE", "7"))
 UKENTLIGE = int(os.environ.get("BACKUP_UKENTLIGE", "4"))
-MAANEDLIGE = int(os.environ.get("BACKUP_MAANEDLIGE", "6"))
+MAANEDLIGE = int(os.environ.get("BACKUP_MAANEDLIGE", "0"))
+OPPBEVARING_MAKS_DAGER = int(os.environ.get("OPPBEVARING_MAKS_DAGER", "150"))
 
 DUMP_PREFIKS = "nav_archive_"
 DUMP_SUFFIKS = ".dump"
@@ -280,6 +285,28 @@ def kopier_nye_filer(kilde_rot: str = DATA_STI,
     return antall
 
 
+def rydd_utlopte_filer(maal_mappe: str = BACKUP_STI,
+                       maks_dager: int = OPPBEVARING_MAKS_DAGER) -> int:
+    """Oppbevaringskravet gjelder også backup-speilet av originalfiler:
+    filer eldre enn maks_dager (mtime — copy2 bevarer kildens) slettes.
+    Uten dette ville speilet vokse for alltid og bryte 6-månedersregelen."""
+    rot = os.path.join(maal_mappe, "filer")
+    if not os.path.isdir(rot):
+        return 0
+    frist = time.time() - maks_dager * 86400
+    antall = 0
+    for mappe, _, filer in os.walk(rot):
+        for fil in filer:
+            sti = os.path.join(mappe, fil)
+            if os.path.getmtime(sti) < frist:
+                os.remove(sti)
+                antall += 1
+    if antall:
+        logger.info("Oppbevaring: slettet %d utløpte filer fra backup-speilet",
+                    antall)
+    return antall
+
+
 # ------------------------------------------------------------------ #
 #  Kjøring                                                             #
 # ------------------------------------------------------------------ #
@@ -289,6 +316,7 @@ def kjor_en_runde(inkluder_filer: bool) -> dict:
     resultat["slettet_av_retention"] = rydd_gamle()
     if inkluder_filer:
         resultat["nye_filer_kopiert"] = kopier_nye_filer()
+        resultat["utlopte_filer_slettet"] = rydd_utlopte_filer()
     logg_til_audit(resultat)
     with open(os.path.join(BACKUP_STI, "status.json"), "w",
               encoding="utf-8") as f:

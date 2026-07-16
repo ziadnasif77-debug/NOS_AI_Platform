@@ -267,6 +267,26 @@ async def indekser(data: dict):
         raise HTTPException(status_code=500, detail=str(feil))
 
 
+@app.delete("/dokument/{fil_id}")
+async def slett_dokument(fil_id: str):
+    """Oppbevaring/GDPR: fjern ALLE sider for et dokument fra indeksen.
+    Kalles av oppbevaringsjobben når dokumentet passerer maks alder."""
+    _krev_milvus()
+    global _bm25_dokumenter, _bm25_skitten
+    if not fil_id or not fil_id.replace("-", "").isalnum() or len(fil_id) > 200:
+        raise HTTPException(status_code=400, detail="Ugyldig fil_id")
+    try:
+        _samling.delete(f'fil_id == "{fil_id}"')
+        _samling.flush()
+        with _bm25_lås:
+            _bm25_dokumenter = [d for d in _bm25_dokumenter if d["fil_id"] != fil_id]
+            _bm25_skitten = True
+        return {"status": "slettet", "fil_id": fil_id}
+    except Exception as feil:
+        logger.error("Slettefeil for %s: %s", fil_id, feil)
+        raise HTTPException(status_code=500, detail=str(feil))
+
+
 @app.post("/sok")
 async def sok(data: dict):
     _krev_milvus()

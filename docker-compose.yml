@@ -521,6 +521,29 @@ services:
       start_period: 300s           # modell-lasting tar tid
     restart: unless-stopped
 
+  # Oppbevaringsbegrensning (NAV: dokumenter maks 6 måneder):
+  # sletter filer, results-innhold og søkeindeks-oppføringer eldre
+  # enn OPPBEVARING_MAKS_DAGER. Se docs/OPPBEVARING.md.
+  oppbevaring:
+    build:
+      context: .
+      dockerfile: tjenester/oppbevaring/Dockerfile
+    environment:
+      - POSTGRES_URL=postgresql://nav:nav@postgres:5432/nav_archive
+      - SOK_URL=http://sok:8003
+      - API_NOKKEL=${API_NOKKEL}
+      - DATA_STI=/data
+      - OPPBEVARING_MAKS_DAGER=${OPPBEVARING_MAKS_DAGER:-150}
+      - OPPBEVARING_INTERVALL_TIMER=${OPPBEVARING_INTERVALL_TIMER:-24}
+      - LABEL_STUDIO_URL=http://label-studio:8080
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY:-}
+    volumes:
+      - ${DATA_STI:-./data}:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   backup:
     build:
       context: .

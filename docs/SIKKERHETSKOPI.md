@@ -28,9 +28,15 @@ strategien følger av det:
 
 ## Retention (GFS)
 
-Standard: **7 daglige + 4 ukentlige + 6 månedlige**. I tillegg beholdes
-alltid alle kopier tatt inneværende dag. Overstyres med
-`BACKUP_DAGLIGE`, `BACKUP_UKENTLIGE`, `BACKUP_MAANEDLIGE`.
+Standard: **7 daglige + 4 ukentlige + 0 månedlige** (eldste kopi
+~28 dager). I tillegg beholdes alltid alle kopier tatt inneværende dag.
+Overstyres med `BACKUP_DAGLIGE`, `BACKUP_UKENTLIGE`, `BACKUP_MAANEDLIGE`.
+
+> **Hvorfor 0 månedlige?** NAV tillater ikke dokumentlagring over
+> 6 måneder, og kravet gjelder også innholdet i sikkerhetskopier:
+> `OPPBEVARING_MAKS_DAGER (150) + eldste kopi (~28) ≤ 180`.
+> Se [OPPBEVARING.md](OPPBEVARING.md). Skru på månedlige kopier kun
+> der 6-månedersregelen ikke gjelder.
 
 Filer som ikke matcher `nav_archive_YYYYMMDD_HHMMSS.dump` røres aldri
 av oppryddingen.
@@ -79,8 +85,10 @@ etterpå. En backup som aldri er gjenopprettet er bare et håp.
 1. Stopp alt som skriver: `docker compose stop api preprocessing_worker ocr_worker nlp_worker routing_worker reconciliation_worker`
 2. `make gjenopprett FIL=<nyeste dump>`
 3. **`make rebuild-redis`** — køene skal alltid gjenoppbygges fra Postgres
-4. Start tjenestene igjen: `make start`
-5. Reindekser søk ved behov (APPROVED-dokumenter re-rutes, eller kjør
+4. **`make oppbevaring`** — fjern innhold som utløp mellom dump og
+   gjenoppretting (6-månedersregelen, se [OPPBEVARING.md](OPPBEVARING.md))
+5. Start tjenestene igjen: `make start`
+6. Reindekser søk ved behov (APPROVED-dokumenter re-rutes, eller kjør
    reindeksering mot `sok:8003/indekser`)
 
 Rekkefølgen 2→3 er kritisk: Redis-innhold eldre enn databasen gir

@@ -1,4 +1,4 @@
-.PHONY: oppsett start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation sikkerhetskopi sikkerhetskopi-status sikkerhetskopi-verifiser gjenopprett test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
+.PHONY: oppsett start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation sikkerhetskopi sikkerhetskopi-status sikkerhetskopi-verifiser gjenopprett oppbevaring oppbevaring-torrkjoring test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
 
 # Ett-kommando lokalt førstegangsoppsett: .env, datamapper, GPU-sjekk.
 # Laster IKKE ned modeller (kjør last-ned-modeller separat, ~17 GB).
@@ -139,7 +139,15 @@ sikkerhetskopi-verifiser:            # make sikkerhetskopi-verifiser FIL=nav_arc
 gjenopprett:                         # make gjenopprett FIL=nav_archive_....dump [DB=navn]
 	docker compose run --rm backup python3 /app/sikkerhetskopi.py \
 		--gjenopprett /backup/$(FIL) $(if $(DB),--maal-database $(DB))
-	@echo "Husk: make rebuild-redis etter gjenoppretting til hoveddatabasen."
+	@echo "Husk: make rebuild-redis + make oppbevaring etter gjenoppretting til hoveddatabasen."
+
+# ─── Oppbevaring (NAV: dokumenter maks 6 mnd — docs/OPPBEVARING.md) ─────────
+
+oppbevaring:                         # slett utløpt dokumentinnhold nå
+	docker compose run --rm oppbevaring python /app/oppbevaring.py
+
+oppbevaring-torrkjoring:             # vis hva som ville blitt slettet
+	docker compose run --rm oppbevaring python /app/oppbevaring.py --torrkjoring
 
 test-state-machine:
 	python -m pytest tester/test_state_machine.py -v
