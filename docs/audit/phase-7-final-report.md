@@ -157,3 +157,12 @@ Disse er **ikke kodefeil** — de krever juridisk/organisatorisk avklaring:
 - `phase-4-api-security-gdpr.md` — 15 funn (F4-12/F4-13 kritisk)
 - `phase-5-infra-scale-resilience.md` — 16 funn (4 kritisk, live-tester)
 - `phase-6-tests-quality.md` — testtall forsonet: 248+42=290, cov 32 % enhet
+
+## Rettelse etter ekstern gjennomgang av fase 0
+Rammingen «42 uten test, hvorav 39 legacy → 3 aktive» i fase 0 var upresis.
+Korrekt (fase 0-tillegg K1): 13 legacy .py + 13 trivielle + **16 aktive-logikk-
+filer** uten enhetstest. Av de 16 er kun **2 aktiv forespørselsbane uten noen
+test** — `api/ruter/gjennomgang.py` og `api/ruter/sok.py` (nytt fase-6-punkt
+F6-0). Resten er ML-/driftsverktøy eller har live-/integrasjonsdekning. Punkt
+(6) er i tillegg nå bevist på BLANDET DONE/FAILED-tilstand, ikke bare
+alle-FAILED (fase 1).

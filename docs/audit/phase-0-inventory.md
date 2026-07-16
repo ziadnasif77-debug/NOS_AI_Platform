@@ -310,3 +310,86 @@
 | 6 Tester/kodekvalitet | `tester/**` (28), hotspots-listen over |
 
 **Utenfor omfang (begrunnet):** `tjenester/` legacy-lag (39 filer, null trafikk i V2.1 iht. README — revideres kun for død-kode-funn i fase 6), `docs/` (dokumentasjon, ikke kjørbar).
+
+---
+
+# Tillegg / korreksjon (etter ekstern gjennomgang)
+
+Tre presiseringer som gjør inventaret vanntett før faseløpet stenges.
+**Første punkt er en reell korreksjon av rammingen i hoveddelen over.**
+
+## K1 — Korreksjon: «42 uten test, hvorav 39 legacy» var upresist
+
+Nedbrutt deterministisk (`os.walk` + import-analyse + legacy-regex
+`tjenester/(lag[0-5]_|ocr|nlp|ruter)`), fordeler de 42 py-produksjonsfilene
+uten koblet enhetstest seg slik:
+
+| Gruppe | Antall | Kommentar |
+|---|---|---|
+| Legacy .py (lag0-5/ocr/nlp/ruter) | **13** | ikke 39 — det opprinnelige tallet blandet «39 filer i legacy-KATEGORIEN» (inkl. Dockerfiles/krav.txt/`__init__`) med «legacy blant de 42 py-filene» |
+| Trivielle (`__init__.py` 0 l, `helsesjekk.py`) | 13 | ingen logikk å teste |
+| **Aktiv logikk uten enhetstest** | **16** | den reelle listen — se under |
+
+**De 16 aktive-logikk-filene uten enhetstest (ikke 3 — hoveddelens ramming var feil):**
+
+| Fil | Linjer | Reell dekning |
+|---|---|---|
+| `skript/finjuster.py` | 254 | ingen (ML-verktøy, kjøres manuelt) |
+| `skript/eksporter_fra_label_studio.py` | 179 | ingen (ML-verktøy) |
+| `skript/dlq_gjenoppta.py` | 151 | **live-verifisert** i denne økten (10 jobber gjenopptatt) |
+| `pipeline_dashboard/pipeline.py` | 117 | ingen (valgfri komponent) |
+| `skript/konverter_til_layoutlmv3.py` | 106 | ingen (ML-verktøy) |
+| `skript/rebuild_redis.py` | 108 | integrasjonstest #25 (over HTTP, ikke import) |
+| `skript/init_db.py` | 103 | implisitt av alle integrasjonstester |
+| `skript/lag_layoutlmv3_datasett.py` | 96 | ingen (ML-verktøy) |
+| `kubeflow/dokument_pipeline.py` | 89 | test_kubeflow_modus.py (delvis) |
+| `delt/metrikker.py` | 86 | 66 % cov (fase 6) — delvis via andre importer |
+| `kubeflow/trenings_pipeline.py` | 71 | ingen |
+| `skript/send_til_label_studio.py` | 70 | ingen (ML-verktøy) |
+| `pipeline_dashboard/app.py` | 58 | ingen (valgfri komponent) |
+| `tjenester/api/ruter/gjennomgang.py` | 49 | **ingen — aktiv API-rute** |
+| `skript/last_ned_modeller.py` | 40 | ingen (engangsverktøy) |
+| `tjenester/api/ruter/sok.py` | 26 | integrasjon (søk over HTTP) |
+| `skript/sjekk_helse.py` | 19 | ingen (driftsverktøy) |
+
+**Bindende for fase 6:** de eneste to som er *aktiv produksjonskode i
+forespørselsbanen* uten noen test (verken enhet eller integrasjon-import) er
+**`tjenester/api/ruter/gjennomgang.py`** og **`tjenester/api/ruter/sok.py`**.
+Resten er ML-/driftsverktøy (akseptabelt lavere prioritet) eller har
+integrasjons-/live-dekning. `pipeline_dashboard/*` og `kubeflow/*` er valgfrie
+komponenter utenfor kjernebanen. Dette er nå et eksplisitt fase-6-punkt, ikke
+begravd i et aggregattall.
+
+## K2 — Metodisk forbehold: import-kobling ≠ testet logikk
+
+«Koblet test»-kolonnen er utledet av hvilke moduler testfilene *importerer*.
+Det har ett blindpunkt: en fil kan importeres uten at logikken dens faktisk
+utøves (f.eks. import kun for å bygge et config-objekt). «26 filer med koblet
+test» betyr derfor IKKE «26 filer meningsfullt testet». **Fasit for reell
+dekning er `coverage.py`-tall, ikke import-forekomst** — dette måles og
+rapporteres i fase 6 (kjørt: 32 % samlet enhetsdekning, men 94 % på
+kjernelogikken `tekstuttrekk.py`).
+
+## K3 — Ikke-Python-filer (bindende scope for fase 5)
+
+Hoveddelen kvantifiserte de 68 py-produksjonsfilene. Fase 5 (Docker/K8s/ytelse)
+trenger tilsvarende avgrensning for ikke-Python:
+
+| Type | Antall | Linjer |
+|---|---|---|
+| k8s YAML | 18 | 1000 |
+| Dockerfile | 19 | 174 |
+| docker-compose.yml | 1 | 587 |
+| config.yaml | 1 | 88 |
+| Makefile | 1 | 216 |
+| overvaaking (prometheus/grafana/promtail) | 3 | 49 |
+| krav.txt (× flere tjenester) | 12 | 76 |
+| shell (oppsett) | 2 | 82 |
+| annen YAML (kompilert KFP-pipeline o.l.) | 4 | 462 |
+| .env.example/.git*/.dockerignore | 4 | 124 |
+
+**Fase 5 dekker eksplisitt:** alle 19 Dockerfiles, `docker-compose.yml`, alle
+18 `k8s/*.yaml`, `config.yaml`, `Makefile`, `overvaaking/*`. (Totaltellingen
+python 96 + ikke-python 65 = 161 avviker med +5 fra hoveddelens 156 pga. en
+OSError-skip i første kjøring; differansen er `.git*`/`.env.example`-varianter,
+ikke kjørbar kode.)

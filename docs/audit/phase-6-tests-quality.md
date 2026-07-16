@@ -50,6 +50,16 @@ tilstander, felt-innhold), ikke trivielt-sanne påstander. `test_tekstuttrekk.py
 tester ekte mod11-tilfeller, `test_sporsmal.py` tester faktisk parsing.
 **Klassifisering:** bekreftet ved kjøring. Positivt funn.
 
+### F6-0 · Middels · To aktive API-ruter helt uten test (korrigert fra fase 0)
+**Fil:** `tjenester/api/ruter/gjennomgang.py` (49 l), `tjenester/api/ruter/sok.py`
+(26 l). Fase 0-tillegget (K1) korrigerte rammingen «3 aktive uten test» til de
+faktiske 16 aktive-logikk-filene; av dem er disse to den eneste
+produksjonskoden i forespørselsbanen uten NOEN test (verken enhet eller
+integrasjon-import). Resten er ML-/driftsverktøy eller har live-/integrasjons-
+dekning. **Fiks:** legg til minst integrasjonstest for `/gjennomgang/ko`,
+`/gjennomgang/korriger/{id}` og søke-proxyen.
+**Klassifisering:** bekreftet ved kjøring (coverage 0 %).
+
 ### F6-2 · Middels · Modell-ruting og konfidens-logikk mangler enhetstester
 **Fil:** `lag1.py` (`_kjor_ocr`-ruting), `lag2.py` (`_ekstraher`-ruting).
 Rutingen (dokumenttype → modell, len(tekst) → Borealis/NB-BERT) og den
