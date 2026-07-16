@@ -736,7 +736,8 @@ komplett audit-spor. NLP-steget ble simulert med injisert resultat
 
 | Steg | Mål | Hardgrense |
 |------|-----|-----------|
-| API (upload) | < 200 ms | 500 ms |
+| API (upload, enkeltside) | < 200 ms | 500 ms |
+| API (upload, flersidig) | ~2 ms/side (målt: 1000 sider på 1,9 s) | 5 s per 1000 sider |
 | Preprocessing | < 300 ms | 1 000 ms |
 | OCR | 1–5 sek | 30 sek |
 | NLP | < 1 500 ms | 5 000 ms |

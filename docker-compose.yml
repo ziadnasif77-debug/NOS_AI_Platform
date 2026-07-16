@@ -295,6 +295,7 @@ services:
       - ${DATA_STI:-./data}:/data
     environment:
       - METRIKK_PORT=9101
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY:-}
       - PYTHONPATH=/app
       - INNTAK_STI=/data/inntak
     depends_on:
@@ -316,6 +317,7 @@ services:
       - ${MODELLER_STI:-./modeller}:/modeller
     environment:
       - METRIKK_PORT=9101
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY:-}
       - PYTHONPATH=/app
     depends_on:
       postgres:
@@ -343,6 +345,7 @@ services:
       - ${MODELLER_STI:-./modeller}:/modeller
     environment:
       - METRIKK_PORT=9101
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY:-}
       - PYTHONPATH=/app
       - LLM_URL=${LLM_URL:-}      # satt = Borealis via model serving
       - LLM_MODELL=${LLM_MODELL:-borealis}
@@ -371,6 +374,7 @@ services:
       - ${DATA_STI:-./data}:/data
     environment:
       - METRIKK_PORT=9101
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY:-}
       - PYTHONPATH=/app
     depends_on:
       postgres:
@@ -389,6 +393,7 @@ services:
       - ./tjenester/workers:/app/tjenester/workers
     environment:
       - PYTHONPATH=/app
+      - LABEL_STUDIO_API_KEY=${LABEL_STUDIO_API_KEY:-}   # LS-ettersending
     depends_on:
       postgres:
         condition: service_healthy

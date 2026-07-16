@@ -5,6 +5,7 @@ Kjører hvert 5. minutt og sikrer at Postgres og Redis er i sync.
 import sys
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 
@@ -60,11 +61,111 @@ class ReconciliationWorker:
             stuck = self.reparer_stuck_jobs(pg)
             ghost = self.reparer_ghost_states(pg)
             tapte = self.reparer_tapte_jobber(pg)
-            if stuck + ghost + tapte > 0:
+            ls = self.ettersend_label_studio(pg)
+            if stuck + ghost + tapte + ls > 0:
                 logger.info(
-                    "Reconciliation: %d stuck, %d ghost, %d tapte reparert",
-                    stuck, ghost, tapte,
+                    "Reconciliation: %d stuck, %d ghost, %d tapte, "
+                    "%d LS-ettersendt",
+                    stuck, ghost, tapte, ls,
                 )
+
+    # ------------------------------------------------------------------ #
+    #  Label Studio-etterslep                                              #
+    # ------------------------------------------------------------------ #
+
+    def ettersend_label_studio(self, pg) -> int:
+        """
+        REVIEW/REJECTED-beslutninger uten LABEL_STUDIO_SENDT-kvittering
+        i audit_log etter-sendes til gjennomgangs-UI-et. Beslutningen
+        selv ligger trygt i Postgres uansett — dette sikrer at en feilet
+        best-effort-sending betyr «forsinket gjennomgang», aldri
+        «usynlig gjennomgang».
+        """
+        with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                -- a) Feilede sendinger fra ALLE stadier (bildekvalitet,
+                --    OCR-konfidens, validering, routing) — drevet av
+                --    LABEL_STUDIO_FEILET uten senere SENDT-kvittering.
+                --    Nyeste feil per jobb = endelig beslutningsprosjekt.
+                (SELECT DISTINCT ON (a.job_id)
+                       a.job_id,
+                       (a.details->>'project_id')::int AS label_studio_project,
+                       a.details->>'stage'             AS stage,
+                       j.file_path,
+                       COALESCE(r.ocr_result->>'text', '') AS tekst
+                FROM audit_log a
+                JOIN jobs j ON j.job_id = a.job_id
+                LEFT JOIN results r ON r.job_id = a.job_id
+                WHERE a.event_type = 'LABEL_STUDIO_FEILET'
+                  AND NOT EXISTS (
+                        SELECT 1 FROM audit_log s
+                        WHERE s.job_id = a.job_id
+                          AND s.event_type = 'LABEL_STUDIO_SENDT'
+                          AND s.id > a.id)
+                ORDER BY a.job_id, a.id DESC)
+
+                UNION
+
+                -- b) REVIEW/REJECTED-beslutninger helt uten LS-audit
+                --    (historiske rader fra før kvitteringene fantes)
+                SELECT r.job_id, r.label_studio_project,
+                       'ettersending' AS stage, j.file_path,
+                       COALESCE(r.ocr_result->>'text', '') AS tekst
+                FROM results r
+                JOIN jobs j ON j.job_id = r.job_id
+                WHERE r.routing_decision IN ('REVIEW', 'REJECTED')
+                  AND r.label_studio_project IS NOT NULL
+                  AND NOT EXISTS (
+                        SELECT 1 FROM audit_log a
+                        WHERE a.job_id = r.job_id
+                          AND a.event_type IN ('LABEL_STUDIO_SENDT',
+                                               'LABEL_STUDIO_FEILET'))
+                LIMIT 50
+                """
+            )
+            rader = cur.fetchall()
+
+        antall = 0
+        for rad in rader:
+            try:
+                import requests as req
+                ls_url = CONFIG["label_studio"]["url"]
+                token = (os.environ.get("LABEL_STUDIO_API_KEY")
+                         or os.environ.get("LABEL_STUDIO_TOKEN", ""))
+                svar = req.post(
+                    f"{ls_url}/api/projects/{rad['label_studio_project']}/import",
+                    json=[{"data": {
+                        "image": rad["file_path"] or "",
+                        "text": rad["tekst"][:10000],
+                        "job_id": str(rad["job_id"]),
+                        "stage": rad["stage"] or "ettersending",
+                    }}],
+                    headers={"Authorization": f"Token {token}",
+                             "Content-Type": "application/json"},
+                    timeout=10,
+                )
+                svar.raise_for_status()
+                with pg.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO audit_log (job_id, event_type, worker_id, details)
+                        VALUES (%s, 'LABEL_STUDIO_SENDT', 'reconciliation', %s)
+                        """,
+                        (str(rad["job_id"]), psycopg2.extras.Json({
+                            "project_id": rad["label_studio_project"],
+                            "stage": rad["stage"] or "ettersending",
+                            "ettersending": True,
+                        })),
+                    )
+                pg.commit()
+                antall += 1
+            except Exception as exc:
+                logger.warning("LS-ettersending feilet for %s: %s — "
+                               "resten venter til neste runde",
+                               rad["job_id"], exc)
+                break   # LS er trolig nede — ikke hamre videre
+        return antall
 
     # ------------------------------------------------------------------ #
     #  Stuck jobs (lås utløpt)                                            #

@@ -383,11 +383,22 @@ class BaseWorker(ABC):
         # Label Studio er en BEST EFFORT-sidekanal: feil her (nettverk,
         # manglende bibliotek, LS nede) skal aldri felle selve jobben —
         # derfor ligger også importen inne i try-blokken.
+        #
+        # VIKTIG kvalitetsgaranti: routing-BESLUTNINGEN (REVIEW/REJECTED)
+        # er allerede lagret i Postgres FØR dette kallet — feil her kan
+        # aldri slippe et dokument forbi menneskelig gjennomgang. Men en
+        # feilet sending betyr at oppgaven mangler i gjennomgangs-UI-et,
+        # derfor auditeres både suksess (LABEL_STUDIO_SENDT) og feil
+        # (LABEL_STUDIO_FEILET) — ReconciliationWorker etter-sender
+        # REVIEW/REJECTED-rader som mangler SENDT-kvittering.
         try:
             import requests as req
 
             ls_url = CONFIG["label_studio"]["url"]
-            token = os.environ.get("LABEL_STUDIO_TOKEN", "")
+            # Standardnavnet er LABEL_STUDIO_API_KEY (som i .env/README);
+            # LABEL_STUDIO_TOKEN godtas for bakoverkompatibilitet.
+            token = (os.environ.get("LABEL_STUDIO_API_KEY")
+                     or os.environ.get("LABEL_STUDIO_TOKEN", ""))
             headers = {"Authorization": f"Token {token}",
                        "Content-Type": "application/json"}
             data = {
@@ -398,14 +409,24 @@ class BaseWorker(ABC):
                     "stage": stage,
                 }
             }
-            req.post(
+            svar = req.post(
                 f"{ls_url}/api/projects/{project_id}/import",
                 json=[data],
                 headers=headers,
                 timeout=10,
             )
+            svar.raise_for_status()
+            self._audit(job_id, "LABEL_STUDIO_SENDT",
+                        details={"project_id": project_id, "stage": stage})
         except Exception as exc:
             logger.warning("Kunne ikke sende til Label Studio: %s", exc)
+            try:
+                self._audit(job_id, "LABEL_STUDIO_FEILET",
+                            details={"project_id": project_id,
+                                     "stage": stage, "feil": str(exc)[:200]})
+            except Exception:
+                logger.warning("Fikk heller ikke auditert LS-feilen for %s",
+                               job_id)
 
     # ------------------------------------------------------------------ #
     #  Abstrakt metode                                                     #

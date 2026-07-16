@@ -371,12 +371,23 @@ async def dokument_felter(dokument_id: str):
             raise HTTPException(status_code=404, detail="Dokument ikke funnet")
 
         tilstander = [r["state"] for r in sider]
-        if not all(t == "DONE" for t in tilstander):
+        # FAILED er terminal og blokkerer ikke resten av dokumentet —
+        # men tvinger beslutningen til minst REVIEW (innholdet er ukjent).
+        underveis = sum(1 for t in tilstander if t not in ("DONE", "FAILED"))
+        if underveis:
             return JSONResponse(status_code=409, content={
                 "dokument_id": dokument_id, "ferdig": False,
                 "ferdige_sider": sum(1 for t in tilstander if t == "DONE"),
                 "antall_sider": len(sider),
-                "state": "FAILED" if "FAILED" in tilstander else "IN_PROGRESS",
+                "state": "IN_PROGRESS",
+            })
+        feilede_sider = [r["side_nummer"] for r in sider
+                         if r["state"] == "FAILED"]
+        sider = [r for r in sider if r["state"] == "DONE"]
+        if not sider:
+            return JSONResponse(status_code=409, content={
+                "dokument_id": dokument_id, "ferdig": True,
+                "state": "FAILED", "feilede_sider": feilede_sider,
             })
 
         feltnavn = ["navn", "fodselsnummer", "dato", "adresse",
@@ -420,25 +431,26 @@ async def dokument_felter(dokument_id: str):
 
         if "REJECTED" in beslutninger:
             samlet_beslutning = "REJECTED"
-        elif "REVIEW" in beslutninger:
-            samlet_beslutning = "REVIEW"
+        elif "REVIEW" in beslutninger or feilede_sider:
+            samlet_beslutning = "REVIEW"    # feilet side = ukjent innhold
         else:
             samlet_beslutning = "APPROVED"
 
         return {
             "dokument_id": dokument_id,
             "ferdig": True,
-            "state": "DONE",
+            "state": "DONE" if not feilede_sider else "DONE_MED_FEILEDE_SIDER",
             "filnavn": sider[0]["file_name"],
-            "antall_sider": len(sider),
+            "antall_sider": len(sider) + len(feilede_sider),
+            "feilede_sider": feilede_sider,
             "beslutning": samlet_beslutning,
             "felter": felter,
             "gjennomgang": {
                 "kreves": samlet_beslutning in ("REVIEW", "REJECTED"),
-                "sider_til_gjennomgang": [
-                    s["side_nummer"] for s, b in zip(per_side, beslutninger)
-                    if b in ("REVIEW", "REJECTED")
-                ],
+                "sider_til_gjennomgang": sorted(set(
+                    [s["side_nummer"] for s, b in zip(per_side, beslutninger)
+                     if b in ("REVIEW", "REJECTED")] + feilede_sider
+                )),
             },
             "per_side": per_side,
         }
@@ -509,21 +521,37 @@ async def dokument_tekst(
                 detail="Dokument ikke funnet (eller tomt sideintervall)")
 
         antall_totalt = sider[0]["antall_sider"] or len(sider)
-        manglende = [r["side_nummer"] for r in sider if r["state"] != "DONE"]
-        if manglende and not tillat_delvis:
+
+        # Oppbevaringsregelen: innhold slettet etter maks alder → 410,
+        # aldri stille tomme sider (samme kontrakt som /sporsmal)
+        if all(r["file_name"] == "[slettet: oppbevaring]" for r in sider):
+            raise HTTPException(status_code=410, detail={
+                "grunn": "innhold_slettet",
+                "hjelp": "Dokumentteksten er fjernet (oppbevaringsregelen)",
+            })
+
+        # «Én ødelagt side stopper ikke resten»: FAILED er en TERMINAL
+        # tilstand — den blokkerer aldri levering av de 999 andre sidene.
+        # Kun sider som fortsatt KAN bli ferdige (ikke-terminale) blokkerer.
+        underveis = [r["side_nummer"] for r in sider
+                     if r["state"] not in ("DONE", "FAILED")]
+        feilede = [r["side_nummer"] for r in sider if r["state"] == "FAILED"]
+        if underveis and not tillat_delvis:
             return JSONResponse(status_code=409, content={
                 "dokument_id": dokument_id, "ferdig": False,
-                "ferdige_sider": len(sider) - len(manglende),
+                "ferdige_sider": len(sider) - len(underveis) - len(feilede),
                 "antall_sider": len(sider),
-                "manglende_sider": manglende[:50],
+                "manglende_sider": underveis[:50],
                 "hjelp": "Bruk ?tillat_delvis=true for de ferdige sidene",
             })
 
         sidetekster = [{
             "side_nummer": r["side_nummer"],
-            "tekst": r["tekst"] or "",
-            "ocr_konfidens": float(r["konfidens"]) if r["konfidens"] else 0.0,
-        } for r in sider if r["state"] == "DONE"]
+            "status": r["state"],
+            "tekst": (r["tekst"] or "") if r["state"] == "DONE" else None,
+            "ocr_konfidens": (float(r["konfidens"]) if r["konfidens"] else 0.0)
+                             if r["state"] == "DONE" else None,
+        } for r in sider if r["state"] in ("DONE", "FAILED")]
 
         return {
             "dokument_id": dokument_id,
@@ -531,12 +559,16 @@ async def dokument_tekst(
             "antall_sider": antall_totalt,
             "fra_side": fra_side,
             "til_side": til_side,
-            "ferdig": not manglende,
-            "manglende_sider": manglende,
+            "ferdig": not underveis,          # alle sider i terminal tilstand
+            "komplett": not underveis and not feilede,   # alle DONE
+            "manglende_sider": underveis,
+            "feilede_sider": feilede,
             "sider": sidetekster,
             # Intervallet som én streng, med sidemarkører, i original orden
             "samlet_tekst": "\n\n".join(
-                f"--- Side {s['side_nummer'] + 1} av {antall_totalt} ---\n{s['tekst']}"
+                f"--- Side {s['side_nummer'] + 1} av {antall_totalt} ---\n"
+                + (s["tekst"] if s["status"] == "DONE"
+                   else "[SIDE FEILET — se dead_letter_queue]")
                 for s in sidetekster
             ),
         }
