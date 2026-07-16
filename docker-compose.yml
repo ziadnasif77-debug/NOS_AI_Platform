@@ -480,6 +480,26 @@ services:
       - loki
     restart: unless-stopped
 
+  backup:
+    build:
+      context: .
+      dockerfile: tjenester/backup/Dockerfile
+    environment:
+      - POSTGRES_URL=postgresql://nav:nav@postgres:5432/nav_archive
+      - BACKUP_STI=/backup
+      - DATA_STI=/data
+      - BACKUP_INTERVALL_TIMER=${BACKUP_INTERVALL_TIMER:-24}
+      - BACKUP_DAGLIGE=${BACKUP_DAGLIGE:-7}
+      - BACKUP_UKENTLIGE=${BACKUP_UKENTLIGE:-4}
+      - BACKUP_MAANEDLIGE=${BACKUP_MAANEDLIGE:-6}
+    volumes:
+      - ${BACKUP_STI:-./data/sikkerhetskopi}:/backup
+      - ${DATA_STI:-./data}:/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 
 volumes:
   milvus_data:

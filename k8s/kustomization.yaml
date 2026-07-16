@@ -26,3 +26,4 @@ resources:
   - 12-init-db-jobb.yaml
   - 13-workers.yaml
   # 14-autoskalering.yaml krever KEDA — appliseres separat (se filen)
+  - 15-sikkerhetskopi.yaml

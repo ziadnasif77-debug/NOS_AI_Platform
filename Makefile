@@ -1,4 +1,4 @@
-.PHONY: oppsett start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
+.PHONY: oppsett start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation sikkerhetskopi sikkerhetskopi-status sikkerhetskopi-verifiser gjenopprett test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
 
 # Ett-kommando lokalt førstegangsoppsett: .env, datamapper, GPU-sjekk.
 # Laster IKKE ned modeller (kjør last-ned-modeller separat, ~17 GB).
@@ -124,6 +124,22 @@ start-workers:
 
 start-reconciliation:
 	docker compose up -d reconciliation_worker
+
+# ─── Sikkerhetskopi (docs/SIKKERHETSKOPI.md) ────────────────────────────────
+
+sikkerhetskopi:                      # ta én backup nå (utenom daemon-planen)
+	docker compose run --rm backup python3 /app/sikkerhetskopi.py
+
+sikkerhetskopi-status:               # siste kjøring: fil, størrelse, verifisering
+	docker compose run --rm backup cat /backup/status.json
+
+sikkerhetskopi-verifiser:            # make sikkerhetskopi-verifiser FIL=nav_archive_....dump
+	docker compose run --rm backup python3 /app/sikkerhetskopi.py --verifiser /backup/$(FIL)
+
+gjenopprett:                         # make gjenopprett FIL=nav_archive_....dump [DB=navn]
+	docker compose run --rm backup python3 /app/sikkerhetskopi.py \
+		--gjenopprett /backup/$(FIL) $(if $(DB),--maal-database $(DB))
+	@echo "Husk: make rebuild-redis etter gjenoppretting til hoveddatabasen."
 
 test-state-machine:
 	python -m pytest tester/test_state_machine.py -v

@@ -157,7 +157,8 @@ Abstrakt basisklasse alle workers arver:
 - Sender til Label Studio prosjekt 2 ved lav konfidens
 
 ### NLPWorker (inkluderer validering)
-- Ruter NLP-modell: PRINTED/TABLE + layout → LayoutLMv3; lang tekst → Borealis; ellers → NB-BERT
+- Ruter NLP-modell: tekst > 200 tegn → Borealis (åpen LLM-uttrekking, alle felter dokumentet inneholder); ellers LayoutLMv3 (ved layout) eller NB-BERT
+- **Anti-hallusinasjon** (`utvid_entiteter`): modellverdier for sjekksumfelter (fnr, konto) må bestå mod11; ytelse/fylke må finnes i kanoniske lister (fylke også i teksten); kontornavn må starte med NAV
 - **Deterministisk uttrekkslag** (`delt/tekstuttrekk.py`) oppå modellene — mønstre og mod11-sjekksummer, mer presist enn NER for strukturerte felter:
 
   | Felt | Metode |
@@ -311,8 +312,8 @@ Alle modeller kjører **100 % offline** etter første nedlasting (~17 GB totalt)
 | `qwen3` | `Qwen/Qwen3-Embedding-0.6B` | 1024-dim vektorembedding |
 
 **Modellruting NLP (aldri alle tre samtidig):**
-- TRYKT/TABELL + tokens+bokser → LayoutLMv3
-- `len(tekst) > 500` → Borealis
+- `len(tekst) > 200` → Borealis (åpen LLM-feltuttrekking — finner alle felter dokumentet inneholder, ikke bare en fast liste; 4-bit NF4-kvantisert for 8 GB GPU)
+- TRYKT/TABELL + tokens+bokser (når Borealis mangler) → LayoutLMv3
 - ellers → NB-BERT
 
 ---
@@ -503,6 +504,12 @@ make rebuild-redis           # Rebuild Redis-køer fra Postgres
 make start-workers           # Start alle worker-containere
 make start-reconciliation    # Start ReconciliationWorker
 
+# ─── Sikkerhetskopi ──────────────────────────────────────────────────
+make sikkerhetskopi          # Ta en verifisert pg_dump nå
+make sikkerhetskopi-status   # Siste kjøring (fil, størrelse, verifisert)
+make sikkerhetskopi-verifiser FIL=...   # Kontroller sha256 + lesbarhet
+make gjenopprett FIL=... [DB=navn]      # Gjenopprett (DB= for øvelse)
+
 # ─── Tester ──────────────────────────────────────────────────────────
 make test                    # Kjør alle tester (250: 208 enhet + 42 integrasjon)
 make test-state-machine      # Test tilstandsmaskin
@@ -632,6 +639,7 @@ komplett audit-spor. NLP-steget ble simulert med injisert resultat
   - `oidc`: Bearer-token (JWT) validert mot institusjonens identitetsleverandør. Valgfri autorisasjon: `OIDC_PAAKREVD_ROLLE` krever rollen i tokenets `roles`-claim (Azure AD, Maskinporten, Keycloak, …). Sett `OIDC_JWKS_URL`, `OIDC_ISSUER` og `OIDC_AUDIENCE`. Signatur, utløp, issuer og audience verifiseres per forespørsel; JWKS-nøkler caches.
 - **CORS:** `CORS_ORIGINS` (kommaseparert) begrenser tillatte opphav i produksjon
 - **Audit-logg:** Slettes aldri (NAV-krav) — komplett sporbarhet for alle tilstandsskifter
+- **Sikkerhetskopi:** Daglig verifisert `pg_dump` med GFS-retention (7/4/6) + inkrementell kopi av originaldokumenter; backup-hendelser logges i audit_log. Full strategi og gjenopprettingsprosedyre: [docs/SIKKERHETSKOPI.md](docs/SIKKERHETSKOPI.md)
 - **Idempotens:** Duplikate opplastinger gir ingen duplikate jobber
 - **GDPR:** Fødselsnummer, navn og adresse behandles kun internt — validering via Mod11 uten ekstern oppkobling. Fødselsnummer lagres ikke i søkeindeksen (Milvus).
 
@@ -699,6 +707,7 @@ nav/
 ├── skript/
 │   ├── init_db.py                           # V2.1: opprett 4 Postgres-tabeller
 │   ├── rebuild_redis.py                     # V2.1: rebuild Redis fra Postgres
+│   ├── sikkerhetskopi.py                    # Verifisert pg_dump + GFS-retention + gjenoppretting
 │   ├── last_ned_modeller.py
 │   └── finjuster.py
 ├── tester/
@@ -711,6 +720,7 @@ nav/
 │   ├── test_contracts.py
 │   └── (test_config, test_lag0, test_lag4, test_ruter)
 └── docs/
+    ├── SIKKERHETSKOPI.md                    # Backup-strategi, RPO/RTO, gjenopprettingsprosedyre
     ├── API_INTEGRASJON.md                   # Verktøy-nøytral RPA/integrasjonsguide
     ├── HYBRID_ARKITEKTUR.md                 # Redis-produksjon + Kubeflow-trening
     ├── KUBEFLOW.md                          # Kubeflow-modus: oppsett og begrensninger
