@@ -86,9 +86,11 @@ async def metrics():
 from ruter.sok import ruter as sok_ruter
 from ruter.last_opp import ruter as last_opp_ruter
 from ruter.gjennomgang import ruter as gjennomgang_ruter
+from ruter.sporsmal import ruter as sporsmal_ruter
 
 app.include_router(sok_ruter)
 app.include_router(last_opp_ruter)
+app.include_router(sporsmal_ruter)
 app.include_router(gjennomgang_ruter)
 
 SOK_URL = os.environ.get("SOK_URL", "http://sok:8003")

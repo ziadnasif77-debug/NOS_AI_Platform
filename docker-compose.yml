@@ -228,6 +228,8 @@ services:
       - SOK_URL=http://sok:8003
       - GJENNOMGANG_URL=http://label-studio:8080
       - INNTAK_STI=/data/inntak
+      - LLM_URL=${LLM_URL:-}      # fritekst-spørsmål (/dokument/{id}/sporsmal)
+      - LLM_MODELL=${LLM_MODELL:-borealis}
       - API_NOKKEL=${API_NOKKEL}
       - REDIS_URL=redis://redis:6379/0
     ports:

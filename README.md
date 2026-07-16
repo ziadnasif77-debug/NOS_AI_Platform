@@ -489,6 +489,21 @@ curl http://localhost:8000/audit/{job_id}
 ```
 Returnerer komplett historikk for jobben (alle tilstandsskifter, retries, DLQ-hendelser).
 
+### Fritekst-spørsmål mot et dokument (LLM)
+```bash
+curl -X POST http://localhost:8000/dokument/{dokument_id}/sporsmal \
+  -H "X-API-Key: ..." -H "Content-Type: application/json" \
+  -d '{"sporsmal": "Hva er referansekoden på side 4?"}'
+```
+**Svar:** `{"svar": "SIDEKODE-0004", "funnet": true, "side": 4, "sitat": "...", "kilde": "borealis-http"}`
+
+Krever model serving (`LLM_URL`). Stilles ETTER prosessering — ubegrenset
+antall spørsmål per dokument uten ny OCR. Sidene gjennomgås i original
+rekkefølge, bit for bit innenfor modellkonteksten. Svaret er forankret:
+sidetall + ordrett sitat, og `funnet: false` i stedet for gjetning når
+svaret ikke står i teksten. Svar lagres aldri (ingen ny GDPR-flate).
+Dokumenttekst behandles som data — instruksjoner i dokumentet ignoreres.
+
 ### Søk i arkivet
 ```bash
 curl -X POST http://localhost:8000/sok \
