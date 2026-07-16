@@ -118,6 +118,7 @@ UPLOADED → QUEUED → PREPROCESSING → OCR_PROCESSING → NLP_PROCESSING → 
 | `NLP_PROCESSING → ROUTING` | NLPWorker ferdig (validering inline) |
 | `ROUTING → DONE` | RoutingWorker ferdig |
 | `* → FAILED` | 3 retries → DLQ |
+| `FAILED → <før-tilstand>` | `make dlq-gjenoppta MONSTER="..."` — gjenopptak etter fikset infrastrukturfeil (merkes i audit/DLQ så historiske feilrater kan skille bugg fra ekte feil) |
 
 Alle andre overganger kaster `UgyldigTilstandsovergang`.
 
@@ -473,15 +474,25 @@ curl http://localhost:8000/resultat/{job_id}
 ```
 Returnerer alle worker-resultater fra `results`-tabellen.
 
-### Hent hele dokumentteksten i original sideorden
+### Hent dokumenttekst i original sideorden
 ```bash
-curl http://localhost:8000/dokument/{dokument_id}/tekst
+curl "http://localhost:8000/dokument/{id}/tekst"                      # hele dokumentet
+curl "http://localhost:8000/dokument/{id}/tekst?fra_side=0&til_side=49"  # sideintervall (1000+ sider)
+curl "http://localhost:8000/dokument/{id}/tekst?tillat_delvis=true"   # ferdige sider mens resten pågår
 ```
 Sider prosesseres parallelt og blir ferdige i vilkårlig rekkefølge —
 her gjenopprettes ALLTID original rekkefølge (`ORDER BY side_nummer`):
 `sider[]` sortert med tekst + OCR-konfidens per side, og `samlet_tekst`
-med sidemarkører (`--- Side N av M ---`). 409 til alle sider er DONE.
-Verifisert live med 10-siders PDF: alle sider på original posisjon.
+med sidemarkører (`--- Side N av M ---`). Standard: 409 til alle sider
+i intervallet er DONE; `tillat_delvis=true` gir de ferdige sidene
+eksplisitt (`ferdig: false` + `manglende_sider`). Verifisert live med
+10-siders PDF: alle sider på original posisjon.
+
+> ⚠️ **Visnings-/revisjonsendepunkt** — rå OCR-tekst uten validering.
+> Forretningsuttrekk skal bruke `/dokument/{id}/felter` (deterministisk
+> validert: mod11, kanoniske lister, anti-hallusinasjon) eller
+> `/dokument/{id}/sporsmal` (forankret svar). Å parse rå tekst selv
+> omgår alle disse lagene.
 
 ### Hent audit-logg
 ```bash
@@ -566,7 +577,7 @@ make sikkerhetskopi-verifiser FIL=...   # Kontroller sha256 + lesbarhet
 make gjenopprett FIL=... [DB=navn]      # Gjenopprett (DB= for øvelse)
 
 # ─── Tester ──────────────────────────────────────────────────────────
-make test                    # Kjør alle tester (269: 227 enhet + 42 integrasjon)
+make test                    # Kjør alle tester (290: 248 enhet + 42 integrasjon)
 make test-state-machine      # Test tilstandsmaskin
 make test-idempotency        # Test idempotens-logikk
 
@@ -632,7 +643,7 @@ Full analyse av hvor persondata lever og etterlevelsesbevis:
 
 ## Testing
 
-### Enhetstester (269 totalt: 227 enhet + 42 integrasjon)
+### Enhetstester (290 totalt: 248 enhet + 42 integrasjon)
 
 ```bash
 python -m pytest tester/ -v

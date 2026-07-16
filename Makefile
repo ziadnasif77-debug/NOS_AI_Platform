@@ -1,4 +1,4 @@
-.PHONY: oppsett start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis start-workers start-reconciliation sikkerhetskopi sikkerhetskopi-status sikkerhetskopi-verifiser gjenopprett oppbevaring oppbevaring-torrkjoring test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
+.PHONY: oppsett start stopp restart logger last-ned-modeller helse finjuster migrer sok last-opp label-studio eksporter-korreksjoner send-til-trening lag-datasett konverter-annotasjoner init-db rebuild-redis dlq-gjenoppta start-workers start-reconciliation sikkerhetskopi sikkerhetskopi-status sikkerhetskopi-verifiser gjenopprett oppbevaring oppbevaring-torrkjoring test-state-machine test-idempotency k8s-bygg k8s-start k8s-stopp k8s-status k8s-init-db k8s-kopier-modeller kfp-installer kfp-kompiler kfp-ui
 
 # Ett-kommando lokalt førstegangsoppsett: .env, datamapper, GPU-sjekk.
 # Laster IKKE ned modeller (kjør last-ned-modeller separat, ~17 GB).
@@ -118,6 +118,10 @@ init-db:
 
 rebuild-redis:
 	python skript/rebuild_redis.py
+
+dlq-gjenoppta:                       # make dlq-gjenoppta MONSTER="..." [MERKELAPP=årsak]
+	python skript/dlq_gjenoppta.py --monster "$(MONSTER)" \
+		$(if $(MERKELAPP),--merkelapp $(MERKELAPP))
 
 start-workers:
 	docker compose up -d preprocessing_worker ocr_worker nlp_worker routing_worker

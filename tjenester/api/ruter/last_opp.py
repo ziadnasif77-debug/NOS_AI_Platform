@@ -455,56 +455,88 @@ async def dokument_felter(dokument_id: str):
 # ------------------------------------------------------------------ #
 
 @ruter.get("/dokument/{dokument_id}/tekst")
-async def dokument_tekst(dokument_id: str):
+async def dokument_tekst(
+    dokument_id: str,
+    fra_side: int = 0,
+    til_side: int = None,
+    tillat_delvis: bool = False,
+):
     """
-    Hele dokumentets OCR-tekst i ORIGINAL siderekkefølge — garantert
-    sortert og nummerert som i PDF-en (ORDER BY side_nummer, INT).
-    Sider prosesseres parallelt og kan bli ferdige i vilkårlig
-    rekkefølge; dette endepunktet er stedet rekkefølgen gjenopprettes.
-    409 til alle sider er DONE (delvis tekst serveres aldri).
+    Dokumentets OCR-tekst i ORIGINAL siderekkefølge — garantert sortert
+    og nummerert som i PDF-en (ORDER BY side_nummer, INT). Sider
+    prosesseres parallelt og kan bli ferdige i vilkårlig rekkefølge;
+    dette endepunktet er stedet rekkefølgen gjenopprettes.
+
+    Store dokumenter (1000+ sider): hent i sideintervaller med
+    ?fra_side=0&til_side=49 (0-basert, til_side inklusiv) i stedet for
+    å tvinge hele dokumentet inn i én respons.
+
+    Standard: 409 til ALLE sider i intervallet er DONE (delvis tekst
+    serveres aldri stille). Med ?tillat_delvis=true serveres ferdige
+    sider med ferdig=false og manglende_sider — eksplisitt, aldri
+    implisitt.
+
+    MERK: Dette er et VISNINGS-/REVISJONSENDEPUNKT — rå OCR-tekst uten
+    validering. Til forretningsuttrekk: bruk /dokument/{id}/felter
+    (deterministisk validert kontrakt) eller /dokument/{id}/sporsmal
+    (forankret LLM-svar). Å parse rå tekst selv omgår mod11-sjekkene,
+    de kanoniske listene og anti-hallusinasjonslaget.
     """
     dokument_id = _valider_job_id(dokument_id)
+    if fra_side < 0 or (til_side is not None and til_side < fra_side):
+        raise HTTPException(status_code=400, detail="Ugyldig sideintervall")
     pg = _pg()
     try:
         with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT j.side_nummer, j.state, j.file_name,
+                SELECT j.side_nummer, j.state, j.file_name, j.antall_sider,
                        r.ocr_result->>'text'        AS tekst,
                        r.ocr_result->>'confidence'  AS konfidens
                 FROM jobs j
                 LEFT JOIN results r ON r.job_id = j.job_id
                 WHERE j.dokument_id = %s
+                  AND j.side_nummer >= %s
+                  AND (%s::int IS NULL OR j.side_nummer <= %s)
                 ORDER BY j.side_nummer
                 """,
-                (dokument_id,),
+                (dokument_id, fra_side, til_side, til_side),
             )
             sider = cur.fetchall()
         if not sider:
-            raise HTTPException(status_code=404, detail="Dokument ikke funnet")
+            raise HTTPException(
+                status_code=404,
+                detail="Dokument ikke funnet (eller tomt sideintervall)")
 
-        tilstander = [r["state"] for r in sider]
-        if not all(t == "DONE" for t in tilstander):
+        antall_totalt = sider[0]["antall_sider"] or len(sider)
+        manglende = [r["side_nummer"] for r in sider if r["state"] != "DONE"]
+        if manglende and not tillat_delvis:
             return JSONResponse(status_code=409, content={
                 "dokument_id": dokument_id, "ferdig": False,
-                "ferdige_sider": sum(1 for t in tilstander if t == "DONE"),
+                "ferdige_sider": len(sider) - len(manglende),
                 "antall_sider": len(sider),
+                "manglende_sider": manglende[:50],
+                "hjelp": "Bruk ?tillat_delvis=true for de ferdige sidene",
             })
 
         sidetekster = [{
             "side_nummer": r["side_nummer"],
             "tekst": r["tekst"] or "",
             "ocr_konfidens": float(r["konfidens"]) if r["konfidens"] else 0.0,
-        } for r in sider]
+        } for r in sider if r["state"] == "DONE"]
 
         return {
             "dokument_id": dokument_id,
             "filnavn": sider[0]["file_name"],
-            "antall_sider": len(sider),
+            "antall_sider": antall_totalt,
+            "fra_side": fra_side,
+            "til_side": til_side,
+            "ferdig": not manglende,
+            "manglende_sider": manglende,
             "sider": sidetekster,
-            # Hele dokumentet som én streng, med sidemarkører, i original orden
+            # Intervallet som én streng, med sidemarkører, i original orden
             "samlet_tekst": "\n\n".join(
-                f"--- Side {s['side_nummer'] + 1} av {len(sider)} ---\n{s['tekst']}"
+                f"--- Side {s['side_nummer'] + 1} av {antall_totalt} ---\n{s['tekst']}"
                 for s in sidetekster
             ),
         }
