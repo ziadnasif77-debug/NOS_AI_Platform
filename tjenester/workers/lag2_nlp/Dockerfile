@@ -4,7 +4,8 @@ RUN pip install --no-cache-dir psycopg2-binary redis pyyaml transformers pillow 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 # 4-bit-kvantisering (Borealis-4B må dele 8 GB GPU med de andre modellene)
-RUN pip install --no-cache-dir bitsandbytes accelerate
+# + requests for model serving-modus (LLM_URL)
+RUN pip install --no-cache-dir bitsandbytes accelerate requests
 COPY config /app/config
 COPY delt /app/delt
 COPY tjenester/workers /app/tjenester/workers

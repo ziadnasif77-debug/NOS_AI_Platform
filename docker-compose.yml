@@ -339,6 +339,8 @@ services:
     environment:
       - METRIKK_PORT=9101
       - PYTHONPATH=/app
+      - LLM_URL=${LLM_URL:-}      # satt = Borealis via model serving
+      - LLM_MODELL=${LLM_MODELL:-borealis}
     depends_on:
       postgres:
         condition: service_healthy
@@ -478,6 +480,40 @@ services:
     command: -config.file=/etc/promtail/config.yml
     depends_on:
       - loki
+    restart: unless-stopped
+
+  # Model serving (profil «llm»): Borealis serveres via vLLM med
+  # OpenAI-kompatibel API. NLP-workeren blir en lett HTTP-klient
+  # (sett LLM_URL i .env) og kan skaleres horisontalt uten GPU.
+  # Uten profilen kjører workeren med lokal 4-bit-lasting som før.
+  llm:
+    profiles: [llm]
+    image: vllm/vllm-openai:latest
+    command:
+      - --model=/modeller/borealis
+      - --served-model-name=borealis
+      - --quantization=bitsandbytes
+      - --max-model-len=4096
+      - --gpu-memory-utilization=${LLM_GPU_ANDEL:-0.60}
+      - --dtype=bfloat16
+    ports:
+      - "8020:8000"
+    volumes:
+      - ${MODELLER_STI:-./modeller}:/modeller:ro
+    ipc: host                      # vLLM krever delt minne
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 300s           # modell-lasting tar tid
     restart: unless-stopped
 
   backup:

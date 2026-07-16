@@ -25,6 +25,13 @@ WORKER_ID = f"lag2-{socket.gethostname()}"
 MODELLER_STI = os.environ.get("MODELLER_STI", "/modeller")
 GPU_ENHET = CONFIG["gpu"]["enhet"]
 
+# Model serving: settes LLM_URL (OpenAI-kompatibel endepunkt, f.eks.
+# vLLM) lastes Borealis IKKE i prosessen — workeren blir en lett
+# HTTP-klient og kan skaleres horisontalt uten å eie GPU-en.
+LLM_URL = os.environ.get("LLM_URL", "").rstrip("/")
+LLM_MODELL = os.environ.get("LLM_MODELL", "borealis")
+LLM_TIDSAVBRUDD = float(os.environ.get("LLM_TIDSAVBRUDD_SEKUNDER", "120"))
+
 OBLIGATORISKE_FELT = {
     "dagpenger": ["navn", "fodselsnummer", "dato"],
     "uforetrygd": ["navn", "fodselsnummer", "dato", "ytelse"],
@@ -72,28 +79,35 @@ class NLPWorker(BaseWorker):
         except Exception as exc:
             logger.warning("LayoutLMv3 lasting feilet: %s", exc)
 
-        try:
-            from transformers import (
-                AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig,
-            )
-            borealis_sti = f"{MODELLER_STI}/{CONFIG['modeller']['borealis']}"
-            self._borealis_tokenizer = AutoTokenizer.from_pretrained(borealis_sti)
-            # 4-bit NF4: ~2.6 GB i stedet for ~8 GB — nødvendig for at
-            # 4B-modellen skal dele GPU med LayoutLMv3 og NB-BERT.
-            kvantisering = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch.bfloat16,
-            )
-            self._borealis_model = AutoModelForCausalLM.from_pretrained(
-                borealis_sti, quantization_config=kvantisering,
-                device_map=GPU_ENHET, attn_implementation="eager",
-            )
-            self._borealis_model.eval()
+        if LLM_URL:
+            # HTTP-modus: modellen serveres eksternt (vLLM e.l.) —
+            # ingen lokal lasting, ingen GPU-eierskap i denne workeren.
             self._borealis_available = True
-            logger.info("Borealis (LLM) lastet.")
-        except Exception as exc:
-            logger.warning("Borealis lasting feilet: %s", exc)
+            logger.info("Borealis via model serving: %s (modell=%s)",
+                        LLM_URL, LLM_MODELL)
+        else:
+            try:
+                from transformers import (
+                    AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig,
+                )
+                borealis_sti = f"{MODELLER_STI}/{CONFIG['modeller']['borealis']}"
+                self._borealis_tokenizer = AutoTokenizer.from_pretrained(borealis_sti)
+                # 4-bit NF4: ~2.6 GB i stedet for ~8 GB — nødvendig for at
+                # 4B-modellen skal dele GPU med LayoutLMv3 og NB-BERT.
+                kvantisering = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                )
+                self._borealis_model = AutoModelForCausalLM.from_pretrained(
+                    borealis_sti, quantization_config=kvantisering,
+                    device_map=GPU_ENHET, attn_implementation="eager",
+                )
+                self._borealis_model.eval()
+                self._borealis_available = True
+                logger.info("Borealis (LLM) lastet lokalt (4-bit).")
+            except Exception as exc:
+                logger.warning("Borealis lasting feilet: %s", exc)
 
         try:
             from transformers import pipeline
@@ -249,41 +263,69 @@ class NLPWorker(BaseWorker):
             logger.warning("LayoutLMv3 feilet: %s — bruker NB-BERT", exc)
             return self._nb_bert(tekst)
 
+    def _borealis_prompt(self, tekst: str) -> str:
+        return (
+            "Du analyserer et dokument. Trekk ut ALLE viktige felter du "
+            "finner i teksten under, som ETT flatt JSON-objekt.\n"
+            "- Bruk beskrivende norske nøkler i snake_case "
+            "(f.eks. ordrenummer, butikk, total_belop, betalingsmetode).\n"
+            "- Bruk disse kanoniske nøklene når feltet finnes: "
+            + ", ".join(self._KANONISKE_FELT) + ".\n"
+            "- Ta også med nøkkelen dokumenttype: en kort kategori som "
+            "brev, vedtak, faktura, kvittering, ordrebekreftelse, soknad.\n"
+            "- Ta KUN med felter som faktisk står i teksten — ikke gjett, "
+            "og utelat felter som mangler.\n"
+            "- Svar KUN med JSON-objektet, ingen annen tekst.\n\n"
+            f"Dokument:\n{tekst[:3000]}\n\nJSON:"
+        )
+
     def _borealis(self, tekst):
         try:
-            prompt = (
-                "Du analyserer et dokument. Trekk ut ALLE viktige felter du "
-                "finner i teksten under, som ETT flatt JSON-objekt.\n"
-                "- Bruk beskrivende norske nøkler i snake_case "
-                "(f.eks. ordrenummer, butikk, total_belop, betalingsmetode).\n"
-                "- Bruk disse kanoniske nøklene når feltet finnes: "
-                + ", ".join(self._KANONISKE_FELT) + ".\n"
-                "- Ta også med nøkkelen dokumenttype: en kort kategori som "
-                "brev, vedtak, faktura, kvittering, ordrebekreftelse, soknad.\n"
-                "- Ta KUN med felter som faktisk står i teksten — ikke gjett, "
-                "og utelat felter som mangler.\n"
-                "- Svar KUN med JSON-objektet, ingen annen tekst.\n\n"
-                f"Dokument:\n{tekst[:3000]}\n\nJSON:"
-            )
-            innganger = self._borealis_tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}],
-                add_generation_prompt=True, return_tensors="pt", return_dict=True,
-            ).to(GPU_ENHET)
-            with torch.no_grad():
-                utgang = self._borealis_model.generate(
-                    **innganger, max_new_tokens=512, do_sample=False,
-                    pad_token_id=self._borealis_tokenizer.eos_token_id,
-                )
-            inn_lengde = innganger["input_ids"].shape[-1]
-            svar = self._borealis_tokenizer.decode(
-                utgang[0][inn_lengde:], skip_special_tokens=True
-            )
+            prompt = self._borealis_prompt(tekst)
+            if LLM_URL:
+                svar = self._borealis_http(prompt)
+                modell = "borealis-http"
+            else:
+                svar = self._borealis_lokal(prompt)
+                modell = "borealis"
             entiteter = self._parse_borealis_json(svar)
             dokklasse = entiteter.pop("dokumenttype", None) or "brev"
-            return entiteter, dokklasse, entiteter.get("ytelse"), 0.87, "borealis"
+            return entiteter, dokklasse, entiteter.get("ytelse"), 0.87, modell
         except Exception as exc:
             logger.warning("Borealis feilet: %s — bruker NB-BERT", exc)
             return self._nb_bert(tekst)
+
+    def _borealis_http(self, prompt: str) -> str:
+        """OpenAI-kompatibelt chat completions-kall (vLLM, TGI, Triton
+        med OpenAI-frontend — alle snakker samme protokoll)."""
+        import requests
+        resp = requests.post(
+            f"{LLM_URL}/chat/completions",
+            json={
+                "model": LLM_MODELL,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 512,
+                "temperature": 0,
+            },
+            timeout=LLM_TIDSAVBRUDD,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+    def _borealis_lokal(self, prompt: str) -> str:
+        innganger = self._borealis_tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True, return_tensors="pt", return_dict=True,
+        ).to(GPU_ENHET)
+        with torch.no_grad():
+            utgang = self._borealis_model.generate(
+                **innganger, max_new_tokens=512, do_sample=False,
+                pad_token_id=self._borealis_tokenizer.eos_token_id,
+            )
+        inn_lengde = innganger["input_ids"].shape[-1]
+        return self._borealis_tokenizer.decode(
+            utgang[0][inn_lengde:], skip_special_tokens=True
+        )
 
     def _parse_borealis_json(self, svar: str) -> dict:
         """Åpen parsing: alle nøkler beholdes (normalisert til snake_case),
