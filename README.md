@@ -473,6 +473,16 @@ curl http://localhost:8000/resultat/{job_id}
 ```
 Returnerer alle worker-resultater fra `results`-tabellen.
 
+### Hent hele dokumentteksten i original sideorden
+```bash
+curl http://localhost:8000/dokument/{dokument_id}/tekst
+```
+Sider prosesseres parallelt og blir ferdige i vilkårlig rekkefølge —
+her gjenopprettes ALLTID original rekkefølge (`ORDER BY side_nummer`):
+`sider[]` sortert med tekst + OCR-konfidens per side, og `samlet_tekst`
+med sidemarkører (`--- Side N av M ---`). 409 til alle sider er DONE.
+Verifisert live med 10-siders PDF: alle sider på original posisjon.
+
 ### Hent audit-logg
 ```bash
 curl http://localhost:8000/audit/{job_id}

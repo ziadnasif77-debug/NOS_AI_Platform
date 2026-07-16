@@ -380,20 +380,24 @@ class BaseWorker(ABC):
         project_id: int,
         stage: str,
     ):
-        import requests as req
-
-        ls_url = CONFIG["label_studio"]["url"]
-        token = os.environ.get("LABEL_STUDIO_TOKEN", "")
-        headers = {"Authorization": f"Token {token}", "Content-Type": "application/json"}
-        data = {
-            "data": {
-                "image": image_path,
-                "text": ocr_text,
-                "job_id": job_id,
-                "stage": stage,
-            }
-        }
+        # Label Studio er en BEST EFFORT-sidekanal: feil her (nettverk,
+        # manglende bibliotek, LS nede) skal aldri felle selve jobben —
+        # derfor ligger også importen inne i try-blokken.
         try:
+            import requests as req
+
+            ls_url = CONFIG["label_studio"]["url"]
+            token = os.environ.get("LABEL_STUDIO_TOKEN", "")
+            headers = {"Authorization": f"Token {token}",
+                       "Content-Type": "application/json"}
+            data = {
+                "data": {
+                    "image": image_path,
+                    "text": ocr_text,
+                    "job_id": job_id,
+                    "stage": stage,
+                }
+            }
             req.post(
                 f"{ls_url}/api/projects/{project_id}/import",
                 json=[data],

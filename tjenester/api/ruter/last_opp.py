@@ -451,6 +451,72 @@ async def dokument_felter(dokument_id: str):
 
 
 # ------------------------------------------------------------------ #
+#  GET /dokument/{dokument_id}/tekst — hele dokumentet i sideorden     #
+# ------------------------------------------------------------------ #
+
+@ruter.get("/dokument/{dokument_id}/tekst")
+async def dokument_tekst(dokument_id: str):
+    """
+    Hele dokumentets OCR-tekst i ORIGINAL siderekkefølge — garantert
+    sortert og nummerert som i PDF-en (ORDER BY side_nummer, INT).
+    Sider prosesseres parallelt og kan bli ferdige i vilkårlig
+    rekkefølge; dette endepunktet er stedet rekkefølgen gjenopprettes.
+    409 til alle sider er DONE (delvis tekst serveres aldri).
+    """
+    dokument_id = _valider_job_id(dokument_id)
+    pg = _pg()
+    try:
+        with pg.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT j.side_nummer, j.state, j.file_name,
+                       r.ocr_result->>'text'        AS tekst,
+                       r.ocr_result->>'confidence'  AS konfidens
+                FROM jobs j
+                LEFT JOIN results r ON r.job_id = j.job_id
+                WHERE j.dokument_id = %s
+                ORDER BY j.side_nummer
+                """,
+                (dokument_id,),
+            )
+            sider = cur.fetchall()
+        if not sider:
+            raise HTTPException(status_code=404, detail="Dokument ikke funnet")
+
+        tilstander = [r["state"] for r in sider]
+        if not all(t == "DONE" for t in tilstander):
+            return JSONResponse(status_code=409, content={
+                "dokument_id": dokument_id, "ferdig": False,
+                "ferdige_sider": sum(1 for t in tilstander if t == "DONE"),
+                "antall_sider": len(sider),
+            })
+
+        sidetekster = [{
+            "side_nummer": r["side_nummer"],
+            "tekst": r["tekst"] or "",
+            "ocr_konfidens": float(r["konfidens"]) if r["konfidens"] else 0.0,
+        } for r in sider]
+
+        return {
+            "dokument_id": dokument_id,
+            "filnavn": sider[0]["file_name"],
+            "antall_sider": len(sider),
+            "sider": sidetekster,
+            # Hele dokumentet som én streng, med sidemarkører, i original orden
+            "samlet_tekst": "\n\n".join(
+                f"--- Side {s['side_nummer'] + 1} av {len(sider)} ---\n{s['tekst']}"
+                for s in sidetekster
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as feil:
+        raise HTTPException(status_code=500, detail=str(feil))
+    finally:
+        pg.close()
+
+
+# ------------------------------------------------------------------ #
 #  GET /resultat/{job_id}/felter — flat kontrakt per side (klienter)   #
 # ------------------------------------------------------------------ #
 
