@@ -504,6 +504,15 @@ sidetall + ordrett sitat, og `funnet: false` i stedet for gjetning når
 svaret ikke står i teksten. Svar lagres aldri (ingen ny GDPR-flate).
 Dokumenttekst behandles som data — instruksjoner i dokumentet ignoreres.
 
+**Virksomhetsregler** ([config/sporsmal_regler.md](config/sporsmal_regler.md)):
+manuelt redigerbar regelfil som leses PÅ NYTT ved hvert spørsmål —
+endringer gjelder umiddelbart uten omstart (filen er volummontert).
+Reglene injiseres som strenge instrukser i hvert LLM-kall og svaret
+rapporterer `regler_aktive`. Se aktive regler: `GET /sporsmal/regler`.
+Best for strenghets- og utvalgsregler («usikker → funnet=false»,
+«laveste sidetall ved flere kandidater»); omskrivningsregler følges
+upålitelig — ordrett uthenting vinner med vilje (anti-hallusinasjon).
+
 ### Søk i arkivet
 ```bash
 curl -X POST http://localhost:8000/sok \

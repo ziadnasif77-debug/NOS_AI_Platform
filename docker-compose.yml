@@ -222,6 +222,9 @@ services:
     volumes:
       - ${DATA_STI:-./data}:/data
       - ./delt:/delt
+      # Live-redigerbar config: virksomhetsregler for /sporsmal leses
+      # ferskt per spørsmål — endringer på verten gjelder umiddelbart
+      - ./config:/app/config:ro
     environment:
       - OCR_URL=http://ocr:8001
       - NLP_URL=http://nlp:8002
