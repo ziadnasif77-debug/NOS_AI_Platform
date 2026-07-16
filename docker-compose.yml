@@ -489,6 +489,11 @@ services:
   llm:
     profiles: [llm]
     image: vllm/vllm-openai:latest
+    environment:
+      # Docker Desktop kjører på WSL2: vLLM deaktiverer pinned memory
+      # der som standard (UVA-buffere feiler uten). Trygt på WSL2-kjerne
+      # ≥ 4.19.121. Irrelevant (ignorert) på ekte Linux/K8s.
+      - VLLM_WSL2_ENABLE_PIN_MEMORY=1
     command:
       - --model=/modeller/borealis
       - --served-model-name=borealis
