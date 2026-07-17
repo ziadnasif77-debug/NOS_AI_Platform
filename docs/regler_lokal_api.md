@@ -24,7 +24,8 @@ på ID-en — så oppdateres koden tilsvarende.
 | R5 | Svar skal være korte og presise. | PROMPT |
 | R6 | Generering er deterministisk (ingen tilfeldighet): samme dokument + samme spørsmål = samme svar, hver gang. | KODE |
 | R7 | Ved OCR-lest tekst får modellen tolke ÅPENBARE feillesninger ut fra sammenhengen (f.eks. «15 OOO» forstås som 15 000) — men aldri dikte innhold. | PROMPT |
-| R8 | Egne regler fra `egne_regler.txt` legges til ETTER standardreglene og kan ikke oppheve R1–R7. Leses per forespørsel — endringer virker uten omstart. | BRUKER |
+| R8 | Egne regler fra `egne_regler.txt` gjelder kun stil/format på svar. Leses per forespørsel — endringer virker uten omstart. | BRUKER |
+| R8.1 | Vern av regelfilen (kode, ikke løfte): linjer som matcher overstyrings-/regnemønstre avvises og logges; maks 20 regler à 200 tegn; brukerregler plasseres FØR kjernereglene i prompten så kjernereglene får siste ord. Dette er skadebegrensning — den harde garantien mot talljuks er R3. | KODE |
 | R36 | Flersidige dokumenter merkes per side i teksten (`[Side i av n]`) — i alle løp (tekstlag, OCR, bakgrunnsjobb) — så modellen og leseren ser sidegrensene. | KODE |
 | R37 | Ved dokumentomfattende spørsmål («alle sider», totaloversikt) instrueres modellen om å gå gjennom ALLE sidene og ta med alle treff — ikke bare det siste. | PROMPT |
 
@@ -79,6 +80,32 @@ på ID-en — så oppdateres koden tilsvarende.
 | R33 | Støttet: PDF, bilder (JPG/PNG/TIFF/BMP/WEBP — konverteres og OCR-es), DOCX, XLSX/XLSM, CSV, TXT. | KODE |
 | R34 | Norske CSV-er håndteres robust: skilletegn (`;` `,` tab) og tegnsett (UTF-8/cp1252) oppdages automatisk. | KODE |
 | R35 | Gamle .doc-filer avvises med ærlig feilmelding (krever ekstern konvertering). | KODE |
+
+## 7. Sikkerhet og sporbarhet
+
+| ID | Regel | Type |
+|----|-------|------|
+| R38 | API-nøkkel: settes miljøvariabelen `API_NOKKEL`, kreves headeren `X-API-Key` på alle endepunkter (unntatt `GET /hjelp`, som alltid deklarerer sikkerhetsmodus). Åpen modus er KUN for lokal testing uten reelle data. | KODE |
+| R39 | Versjonsstempling: hvert `/spor`-svar bærer `versjon` (API- og prompt-versjon) så ethvert resultat kan spores tilbake til nøyaktig systemtilstand. | KODE |
+
+## 8. Bevisste designvalg (til avklaring med ansatte)
+
+- **Fail-open vs fail-closed:** Test-API-et er i dag *fail-open med
+  flagging* — et svar med uverifiserte tall vises, men merkes
+  (`tall_verifisert: false` + advarsel). Produksjonspipelinen (Docker)
+  er *fail-closed* — usikre dokumenter rutes til menneskelig REVIEW.
+  Anbefaling: behold begge, men avgjør eksplisitt hvilken filosofi som
+  gjelder hvor, før verifisering utvides til navn/datoer.
+- **Faktaverifisering utover tall** (navn, datoer, adresser) er et
+  åpent ingeniørproblem: streng matching gir falske avvisninger,
+  løs matching svekker garantien. Ikke lovet — utredes.
+- **Prompt-lagdeling (R1) er skadebegrensning, ikke garanti.** Ingen
+  kjent teknikk gir 100 % vern mot instruksjoner i dokumenttekst.
+  Systemets reelle vern: det er lese-og-svar-eneste (ingen verktøy,
+  ingen skriving), pluss tallvakten (R3) på utgangssiden.
+- **RAG/embeddings for svært store arkiv** utsettes til faktisk
+  lokalvolum er avklart; deterministisk fulltekst-uttrekk (R26)
+  beholdes uansett som parallelt spor.
 
 ---
 
