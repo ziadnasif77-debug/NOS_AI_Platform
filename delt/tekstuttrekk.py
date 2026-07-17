@@ -79,6 +79,14 @@ _MAANEDER = {
     "november": 11, "desember": 12,
 }
 
+# Engelske månedsnavn — dokumenter i arkivet er ikke alltid norske.
+# (april/august/september/november staves likt på begge språk.)
+_MAANEDER_EN = {
+    "january": 1, "february": 2, "march": 3, "may": 5, "june": 6,
+    "july": 7, "october": 10, "december": 12,
+}
+_ALLE_MAANEDER = {**_MAANEDER, **_MAANEDER_EN}
+
 
 def finn_dato(tekst: str):
     """Første gyldige dato — numeriske formater og «12. januar 2020».
@@ -101,6 +109,48 @@ def finn_dato(tekst: str):
         if _gyldig_dato(d, m, y):
             return f"{d:02d}.{m:02d}.{y}"
     return None
+
+
+def finn_alle_datoer(tekst: str, maks: int = 100) -> list:
+    """ALLE gyldige datoer i teksten — normalisert til dd.mm.yyyy, i
+    tekstrekkefølge, uten duplikater. Forstår numeriske formater, ISO,
+    norske OG engelske månedsnavn («12 March 2024», «March 12, 2024»).
+    Deterministisk og rask nok for dokumenter på hundrevis av sider."""
+    funn = []   # (posisjon, normalisert)
+    for treff in re.finditer(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b", tekst):
+        d, m, y = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
+        if _gyldig_dato(d, m, y):
+            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+    for treff in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", tekst):
+        y, m, d = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
+        if _gyldig_dato(d, m, y):
+            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+    maaneder = "|".join(_ALLE_MAANEDER)
+    for treff in re.finditer(
+        rf"\b(\d{{1,2}})\.?\s+({maaneder})\s+(\d{{4}})\b", tekst, re.IGNORECASE
+    ):
+        d = int(treff.group(1))
+        m = _ALLE_MAANEDER[treff.group(2).lower()]
+        y = int(treff.group(3))
+        if _gyldig_dato(d, m, y):
+            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+    for treff in re.finditer(
+        rf"\b({maaneder})\s+(\d{{1,2}}),?\s+(\d{{4}})\b", tekst, re.IGNORECASE
+    ):
+        m = _ALLE_MAANEDER[treff.group(1).lower()]
+        d = int(treff.group(2))
+        y = int(treff.group(3))
+        if _gyldig_dato(d, m, y):
+            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+    funn.sort(key=lambda t: t[0])
+    ut, sett = [], set()
+    for _, dato in funn:
+        if dato not in sett:
+            sett.add(dato)
+            ut.append(dato)
+        if len(ut) >= maks:
+            break
+    return ut
 
 
 def _gyldig_dato(d: int, m: int, y: int) -> bool:

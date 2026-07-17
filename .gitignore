@@ -43,3 +43,5 @@ Thumbs.db
 
 # Redis-dump fra lokal kjøring
 dump.rdb
+cloudflared.exe
+data/jobber/
