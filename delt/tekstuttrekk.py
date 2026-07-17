@@ -111,39 +111,53 @@ def finn_dato(tekst: str):
     return None
 
 
+def _antatt_aar(yy: int) -> int:
+    """Tosifret år → firesifret med dokumentert pivot: til og med
+    inneværende års to siste sifre tolkes som 20xx, ellers 19xx."""
+    pivot = datetime.utcnow().year % 100
+    return 2000 + yy if yy <= pivot else 1900 + yy
+
+
 def _alle_datotreff(tekst: str) -> list:
-    """Alle gyldige datotreff med posisjon og råtekst:
-    liste av (start, slutt, raatekst, normalisert dd.mm.yyyy), sortert."""
+    """ÉN generell datodetektor for alle vanlige formater: numerisk med
+    to- eller firesifret år, ISO, og norske/engelske månedsnavn.
+
+    Returnerer sortert liste av
+    (start, slutt, raatekst, normalisert dd.mm.yyyy, aar_antatt) der
+    aar_antatt=True betyr at århundret er antatt (tosifret år) — en
+    deklarert antagelse, ikke et faktum."""
     funn = []
+
+    def _legg_til(treff, d, m, y, aar_antatt=False):
+        if _gyldig_dato(d, m, y):
+            funn.append((treff.start(), treff.end(), treff.group(0),
+                         f"{d:02d}.{m:02d}.{y}", aar_antatt))
+
+    # Numerisk, firesifret år: 12.03.2024, 12/3/2024
     for treff in re.finditer(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b", tekst):
-        d, m, y = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
-        if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), treff.end(), treff.group(0),
-                         f"{d:02d}.{m:02d}.{y}"))
+        _legg_til(treff, int(treff.group(1)), int(treff.group(2)),
+                  int(treff.group(3)))
+    # Numerisk, tosifret år: 01.06.94 (århundre antas, flagges)
+    for treff in re.finditer(r"\b(\d{1,2})[./](\d{1,2})[./](\d{2})(?!\d)", tekst):
+        _legg_til(treff, int(treff.group(1)), int(treff.group(2)),
+                  _antatt_aar(int(treff.group(3))), aar_antatt=True)
+    # ISO: 2024-03-12
     for treff in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", tekst):
-        y, m, d = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
-        if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), treff.end(), treff.group(0),
-                         f"{d:02d}.{m:02d}.{y}"))
+        _legg_til(treff, int(treff.group(3)), int(treff.group(2)),
+                  int(treff.group(1)))
+    # Månedsnavn, norsk/engelsk: «12. mars 2024» / «March 12, 2024»
     maaneder = "|".join(_ALLE_MAANEDER)
     for treff in re.finditer(
         rf"\b(\d{{1,2}})\.?\s+({maaneder})\s+(\d{{4}})\b", tekst, re.IGNORECASE
     ):
-        d = int(treff.group(1))
-        m = _ALLE_MAANEDER[treff.group(2).lower()]
-        y = int(treff.group(3))
-        if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), treff.end(), treff.group(0),
-                         f"{d:02d}.{m:02d}.{y}"))
+        _legg_til(treff, int(treff.group(1)),
+                  _ALLE_MAANEDER[treff.group(2).lower()], int(treff.group(3)))
     for treff in re.finditer(
         rf"\b({maaneder})\s+(\d{{1,2}}),?\s+(\d{{4}})\b", tekst, re.IGNORECASE
     ):
-        m = _ALLE_MAANEDER[treff.group(1).lower()]
-        d = int(treff.group(2))
-        y = int(treff.group(3))
-        if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), treff.end(), treff.group(0),
-                         f"{d:02d}.{m:02d}.{y}"))
+        _legg_til(treff, int(treff.group(2)),
+                  _ALLE_MAANEDER[treff.group(1).lower()], int(treff.group(3)))
+
     funn.sort(key=lambda t: t[0])
     return funn
 
@@ -154,7 +168,7 @@ def finn_alle_datoer(tekst: str, maks: int = 100) -> list:
     norske OG engelske månedsnavn («12 March 2024», «March 12, 2024»).
     Deterministisk og rask nok for dokumenter på hundrevis av sider."""
     ut, sett = [], set()
-    for _, _, _, dato in _alle_datotreff(tekst):
+    for _, _, _, dato, _ in _alle_datotreff(tekst):
         if dato not in sett:
             sett.add(dato)
             ut.append(dato)
@@ -212,7 +226,7 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
         return side
 
     resultater = []
-    for i, (start, slutt, raatekst, dato) in enumerate(treff[:maks]):
+    for i, (start, slutt, raatekst, dato, aar_antatt) in enumerate(treff[:maks]):
         linje_start = tekst.rfind("\n", 0, start) + 1
         linje_slutt = tekst.find("\n", slutt)
         if linje_slutt == -1:
@@ -263,6 +277,9 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
                 begrunnelse = ("ingen etikett eller posisjonssignal — "
                                "bør vurderes av et menneske")
 
+        if aar_antatt:
+            begrunnelse += "; tosifret år i kilden — århundret er antatt"
+
         resultater.append({
             "dato": dato,
             "raatekst": raatekst,
@@ -272,6 +289,7 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
             "side": _side_for(start),
             "kontekst": kontekst,
             "i_lopende_tekst": i_lopende,
+            "aar_antatt": aar_antatt,
         })
 
     # 5) Fødselsdato avledet fra gyldig fødselsnummer (forenklet
