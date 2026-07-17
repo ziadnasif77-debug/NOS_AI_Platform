@@ -133,12 +133,17 @@ def _alle_datotreff(tekst: str) -> list:
             funn.append((treff.start(), treff.end(), treff.group(0),
                          f"{d:02d}.{m:02d}.{y}", aar_antatt))
 
-    # Numerisk, firesifret år: 12.03.2024, 12/3/2024
-    for treff in re.finditer(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b", tekst):
+    # Numerisk, firesifret år: 12.03.2024, 12/3/2024 — og OCR-varianter
+    # med mellomrom rundt skilletegnene («21.04 . 1994»)
+    for treff in re.finditer(
+        r"\b(\d{1,2})[ ]*[./][ ]*(\d{1,2})[ ]*[./][ ]*(\d{4})\b", tekst
+    ):
         _legg_til(treff, int(treff.group(1)), int(treff.group(2)),
                   int(treff.group(3)))
     # Numerisk, tosifret år: 01.06.94 (århundre antas, flagges)
-    for treff in re.finditer(r"\b(\d{1,2})[./](\d{1,2})[./](\d{2})(?!\d)", tekst):
+    for treff in re.finditer(
+        r"\b(\d{1,2})[ ]*[./][ ]*(\d{1,2})[ ]*[./][ ]*(\d{2})(?!\d)", tekst
+    ):
         _legg_til(treff, int(treff.group(1)), int(treff.group(2)),
                   _antatt_aar(int(treff.group(3))), aar_antatt=True)
     # ISO: 2024-03-12
@@ -194,6 +199,7 @@ _DATO_ETIKETTER = [
     (r"ankomst", "ankomst"),
     (r"signert|underskrift|signatur", "signaturdato"),
     (r"betalingsdato|utbetalt|utbetaling|betalt", "utbetalingsdato"),
+    (r"arkivert|journalf[øo]rt", "arkivert"),
     (r"periode|fra\s+og\s+med|f\.o\.m", "periode_start"),
     (r"til\s+og\s+med|t\.o\.m", "periode_slutt"),
     (r"dato", "merket_dato"),

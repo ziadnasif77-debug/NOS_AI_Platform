@@ -1018,21 +1018,19 @@ class Handler(BaseHTTPRequestHandler):
                 f"{MAKS_LLM_TEGN} tegnene direkte, pluss deterministisk uttrekk "
                 "(alle datoer + felter) fra hele dokumentet."
             )
-        # Datospørsmål får med seg den deterministiske klassifiseringen
-        # (R40) som kontekst — da kan modellen forklare hvor hver dato
-        # kommer fra i stedet for bare å liste dem
-        if re.search(r"(?i)dato|når", sporsmal):
-            klassifisert = klassifiser_datoer(raa_tekst, maks=30)
-            if klassifisert:
-                linjer = "\n".join(
-                    f"- {d['dato']}"
-                    + (f" (side {d['side']})" if d["side"] else "")
-                    + f": {d['type']} — {d['begrunnelse']}"
-                    for d in klassifisert)
-                tekst += ("\n\n[Datoer i dokumentet, automatisk klassifisert "
-                          "(deterministisk analyse). Bruk dette når spørsmålet "
-                          "gjelder hva datoene betyr eller hvor de kommer fra:]\n"
-                          + linjer)
+        # R40-klassifiseringen legges ALLTID ved som kontekst når
+        # dokumentet inneholder datoer — generelt, uten skjøre
+        # nøkkelordbetingelser (spørsmål kan inneholde skrivefeil)
+        klassifisert = klassifiser_datoer(raa_tekst, maks=30)
+        if klassifisert:
+            linjer = "\n".join(
+                f"- {d['dato']}"
+                + (f" (side {d['side']})" if d["side"] else "")
+                + f": {d['type']} — {d['begrunnelse']}"
+                for d in klassifisert)
+            tekst += ("\n\n[Datoer funnet i dokumentet, automatisk "
+                      "klassifisert og normalisert (deterministisk). Bruk "
+                      "denne listen ved spørsmål om datoer:]\n" + linjer)
 
         svar = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
 
