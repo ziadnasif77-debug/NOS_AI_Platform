@@ -47,7 +47,7 @@ if hasattr(sys.stdout, "buffer"):
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 
-from delt.tekstuttrekk import finn_alle_datoer, utvid_entiteter
+from delt.tekstuttrekk import finn_alle_datoer, klassifiser_datoer, utvid_entiteter
 
 PORT = int(os.environ.get("UIPATH_API_PORT", "8600"))
 MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
@@ -271,6 +271,32 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = 5):
     return koder
 
 
+def _pdf_metadata_datoer(meta: dict) -> list:
+    """Datoer fra PDF-filens egne metadata (opprettet/endret) — usynlige
+    i dokumentteksten, men ofte selve «utstedelsesdatoen» teknisk sett."""
+    ut = []
+    for nokkel, dtype in (("creationDate", "pdf_opprettet"),
+                          ("modDate", "pdf_endret")):
+        verdi = (meta or {}).get(nokkel) or ""
+        m = re.match(r"D:(\d{4})(\d{2})(\d{2})", verdi)
+        if not m:
+            continue
+        y, mnd, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if not (1 <= mnd <= 12 and 1 <= d <= 31 and 1900 <= y <= 2100):
+            continue
+        ut.append({
+            "dato": f"{d:02d}.{mnd:02d}.{y}",
+            "raatekst": verdi[:18],
+            "type": dtype,
+            "etikett": None,
+            "begrunnelse": "fra PDF-filens metadata (ikke synlig i dokumentteksten)",
+            "side": None,
+            "kontekst": "PDF-metadata",
+            "i_lopende_tekst": False,
+        })
+    return ut
+
+
 # ------------------------------------------------------------------ #
 #  Analyse                                                            #
 # ------------------------------------------------------------------ #
@@ -288,6 +314,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
     except Exception as exc:
         return {"ok": False, "feil": f"Ugyldig/korrupt PDF: {exc}"}
 
+    pdf_meta = doc.metadata or {}
     sider = []
     tekster = []
     total_tekst = 0
@@ -348,6 +375,13 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
                 "ocr_sider_totalt": ocr_res["sider_totalt"],
                 "advarsel": ocr_advarsel,
             }
+        # Datoklassifisering + kryssjekk mot håndskrevne regioner
+        datoer_detaljert = (klassifiser_datoer(ocr_tekst)
+                            + _pdf_metadata_datoer(pdf_meta))
+        for dd in datoer_detaljert:
+            if any(dd["raatekst"] in h for h in ocr_res["handskrift"]):
+                dd["skrevet_for_hand"] = True
+                dd["begrunnelse"] += "; står i en håndskrevet region"
         return {
             "ok": True,
             "filnavn": filnavn,
@@ -357,6 +391,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
             "kilde": "regionocr+deterministisk",
             "felter": utvid_entiteter(ocr_tekst, {}),
             "datoer": finn_alle_datoer(ocr_tekst),
+            "datoer_detaljert": datoer_detaljert,
             "strekkoder": strekkoder,
             "tekst": ocr_tekst.strip(),
             "antall_tegn": len(ocr_tekst.strip()),
@@ -376,6 +411,8 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
         "kilde": "deterministisk_tekstlag",
         "felter": felter,
         "datoer": finn_alle_datoer(full_tekst),
+        "datoer_detaljert": (klassifiser_datoer(full_tekst)
+                             + _pdf_metadata_datoer(pdf_meta)),
         "strekkoder": strekkoder,
         "per_side": sider,
         "tekst": full_tekst,
@@ -854,7 +891,9 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True, "filnavn": filnavn, "trenger_ocr": False,
                     "ocr_brukt": False, "kilde": "direkte_tekst",
                     "felter": utvid_entiteter(tekst, {}),
-                    "datoer": finn_alle_datoer(tekst), "strekkoder": [],
+                    "datoer": finn_alle_datoer(tekst),
+                    "datoer_detaljert": klassifiser_datoer(tekst),
+                    "strekkoder": [],
                     "tekst": tekst, "antall_tegn": len(tekst),
                 })
             resultat = analyser_bytes(filnavn, innhold, maks_ocr)

@@ -111,20 +111,20 @@ def finn_dato(tekst: str):
     return None
 
 
-def finn_alle_datoer(tekst: str, maks: int = 100) -> list:
-    """ALLE gyldige datoer i teksten — normalisert til dd.mm.yyyy, i
-    tekstrekkefølge, uten duplikater. Forstår numeriske formater, ISO,
-    norske OG engelske månedsnavn («12 March 2024», «March 12, 2024»).
-    Deterministisk og rask nok for dokumenter på hundrevis av sider."""
-    funn = []   # (posisjon, normalisert)
+def _alle_datotreff(tekst: str) -> list:
+    """Alle gyldige datotreff med posisjon og råtekst:
+    liste av (start, slutt, raatekst, normalisert dd.mm.yyyy), sortert."""
+    funn = []
     for treff in re.finditer(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b", tekst):
         d, m, y = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
         if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+            funn.append((treff.start(), treff.end(), treff.group(0),
+                         f"{d:02d}.{m:02d}.{y}"))
     for treff in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", tekst):
         y, m, d = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
         if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+            funn.append((treff.start(), treff.end(), treff.group(0),
+                         f"{d:02d}.{m:02d}.{y}"))
     maaneder = "|".join(_ALLE_MAANEDER)
     for treff in re.finditer(
         rf"\b(\d{{1,2}})\.?\s+({maaneder})\s+(\d{{4}})\b", tekst, re.IGNORECASE
@@ -133,7 +133,8 @@ def finn_alle_datoer(tekst: str, maks: int = 100) -> list:
         m = _ALLE_MAANEDER[treff.group(2).lower()]
         y = int(treff.group(3))
         if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+            funn.append((treff.start(), treff.end(), treff.group(0),
+                         f"{d:02d}.{m:02d}.{y}"))
     for treff in re.finditer(
         rf"\b({maaneder})\s+(\d{{1,2}}),?\s+(\d{{4}})\b", tekst, re.IGNORECASE
     ):
@@ -141,16 +142,159 @@ def finn_alle_datoer(tekst: str, maks: int = 100) -> list:
         d = int(treff.group(2))
         y = int(treff.group(3))
         if _gyldig_dato(d, m, y):
-            funn.append((treff.start(), f"{d:02d}.{m:02d}.{y}"))
+            funn.append((treff.start(), treff.end(), treff.group(0),
+                         f"{d:02d}.{m:02d}.{y}"))
     funn.sort(key=lambda t: t[0])
+    return funn
+
+
+def finn_alle_datoer(tekst: str, maks: int = 100) -> list:
+    """ALLE gyldige datoer i teksten — normalisert til dd.mm.yyyy, i
+    tekstrekkefølge, uten duplikater. Forstår numeriske formater, ISO,
+    norske OG engelske månedsnavn («12 March 2024», «March 12, 2024»).
+    Deterministisk og rask nok for dokumenter på hundrevis av sider."""
     ut, sett = [], set()
-    for _, dato in funn:
+    for _, _, _, dato in _alle_datotreff(tekst):
         if dato not in sett:
             sett.add(dato)
             ut.append(dato)
         if len(ut) >= maks:
             break
     return ut
+
+
+# Etiketter som forteller hva en dato ER — mest spesifikke først.
+# Generisk «dato» står sist så den bare treffer når intet annet passer.
+# [øo]-varianter fordi OCR ofte leser ø som o
+_DATO_ETIKETTER = [
+    (r"f[øo]ds?elsdato|f[øo]dt", "fodselsdato"),
+    (r"frist|innen|senest", "frist"),
+    (r"vedtaksdato|vedtak\s+av", "vedtaksdato"),
+    (r"s[øo]knadsdato|s[øo]knad\s+datert", "soknadsdato"),
+    (r"mottatt", "mottatt"),
+    (r"sendt", "sendt"),
+    (r"utstedt|utstedelsesdato", "utstedt"),
+    (r"gyldig\s+til|utl[øo]per|utl[øo]psdato", "utlop"),
+    (r"gyldig\s+fra", "gyldig_fra"),
+    (r"avreise", "avreise"),
+    (r"ankomst", "ankomst"),
+    (r"signert|underskrift|signatur", "signaturdato"),
+    (r"betalingsdato|utbetalt|utbetaling|betalt", "utbetalingsdato"),
+    (r"periode|fra\s+og\s+med|f\.o\.m", "periode_start"),
+    (r"til\s+og\s+med|t\.o\.m", "periode_slutt"),
+    (r"dato", "merket_dato"),
+]
+
+
+def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
+    """Klassifiserer HVER dato i teksten: hva den er og hvorfor.
+
+    Deterministisk (ingen modell): etiketter i konteksten, posisjon i
+    dokumentet, fra–til-intervaller og fødselsnummer-avledning. Datoer
+    uten noe signal klassifiseres ærlig som «ukjent» med kontekst
+    vedlagt — de skal vurderes av et menneske, ikke gjettes på.
+
+    Returnerer liste av {dato, raatekst, type, etikett, begrunnelse,
+    side, kontekst, i_lopende_tekst}, i tekstrekkefølge."""
+    treff = _alle_datotreff(tekst)
+
+    # Sidegrenser fra [Side i av n]-merkene (satt av API-et)
+    sidemerker = [(m.start(), int(m.group(1)))
+                  for m in re.finditer(r"\[Side (\d+) av \d+\]", tekst)]
+
+    def _side_for(pos: int) -> int:
+        side = 1
+        for merkepos, nr in sidemerker:
+            if pos >= merkepos:
+                side = nr
+            else:
+                break
+        return side
+
+    resultater = []
+    for i, (start, slutt, raatekst, dato) in enumerate(treff[:maks]):
+        linje_start = tekst.rfind("\n", 0, start) + 1
+        linje_slutt = tekst.find("\n", slutt)
+        if linje_slutt == -1:
+            linje_slutt = len(tekst)
+        linje = tekst[linje_start:linje_slutt]
+        kontekst = " ".join(
+            tekst[max(0, start - 45):min(len(tekst), slutt + 30)].split())
+
+        dtype, etikett, begrunnelse = None, None, None
+
+        # 1) Fra–til-intervall: to datoer med kort bindetekst mellom
+        if i + 1 < len(treff):
+            mellom = tekst[slutt:treff[i + 1][0]]
+            if len(mellom) <= 8 and re.search(r"[-–—]|til", mellom, re.IGNORECASE):
+                dtype = "periode_start"
+                begrunnelse = "første dato i et fra–til-intervall"
+        if dtype is None and i > 0:
+            mellom = tekst[treff[i - 1][1]:start]
+            if len(mellom) <= 8 and re.search(r"[-–—]|til", mellom, re.IGNORECASE):
+                dtype = "periode_slutt"
+                begrunnelse = "andre dato i et fra–til-intervall"
+
+        # 2) Etikett rett før datoen (på samme linje)
+        if dtype is None:
+            etikett_sok = tekst[max(linje_start, start - 35):start]
+            for monster, kandidat in _DATO_ETIKETTER:
+                m = re.search(monster, etikett_sok, re.IGNORECASE)
+                if m:
+                    dtype, etikett = kandidat, m.group(0)
+                    begrunnelse = f"etiketten «{etikett}» står rett før datoen"
+                    break
+
+        # 3) Brev-/utstedelsesdato: øverst i dokumentet på egen kort linje
+        if dtype is None and _side_for(start) == 1 and start < 300 \
+                and len(linje.strip()) <= 40:
+            dtype = "brevdato_sannsynlig"
+            begrunnelse = ("øverst i dokumentet på egen kort linje — "
+                           "typisk brev-/utstedelsesdato")
+
+        # 4) Løpende tekst eller ærlig ukjent
+        i_lopende = len(linje.strip()) > 60
+        if dtype is None:
+            if i_lopende:
+                dtype = "i_lopende_tekst"
+                begrunnelse = "står inne i en setning, uten etikett"
+            else:
+                dtype = "ukjent"
+                begrunnelse = ("ingen etikett eller posisjonssignal — "
+                               "bør vurderes av et menneske")
+
+        resultater.append({
+            "dato": dato,
+            "raatekst": raatekst,
+            "type": dtype,
+            "etikett": etikett,
+            "begrunnelse": begrunnelse,
+            "side": _side_for(start),
+            "kontekst": kontekst,
+            "i_lopende_tekst": i_lopende,
+        })
+
+    # 5) Fødselsdato avledet fra gyldig fødselsnummer (forenklet
+    #    århundreregel via individnummer)
+    fnr = finn_fodselsnummer(tekst)
+    if fnr:
+        d, m, yy = int(fnr[0:2]), int(fnr[2:4]), int(fnr[4:6])
+        individ = int(fnr[6:9])
+        aar = 2000 + yy if (individ >= 500 and yy <= 39) else 1900 + yy
+        if _gyldig_dato(d, m, aar):
+            resultater.append({
+                "dato": f"{d:02d}.{m:02d}.{aar}",
+                "raatekst": fnr[:6] + "*****",
+                "type": "fodselsdato_fra_fnr",
+                "etikett": None,
+                "begrunnelse": ("avledet fra de seks første sifrene i et "
+                                "mod11-gyldig fødselsnummer "
+                                "(forenklet århundreregel)"),
+                "side": None,
+                "kontekst": "fødselsnummer i dokumentet (maskert)",
+                "i_lopende_tekst": False,
+            })
+    return resultater
 
 
 def _gyldig_dato(d: int, m: int, y: int) -> bool:

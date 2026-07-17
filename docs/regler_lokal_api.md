@@ -87,6 +87,7 @@ på ID-en — så oppdateres koden tilsvarende.
 |----|-------|------|
 | R38 | API-nøkkel: settes miljøvariabelen `API_NOKKEL`, kreves headeren `X-API-Key` på alle endepunkter (unntatt `GET /hjelp`, som alltid deklarerer sikkerhetsmodus). Åpen modus er KUN for lokal testing uten reelle data. | KODE |
 | R39 | Versjonsstempling: hvert `/spor`-svar bærer `versjon` (API- og prompt-versjon) så ethvert resultat kan spores tilbake til nøyaktig systemtilstand. | KODE |
+| R40 | Datoklassifisering (deterministisk, `datoer_detaljert` i `/analyser`): hver dato får type + begrunnelse + side + kontekst. Typer: etiketterte (frist, fødselsdato, vedtaksdato, utbetalt, mottatt, utstedt, gyldig til/fra, avreise/ankomst, signert …), fra–til-intervaller, sannsynlig brevdato (posisjon), dato i løpende tekst, avledet fra fødselsnummer, PDF-metadata (opprettet/endret), håndskrevet region — og ærlig «ukjent» med kontekst når intet signal finnes (skal vurderes av menneske, ikke gjettes). Etiketter tåler OCR-feilen ø→o. | KODE |
 
 ## 8. Bevisste designvalg (til avklaring med ansatte)
 
