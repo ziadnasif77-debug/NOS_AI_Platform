@@ -218,7 +218,12 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             if r.get("skrift") == "handskrift" and r["tekst"]:
                 handskrift.append(r["tekst"])
     doc.close()
-    return {"tekst": "\n".join(tekster), "motorer": motorer,
+    if sider_totalt > 1:
+        samlet = "\n".join(f"[Side {i + 1} av {sider_totalt}]\n{t}"
+                           for i, t in enumerate(tekster))
+    else:
+        samlet = "\n".join(tekster)
+    return {"tekst": samlet, "motorer": motorer,
             "handskrift": handskrift,
             "sider_lest": min(sider_totalt, maks_sider),
             "sider_totalt": sider_totalt}
@@ -285,7 +290,11 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
         sider.append({"side_nummer": i, "tegn": len(tekst),
                       "felter": utvid_entiteter(tekst, {})})
     doc.close()
-    full_tekst = "\n".join(tekster).strip()
+    if len(tekster) > 1:
+        full_tekst = "\n".join(f"[Side {i + 1} av {len(tekster)}]\n{t}"
+                               for i, t in enumerate(tekster)).strip()
+    else:
+        full_tekst = "\n".join(tekster).strip()
 
     # Aggreger på tvers av sider (første ikke-tomme verdi per felt)
     felter = {}
@@ -457,6 +466,9 @@ def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
         "Tall skal gjengis ORDRETT slik de står i dokumentet. Du skal "
         "ALDRI regne, summere, trekke fra eller lage nye tall — står det "
         "«SUM 268,00», er svaret på «sum» nøyaktig 268,00.\n"
+        "Dokumentet kan ha FLERE sider (merket [Side i av n]). Gjelder "
+        "spørsmålet hele dokumentet eller «alle sider», gå gjennom ALLE "
+        "sidene og ta med alle treff i svaret — ikke bare det siste.\n"
         "Svar kort og presist. Finnes ikke svaret i teksten, si "
         "'Finnes ikke i dokumentet'. Ikke gjett.\n"
         + _egne_regler() +
@@ -576,10 +588,15 @@ def _jobb_arbeider() -> None:
             jobb["sider_totalt"] = doc.page_count
 
             # Snarvei: har PDF-en tekstlag, trengs ingen OCR i det hele tatt
-            tekstlag = "\n".join((s.get_text() or "") for s in doc)
+            sider_tekst = [(s.get_text() or "") for s in doc]
+            tekstlag = "\n".join(sider_tekst)
             if len(tekstlag.strip()) >= 20:
                 doc.close()
-                t = tekstlag.strip()
+                if len(sider_tekst) > 1:
+                    t = "\n".join(f"[Side {i + 1} av {len(sider_tekst)}]\n{s}"
+                                  for i, s in enumerate(sider_tekst)).strip()
+                else:
+                    t = tekstlag.strip()
                 jobb.update(
                     status="ferdig", tekst=t, antall_tegn=len(t),
                     felter=utvid_entiteter(t, {}), datoer=finn_alle_datoer(t),
@@ -628,7 +645,12 @@ def _jobb_arbeider() -> None:
             doc.close()
 
             if jobb.get("status") != "avbrutt":
-                tekst = "\n".join(tekster).strip()
+                if len(tekster) > 1:
+                    tekst = "\n".join(
+                        f"[Side {i + 1} av {jobb['sider_totalt']}]\n{t}"
+                        for i, t in enumerate(tekster)).strip()
+                else:
+                    tekst = "\n".join(tekster).strip()
                 jobb.pop("sekunder_igjen_estimat", None)
                 jobb.update(
                     status="ferdig", tekst=tekst, antall_tegn=len(tekst),
@@ -829,8 +851,17 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import fitz
                 doc = fitz.open(stream=innhold, filetype="pdf")
-                tekst = "\n".join((side.get_text() or "") for side in doc)
+                side_tekster = [(side.get_text() or "") for side in doc]
                 doc.close()
+                # Flersidige dokumenter merkes per side, ellers klarer
+                # ikke modellen «alle sider»-spørsmål (den ser bare én
+                # lang tekststrøm og griper siste treff)
+                if len(side_tekster) > 1:
+                    tekst = "\n".join(
+                        f"[Side {i + 1} av {len(side_tekster)}]\n{t}"
+                        for i, t in enumerate(side_tekster))
+                else:
+                    tekst = side_tekster[0] if side_tekster else ""
             except Exception as exc:
                 return self._svar(400, {"ok": False, "feil": f"Ugyldig/korrupt PDF: {exc}"})
             if len(tekst.strip()) < 20:

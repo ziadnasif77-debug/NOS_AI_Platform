@@ -25,6 +25,8 @@ på ID-en — så oppdateres koden tilsvarende.
 | R6 | Generering er deterministisk (ingen tilfeldighet): samme dokument + samme spørsmål = samme svar, hver gang. | KODE |
 | R7 | Ved OCR-lest tekst får modellen tolke ÅPENBARE feillesninger ut fra sammenhengen (f.eks. «15 OOO» forstås som 15 000) — men aldri dikte innhold. | PROMPT |
 | R8 | Egne regler fra `egne_regler.txt` legges til ETTER standardreglene og kan ikke oppheve R1–R7. Leses per forespørsel — endringer virker uten omstart. | BRUKER |
+| R36 | Flersidige dokumenter merkes per side i teksten (`[Side i av n]`) — i alle løp (tekstlag, OCR, bakgrunnsjobb) — så modellen og leseren ser sidegrensene. | KODE |
+| R37 | Ved dokumentomfattende spørsmål («alle sider», totaloversikt) instrueres modellen om å gå gjennom ALLE sidene og ta med alle treff — ikke bare det siste. | PROMPT |
 
 ## 2. OCR-korrigering (felt `korriger=ja`)
 
