@@ -429,6 +429,253 @@ def finn_fylke(tekst: str):
 
 
 # ------------------------------------------------------------------ #
+#  Strukturert totaluttrekk — komplett, generelt skjema               #
+# ------------------------------------------------------------------ #
+# Prinsipper (bransjebeste praksis for dokumentekstraksjon):
+#   * ALLE nøkler er alltid til stede — tomt er "" eller []
+#   * beløp er tall, datoer er normaliserte
+#   * alt med sjekksum valideres matematisk (fnr, konto, orgnr, KID)
+#   * generelt: sifferkandidater finnes uansett gruppering
+#     (mellomrom/punktum) — skjemaer og OCR grupperer vilkårlig
+#   * deterministisk: samme dokument gir alltid samme resultat
+
+_ORGNR_VEKTER = [3, 2, 7, 6, 5, 4, 3, 2]
+
+
+def er_gyldig_orgnr(nr: str) -> bool:
+    """Norsk organisasjonsnummer: 9 sifre med mod11-kontrollsiffer."""
+    if not nr or not nr.isdigit() or len(nr) != 9:
+        return False
+    k = _mod11_kontroll(nr, _ORGNR_VEKTER)
+    return k != 10 and k == int(nr[8])
+
+
+def _luhn_gyldig(sifre: str) -> bool:
+    total = 0
+    for i, tegn in enumerate(reversed(sifre)):
+        v = int(tegn)
+        if i % 2 == 1:
+            v = v * 2
+            if v > 9:
+                v -= 9
+        total += v
+    return total % 10 == 0
+
+
+def _kid_mod11_gyldig(sifre: str) -> bool:
+    vekter = [2, 3, 4, 5, 6, 7]
+    total = sum(int(t) * vekter[i % 6]
+                for i, t in enumerate(reversed(sifre[:-1])))
+    k = 11 - (total % 11)
+    if k == 11:
+        k = 0
+    return k != 10 and k == int(sifre[-1])
+
+
+def er_gyldig_kid(nr: str) -> bool:
+    """Norsk KID: 3–25 sifre der siste er kontrollsiffer etter mod10
+    (Luhn) ELLER mod11 — betalingsmottakere bruker begge."""
+    if not nr or not nr.isdigit() or not (3 <= len(nr) <= 25):
+        return False
+    return _luhn_gyldig(nr) or _kid_mod11_gyldig(nr)
+
+
+def _unike(verdier) -> list:
+    ut, sett = [], set()
+    for v in verdier:
+        if v not in sett:
+            sett.add(v)
+            ut.append(v)
+    return ut
+
+
+def _tallkandidater(tekst: str, lengde: int):
+    """Alle sifferstrenger av gitt lengde uansett gruppering — «180527
+    422 30», «1805.27.44230» og «18052744230» er samme kandidat."""
+    for treff in re.finditer(r"(?<!\d)\d(?:[ .]?\d)+(?!\d)", tekst):
+        kompakt = re.sub(r"[ .]", "", treff.group(0))
+        if len(kompakt) == lengde:
+            yield kompakt
+
+
+def finn_alle_fodselsnummer(tekst: str) -> list:
+    return _unike(k for k in _tallkandidater(tekst, 11) if er_gyldig_fnr(k))
+
+
+def finn_alle_kontonummer(tekst: str) -> list:
+    return _unike(k for k in _tallkandidater(tekst, 11)
+                  if er_gyldig_kontonummer(k) and not er_gyldig_fnr(k))
+
+
+def finn_alle_organisasjonsnummer(tekst: str) -> list:
+    return _unike(k for k in _tallkandidater(tekst, 9) if er_gyldig_orgnr(k))
+
+
+def finn_alle_kid(tekst: str) -> list:
+    """KID krever etikett i konteksten — et rent tall uten «KID» ved
+    siden av er for tvetydig til å påstås å være KID."""
+    ut = []
+    for treff in re.finditer(r"(?i)\bkid[.:\s-]*((?:\d[ .]?){2,30}\d)", tekst):
+        kompakt = re.sub(r"[ .]", "", treff.group(1))
+        if er_gyldig_kid(kompakt):
+            ut.append(kompakt)
+    return _unike(ut)
+
+
+def finn_alle_telefoner(tekst: str) -> list:
+    """Alle norske telefonnumre (8 sifre, ev. +47 og gruppering).
+    Kandidater som er del av lengre tall utelukkes."""
+    ut = []
+    for treff in re.finditer(
+        r"(?:\+47|0047)?[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})\b", tekst
+    ):
+        if treff.start() > 0 and tekst[treff.start() - 1].isdigit():
+            continue
+        nummer = "".join(treff.groups())
+        # Norske abonnentnumre starter ikke på 0 eller 1
+        if nummer[0] not in "01":
+            ut.append(nummer)
+    return _unike(ut)
+
+
+def finn_alle_eposter(tekst: str) -> list:
+    return _unike(re.findall(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst))
+
+
+def finn_alle_belop(tekst: str, maks: int = 100) -> list:
+    """Alle kronebeløp med kontekst — verdier som tall (float)."""
+    ut = []
+    for treff in re.finditer(
+        r"(?:kr\.?|NOK)\s?([\d][\d .]*(?:,\d{2}|,-)?)|"
+        r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))",
+        tekst, re.IGNORECASE,
+    ):
+        raa = (treff.group(1) or treff.group(2)).strip()
+        normalisert = (raa.replace(" ", "").replace(".", "")
+                       .replace(",-", "").replace(",", "."))
+        try:
+            verdi = float(normalisert)
+        except ValueError:
+            continue
+        kontekst = " ".join(
+            tekst[max(0, treff.start() - 35):treff.end() + 15].split())
+        ut.append({"verdi": verdi, "raatekst": treff.group(0).strip(),
+                   "kontekst": kontekst})
+        if len(ut) >= maks:
+            break
+    return ut
+
+
+def finn_adresser(tekst: str) -> list:
+    """Alle postnummer/poststed-forekomster, med gateadresse fra linjen
+    over når den ligner en gate (bokstaver + husnummer)."""
+    ut, sett = [], set()
+    for treff in re.finditer(
+        r"\b(\d{4})[ \t]+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+"
+        r"(?:[ \t][iI][ \t][A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)?)\b", tekst
+    ):
+        postnummer, poststed = treff.group(1), treff.group(2)
+        linje_start = tekst.rfind("\n", 0, treff.start()) + 1
+        forrige_slutt = linje_start - 1
+        gate = ""
+        if forrige_slutt > 0:
+            forrige_start = tekst.rfind("\n", 0, forrige_slutt) + 1
+            forrige = tekst[forrige_start:forrige_slutt].strip()
+            if (len(forrige) <= 60
+                    and re.search(r"[A-Za-zÆØÅæøå]{3,}.*\d", forrige)):
+                gate = forrige
+        nokkel = (gate, postnummer, poststed)
+        if nokkel not in sett:
+            sett.add(nokkel)
+            ut.append({"gate": gate, "postnummer": postnummer,
+                       "poststed": poststed})
+    return ut
+
+
+# Dokumenttyper med kjennetegn — poengsum avgjør, "" hvis intet treffer
+_DOKUMENTTYPER = [
+    ("faktura", r"faktura|forfallsdato|\bkid\b"),
+    ("kvittering", r"kvittering|betaling mottatt|kj[øo]pskvittering"),
+    ("vedtak", r"\bvedtak"),
+    ("soknad", r"s[øo]knad"),
+    ("pensjonsbrev", r"pensjonsbrev"),
+    ("attest", r"\battest"),
+    ("kontrakt", r"kontrakt|l[æa]rekontrakt|avtale"),
+    ("boardingkort", r"boardingkort|boarding"),
+    ("brev", r"med vennlig hilsen|kj[æa]re"),
+]
+
+
+def gjett_dokumenttype(tekst: str) -> str:
+    beste, beste_poeng = "", 0
+    for navn, monster in _DOKUMENTTYPER:
+        poeng = len(re.findall(monster, tekst, re.IGNORECASE))
+        if poeng > beste_poeng:
+            beste, beste_poeng = navn, poeng
+    return beste
+
+
+def gjett_sprak(tekst: str) -> str:
+    lav = f" {tekst.lower()} "
+    norsk = sum(lav.count(f" {ord} ")
+                for ord in ("og", "i", "på", "det", "som", "til", "er", "av"))
+    engelsk = sum(lav.count(f" {ord} ")
+                  for ord in ("the", "and", "of", "to", "is", "for"))
+    if norsk >= 2 and norsk > engelsk:
+        return "norsk"
+    if engelsk >= 2 and engelsk > norsk:
+        return "engelsk"
+    return ""
+
+
+def strukturert_uttrekk(tekst: str) -> dict:
+    """Komplett strukturert uttrekk av ALT som kan finnes i tekst fra
+    NAV-dokumenter. Alle nøkler er alltid til stede — tomt er "" / []."""
+    tekst = tekst or ""
+    datoer = klassifiser_datoer(tekst)
+
+    perioder = []
+    venter = None
+    for d in datoer:
+        if d["type"] == "periode_start":
+            venter = d["dato"]
+        elif d["type"] == "periode_slutt" and venter:
+            perioder.append({"fra": venter, "til": d["dato"]})
+            venter = None
+
+    forste_linje = next(
+        (l.strip() for l in tekst.splitlines()
+         if l.strip() and not re.match(r"\[Side \d+ av \d+\]", l.strip())),
+        "")
+
+    return {
+        "dokument": {
+            "tittel": forste_linje[:100],
+            "dokumenttype": gjett_dokumenttype(tekst),
+            "sprak": gjett_sprak(tekst),
+            "kontornavn": finn_kontornavn(tekst) or "",
+            "fylke": finn_fylke(tekst) or "",
+            "ytelse": finn_ytelse(tekst) or "",
+        },
+        "identifikatorer": {
+            "fodselsnummer": finn_alle_fodselsnummer(tekst),
+            "kontonummer": finn_alle_kontonummer(tekst),
+            "organisasjonsnummer": finn_alle_organisasjonsnummer(tekst),
+            "kid": finn_alle_kid(tekst),
+            "saksnummer": finn_saksnummer(tekst) or "",
+        },
+        "kontakt": {
+            "telefoner": finn_alle_telefoner(tekst),
+            "eposter": finn_alle_eposter(tekst),
+        },
+        "adresser": finn_adresser(tekst),
+        "datoer": datoer,
+        "perioder": perioder,
+        "belop": finn_alle_belop(tekst),
+    }
+
+
+# ------------------------------------------------------------------ #
 #  Sammenslåing med modell-uttrekk                                     #
 # ------------------------------------------------------------------ #
 

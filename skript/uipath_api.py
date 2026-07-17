@@ -47,7 +47,8 @@ if hasattr(sys.stdout, "buffer"):
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 
-from delt.tekstuttrekk import finn_alle_datoer, klassifiser_datoer, utvid_entiteter
+from delt.tekstuttrekk import (finn_alle_datoer, klassifiser_datoer,
+                               strukturert_uttrekk, utvid_entiteter)
 
 PORT = int(os.environ.get("UIPATH_API_PORT", "8600"))
 MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
@@ -785,6 +786,9 @@ class Handler(BaseHTTPRequestHandler):
                     "POST /analyser": "multipart/form-data, felt 'fil' → deterministiske felter + trenger_ocr",
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
                                    "valgfritt korriger=ja → LLM-korrigert OCR-tekst"),
+                    "POST /uttrekk": ("felt 'fil' → KOMPLETT strukturert JSON: alle identifikatorer "
+                                      "(sjekksumvalidert), kontakt, adresser, datoer, perioder, beløp, "
+                                      "strekkoder, håndskrift, kvalitet — alle nøkler alltid til stede"),
                     "POST /jobb": "felt 'fil' → jobb_id med en gang; OCR av HELE dokumentet kjører i bakgrunnen",
                     "GET /jobb/<id>": "status + fremdrift (sider_ferdig/sider_totalt, tidsestimat)",
                     "GET /jobb/<id>/tekst": "hele den utlestne teksten når jobben er ferdig",
@@ -843,8 +847,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._svar(200, {"ok": True, "jobb_id": jid, "status": "avbrytes"})
             return self._svar(409, {"ok": False, "feil": f"Jobben er allerede {jobb.get('status')}"})
 
-        if sti not in ("/analyser", "/spor", "/jobb"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor eller /jobb (se /hjelp)"})
+        if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk"):
+            return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor, /uttrekk eller /jobb (se /hjelp)"})
         lengde = int(self.headers.get("Content-Length", "0"))
         if lengde > MAKS_BYTES:
             return self._svar(413, {"ok": False, "feil": f"Filen er for stor (maks {MAKS_BYTES//1024//1024} MB)"})
@@ -899,6 +903,54 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True, "jobb_id": jobb_id, "status": jobb["status"],
                 "fremdrift": f"GET /jobb/{jobb_id}",
                 "sporsmal_senere": f"POST /spor med felter jobb_id={jobb_id} og sporsmal",
+            })
+
+        if sti == "/uttrekk":
+            # Komplett strukturert JSON — ALLE nøkler alltid til stede,
+            # tomme verdier er "" / []. Gjenbruker analyser-løpet
+            # (tekstlag/OCR/strekkoder/datoer) og bygger totalskjemaet.
+            if slag == "tekst":
+                a = {"ok": True, "antall_sider": 1, "kilde": "direkte_tekst",
+                     "ocr_brukt": False, "tekst": innhold.strip(),
+                     "datoer_detaljert": None, "strekkoder": [],
+                     "handskrift": [], "advarsel": None}
+            else:
+                a = analyser_bytes(filnavn, innhold, maks_ocr)
+                if not a.get("ok"):
+                    return self._svar(400, a)
+            s = strukturert_uttrekk(a.get("tekst", ""))
+            if a.get("datoer_detaljert"):
+                s["datoer"] = a["datoer_detaljert"]   # rikere: pdf-meta + håndskrift
+            filtype = filnavn.rsplit(".", 1)[-1].lower() if "." in filnavn else ""
+            return self._svar(200, {
+                "ok": True,
+                "dokument": {
+                    "filnavn": filnavn,
+                    "filtype": filtype,
+                    "antall_sider": a.get("antall_sider", 1),
+                    "antall_tegn": len(a.get("tekst", "")),
+                    "kilde": a.get("kilde", ""),
+                    **s["dokument"],
+                },
+                "identifikatorer": s["identifikatorer"],
+                "kontakt": s["kontakt"],
+                "adresser": s["adresser"],
+                "datoer": s["datoer"],
+                "perioder": s["perioder"],
+                "belop": s["belop"],
+                "strekkoder": a.get("strekkoder", []),
+                "handskrift": a.get("handskrift", []),
+                "tekst": a.get("tekst", ""),
+                "kvalitet": {
+                    "ocr_brukt": a.get("ocr_brukt", False),
+                    "ocr_motorer": a.get("ocr_motorer") or {},
+                    "ocr_sider_lest": a.get("ocr_sider_lest",
+                                            a.get("antall_sider", 1)),
+                    "ocr_sider_totalt": a.get("ocr_sider_totalt",
+                                              a.get("antall_sider", 1)),
+                    "advarsler": [a["advarsel"]] if a.get("advarsel") else [],
+                },
+                "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
             })
 
         if sti == "/analyser":
