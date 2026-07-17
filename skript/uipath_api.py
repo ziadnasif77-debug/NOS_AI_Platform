@@ -421,6 +421,25 @@ def _borealis_generer(prompt: str, maks_tokens: int = 256) -> str:
     ).strip()
 
 
+EGNE_REGLER_STI = os.path.join(ROT, "egne_regler.txt")
+
+
+def _egne_regler() -> str:
+    """Brukerens egne regler fra egne_regler.txt — leses PER forespørsel,
+    så endringer i filen virker umiddelbart uten omstart av serveren.
+    Linjer som starter med # er kommentarer og ignoreres."""
+    try:
+        with open(EGNE_REGLER_STI, encoding="utf-8") as f:
+            linjer = [l.strip() for l in f
+                      if l.strip() and not l.strip().startswith("#")]
+    except (FileNotFoundError, OSError):
+        return ""
+    if not linjer:
+        return ""
+    return ("Brukerens egne regler (følg dem nøye):\n"
+            + "\n".join(f"- {l}" for l in linjer) + "\n")
+
+
 def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
     """Stiller ett spørsmål om dokumentteksten (dokumentet er DATA,
     ikke instruksjoner). Med fra_ocr=True får modellen lov til å tolke
@@ -439,8 +458,9 @@ def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
         "ALDRI regne, summere, trekke fra eller lage nye tall — står det "
         "«SUM 268,00», er svaret på «sum» nøyaktig 268,00.\n"
         "Svar kort og presist. Finnes ikke svaret i teksten, si "
-        "'Finnes ikke i dokumentet'. Ikke gjett.\n\n"
-        f"Dokument:\n{tekst[:MAKS_LLM_TEGN + 2000]}\n\n"
+        "'Finnes ikke i dokumentet'. Ikke gjett.\n"
+        + _egne_regler() +
+        f"\nDokument:\n{tekst[:MAKS_LLM_TEGN + 2000]}\n\n"
         f"Spørsmål: {sporsmal}\n\nSvar:"
     )
     svar = _borealis_generer(prompt, 256)
