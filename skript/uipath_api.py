@@ -65,7 +65,7 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
 API_VERSJON = "1.1.0"
-PROMPT_VERSJON = "p6"
+PROMPT_VERSJON = "p7"
 
 
 # ------------------------------------------------------------------ #
@@ -543,6 +543,11 @@ def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
         "Dokumentet kan ha FLERE sider (merket [Side i av n]). Gjelder "
         "spørsmålet hele dokumentet eller «alle sider», gå gjennom ALLE "
         "sidene og ta med alle treff i svaret — ikke bare det siste.\n"
+        "SPØRSMÅLET kan inneholde skrivefeil — tolk hva brukeren mest "
+        "sannsynlig mener (f.eks. «summmen» = «summen») og svar på det. "
+        "Måtte du tolke et uklart spørsmål vesentlig om, nevn kort "
+        "hvordan du forsto det. Toleransen gjelder KUN spørsmålet — "
+        "fakta fra dokumentet gjengis fortsatt strengt.\n"
         "Svar kort og presist. Finnes ikke svaret i teksten, si "
         "'Finnes ikke i dokumentet'. Ikke gjett.\n"
         f"\nDokument:\n{tekst[:MAKS_LLM_TEGN + 2000]}\n\n"
@@ -1015,6 +1020,23 @@ class Handler(BaseHTTPRequestHandler):
             )
         svar = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
 
+        # R41 (kode): «Finnes ikke»-svar kan skyldes skrivefeil i selve
+        # SPØRSMÅLET. Da normaliseres spørsmålet til korrekt norsk og
+        # prøves én gang til — og svaret deklarerer tolkningen ærlig.
+        tolket_sporsmal = None
+        if svar.strip().lower().startswith("finnes ikke") and len(sporsmal) <= 200:
+            normalisert = _borealis_generer(
+                "Spørsmålet under inneholder trolig tastefeil. Rett KUN "
+                "de åpenbare tastefeilene — endre så lite som mulig, og "
+                "behold ordvalg og mening (eksempel: «vha koser» → «hva "
+                "koster»). Svar KUN med det rettede spørsmålet:\n"
+                + sporsmal, 64).strip().strip('"«»')
+            if normalisert and normalisert.lower() != sporsmal.strip().lower():
+                svar2 = spor_borealis(tekst, normalisert, fra_ocr=ocr_brukt)
+                if not svar2.strip().lower().startswith("finnes ikke"):
+                    svar = svar2
+                    tolket_sporsmal = normalisert
+
         # Tallvakt: inneholder svaret tall som ikke står i dokumentet,
         # prøves én streng ny runde — hjelper ikke det, flagges svaret
         mangler = uverifiserte_tall(svar, tekst)
@@ -1048,6 +1070,7 @@ class Handler(BaseHTTPRequestHandler):
             "handskrift": handskrift,
             "korrigert_tekst": korrigert,
             "tall_verifisert": tall_verifisert,
+            "tolket_sporsmal": tolket_sporsmal,
             "advarsel": advarsel,
             "kilde": "borealis_4bit" + ("+regionocr" if ocr_brukt else ""),
             "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},

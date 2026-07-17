@@ -28,6 +28,7 @@ på ID-en — så oppdateres koden tilsvarende.
 | R8.1 | Vern av regelfilen (kode, ikke løfte): linjer som matcher overstyrings-/regnemønstre avvises og logges; maks 20 regler à 200 tegn; brukerregler plasseres FØR kjernereglene i prompten så kjernereglene får siste ord. Dette er skadebegrensning — den harde garantien mot talljuks er R3. | KODE |
 | R36 | Flersidige dokumenter merkes per side i teksten (`[Side i av n]`) — i alle løp (tekstlag, OCR, bakgrunnsjobb) — så modellen og leseren ser sidegrensene. | KODE |
 | R37 | Ved dokumentomfattende spørsmål («alle sider», totaloversikt) instrueres modellen om å gå gjennom ALLE sidene og ta med alle treff — ikke bare det siste. | PROMPT |
+| R41 | Skrivefeil i SPØRSMÅLET tolkes velvillig: prompten ber om velvillig tolkning, og gir svaret «Finnes ikke», retter koden tastefeilene i spørsmålet (minst mulig endring) og prøver én gang til — tolkningen deklareres i `tolket_sporsmal`. Toleransen gjelder kun spørsmålet — fakta fra dokumentet gjengis fortsatt strengt (R2/R3/R4 uendret). | PROMPT + KODE |
 
 ## 2. OCR-korrigering (felt `korriger=ja`)
 
