@@ -29,6 +29,8 @@ på ID-en — så oppdateres koden tilsvarende.
 | R36 | Flersidige dokumenter merkes per side i teksten (`[Side i av n]`) — i alle løp (tekstlag, OCR, bakgrunnsjobb) — så modellen og leseren ser sidegrensene. | KODE |
 | R37 | Ved dokumentomfattende spørsmål («alle sider», totaloversikt) instrueres modellen om å gå gjennom ALLE sidene og ta med alle treff — ikke bare det siste. | PROMPT |
 | R41 | Skrivefeil i SPØRSMÅLET tolkes velvillig: prompten ber om velvillig tolkning, og gir svaret «Finnes ikke», retter koden tastefeilene i spørsmålet (minst mulig endring) og prøver én gang til — tolkningen deklareres i `tolket_sporsmal`. Toleransen gjelder kun spørsmålet — fakta fra dokumentet gjengis fortsatt strengt (R2/R3/R4 uendret). | PROMPT + KODE |
+| R42 | Svar avkortes aldri stille: maks svarlengde er en ressursgrense (`MAKS_SVAR_TOKENS`, standard 1024 — korte svar stopper naturlig uansett). Treffer et svar taket, flagges det eksplisitt (`svar_avkortet: true` + advarsel). | KODE |
+| R43 | Verbatim-forespørsler («hele teksten», «hele dokumentet», «alt innhold») besvares av KODEN med den uavkortede dokumentteksten (`kilde: deterministisk_fulltekst`) — aldri av modellen. En språkmodell som skriver av kan hoppe over linjer; koden kan ikke. | KODE |
 
 ## 2. OCR-korrigering (felt `korriger=ja`)
 

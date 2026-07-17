@@ -65,7 +65,11 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
 API_VERSJON = "1.1.0"
-PROMPT_VERSJON = "p7"
+PROMPT_VERSJON = "p8"
+# Maks lengde på generert svar. Taket er en RESSURSGRENSE, ikke en
+# stilregel: korte svar stopper naturlig ved EOS uansett. Treffer et
+# svar taket, flagges det ALLTID eksplisitt (svar_avkortet + advarsel).
+MAKS_SVAR_TOKENS = int(os.environ.get("MAKS_SVAR_TOKENS", "1024"))
 
 
 # ------------------------------------------------------------------ #
@@ -456,8 +460,10 @@ def _last_borealis_bakgrunn():
         print(f"  Borealis kunne ikke lastes: {exc}")
 
 
-def _borealis_generer(prompt: str, maks_tokens: int = 256) -> str:
-    """Én deterministisk generering med Borealis (GPU-lås rundt kallet)."""
+def _borealis_generer(prompt: str, maks_tokens: int = 256) -> tuple:
+    """Én deterministisk generering med Borealis (GPU-lås rundt kallet).
+    Returnerer (tekst, avkortet) — avkortet=True betyr at svaret traff
+    tokentaket og KAN være ufullstendig. Det skal aldri skjules."""
     import torch
     tok, model = _borealis["tok"], _borealis["model"]
     meldinger = [{"role": "user", "content": prompt}]
@@ -470,9 +476,9 @@ def _borealis_generer(prompt: str, maks_tokens: int = 256) -> str:
             **inn, max_new_tokens=maks_tokens, do_sample=False,
             pad_token_id=tok.eos_token_id,
         )
-    return tok.decode(
-        ut[0][inn["input_ids"].shape[-1]:], skip_special_tokens=True
-    ).strip()
+    ut_tokens = ut[0][inn["input_ids"].shape[-1]:]
+    tekst = tok.decode(ut_tokens, skip_special_tokens=True).strip()
+    return tekst, len(ut_tokens) >= maks_tokens
 
 
 EGNE_REGLER_STI = os.path.join(ROT, "egne_regler.txt")
@@ -548,16 +554,19 @@ def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
         "Måtte du tolke et uklart spørsmål vesentlig om, nevn kort "
         "hvordan du forsto det. Toleransen gjelder KUN spørsmålet — "
         "fakta fra dokumentet gjengis fortsatt strengt.\n"
-        "Svar kort og presist. Finnes ikke svaret i teksten, si "
+        "Svar presist: kort ved smale spørsmål, men FULLSTENDIG når "
+        "brukeren ber om alt (hele teksten, alle punkter, hele listen) "
+        "— lever aldri mindre enn det brukeren ba om.\n"
+        "Finnes ikke svaret i teksten, si "
         "'Finnes ikke i dokumentet'. Ikke gjett.\n"
         f"\nDokument:\n{tekst[:MAKS_LLM_TEGN + 2000]}\n\n"
         f"Spørsmål: {sporsmal}\n\nSvar:"
     )
-    svar = _borealis_generer(prompt, 256)
+    svar, avkortet = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
     # Modellen gjentar av og til ledeteksten «Svar:» — fjern den
     if svar.lower().startswith("svar:"):
         svar = svar[5:].strip()
-    return svar
+    return svar, avkortet
 
 
 def uverifiserte_tall(svar: str, kilde: str) -> list:
@@ -593,7 +602,10 @@ def korriger_borealis(ocr_tekst: str) -> str:
         "Svar KUN med den korrigerte teksten, ingenting annet.\n\n"
         f"OCR-tekst:\n{ocr_tekst[:3000]}\n\nKorrigert tekst:"
     )
-    return _borealis_generer(prompt, 512)
+    tekst, avkortet = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
+    if avkortet:
+        tekst += "\n[AVKORTET: nådde maksimal svarlengde]"
+    return tekst
 
 
 # ------------------------------------------------------------------ #
@@ -975,6 +987,26 @@ class Handler(BaseHTTPRequestHandler):
 
         raa_tekst = tekst   # ren OCR/dokumenttekst — før merking og vedlegg
 
+        # Verbatim-forespørsler («hele teksten») besvares av KODEN, ikke
+        # modellen: en språkmodell som skriver av kan hoppe over linjer
+        # — koden kan ikke. Komplett, øyeblikkelig, null risiko.
+        if re.search(r"(?i)hele\s+(tekst|dokument|innhold)|all\s+tekst", sporsmal):
+            return self._svar(200, {
+                "ok": True, "filnavn": filnavn, "sporsmal": sporsmal,
+                "svar": raa_tekst,
+                "trenger_ocr": False, "ocr_brukt": ocr_brukt,
+                "strekkoder": strekkoder, "ocr_motorer": ocr_motorer,
+                "handskrift": handskrift,
+                "korrigert_tekst": (korriger_borealis(raa_tekst)
+                                    if ocr_brukt and tekstfelter.get(
+                                        "korriger", "").strip().lower()
+                                    in ("ja", "1", "true") else None),
+                "tall_verifisert": True, "tolket_sporsmal": None,
+                "svar_avkortet": False, "advarsel": None,
+                "kilde": "deterministisk_fulltekst",
+                "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
+            })
+
         # Merk håndskriftregioner så Borealis kan skille dem fra trykt
         # tekst («hvilket navn står med håndskrift?» blir svarbart)
         if handskrift:
@@ -1032,42 +1064,48 @@ class Handler(BaseHTTPRequestHandler):
                       "klassifisert og normalisert (deterministisk). Bruk "
                       "denne listen ved spørsmål om datoer:]\n" + linjer)
 
-        svar = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
+        svar, svar_avkortet = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
 
         # R41 (kode): «Finnes ikke»-svar kan skyldes skrivefeil i selve
         # SPØRSMÅLET. Da normaliseres spørsmålet til korrekt norsk og
         # prøves én gang til — og svaret deklarerer tolkningen ærlig.
         tolket_sporsmal = None
         if svar.strip().lower().startswith("finnes ikke") and len(sporsmal) <= 200:
-            normalisert = _borealis_generer(
+            normalisert, _ = _borealis_generer(
                 "Spørsmålet under inneholder trolig tastefeil. Rett KUN "
                 "de åpenbare tastefeilene — endre så lite som mulig, og "
                 "behold ordvalg og mening (eksempel: «vha koser» → «hva "
                 "koster»). Svar KUN med det rettede spørsmålet:\n"
-                + sporsmal, 64).strip().strip('"«»')
+                + sporsmal, 64)
+            normalisert = normalisert.strip().strip('"«»')
             if normalisert and normalisert.lower() != sporsmal.strip().lower():
-                svar2 = spor_borealis(tekst, normalisert, fra_ocr=ocr_brukt)
+                svar2, avkortet2 = spor_borealis(tekst, normalisert, fra_ocr=ocr_brukt)
                 if not svar2.strip().lower().startswith("finnes ikke"):
-                    svar = svar2
+                    svar, svar_avkortet = svar2, avkortet2
                     tolket_sporsmal = normalisert
 
         # Tallvakt: inneholder svaret tall som ikke står i dokumentet,
         # prøves én streng ny runde — hjelper ikke det, flagges svaret
         mangler = uverifiserte_tall(svar, tekst)
         if mangler:
-            svar2 = spor_borealis(
+            svar2, avkortet2 = spor_borealis(
                 tekst,
                 sporsmal + " (VIKTIG: gjengi tallet NØYAKTIG slik det står "
                            "i dokumentet — ikke regn eller summer)",
                 fra_ocr=ocr_brukt)
             if not uverifiserte_tall(svar2, tekst):
-                svar, mangler = svar2, []
+                svar, mangler, svar_avkortet = svar2, [], avkortet2
         tall_verifisert = not mangler
         if mangler:
             advarsler.append(
                 "Svaret inneholder tall som ikke står ordrett i dokumentet ("
                 + ", ".join(mangler)
                 + ") — sannsynligvis utregnet av modellen. Kontroller mot kilden.")
+        if svar_avkortet:
+            advarsler.append(
+                f"Svaret nådde maksimal lengde ({MAKS_SVAR_TOKENS} tokens) og "
+                "kan være avkortet — hele dokumentteksten finnes alltid "
+                "uavkortet i /analyser-feltet 'tekst'.")
         advarsel = "; ".join(advarsler) if advarsler else None
 
         # Valgfri OCR-korrigering (multipart-felt korriger=ja) — egen
@@ -1085,6 +1123,7 @@ class Handler(BaseHTTPRequestHandler):
             "korrigert_tekst": korrigert,
             "tall_verifisert": tall_verifisert,
             "tolket_sporsmal": tolket_sporsmal,
+            "svar_avkortet": svar_avkortet,
             "advarsel": advarsel,
             "kilde": "borealis_4bit" + ("+regionocr" if ocr_brukt else ""),
             "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
