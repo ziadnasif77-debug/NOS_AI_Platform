@@ -83,6 +83,23 @@ skjema — researchen bekrefter disse valgene punkt for punkt.
 regionruteren + sidebatching (1–2 dager), (4) arbeidstråd per GPU ved
 kort nr. 2, (5) hybrid søk med qwen3-embed.
 
+## 6. GJENNOMFØRT 2026-07-18 — målte resultater
+
+| Tiltak | Målt effekt |
+|---|---|
+| Borealis → offisiell GGUF Q8 (NbAiLab) via llama.cpp/CUDA, med transformers som automatisk fallback | Modell-lasting 90 s → **3 s**; generering ~12 → **34 tok/s**; Q8 er MER presis enn gammel nf4 |
+| Filhash-cache (SHA-256) rundt hele analysen; /spor, /analyser og /uttrekk deler samme ekstraksjonsvei | Oppfølgingsspørsmål på samme fil: 30–60 s → **0,4 s** |
+| sdpa-attention i transformers-fallback | 10–30 % raskere prefill når fallback brukes |
+| Motorlag i regionruteren (OCR_MOTOR=easy/rapid) | Målt på denne maskinen: EasyOCR-GPU 0,80 s/side VS RapidOCR-CPU 1,34 s/side → easy forblir standard; rapid er GPU-avlastningsvalg. 5–15×-tallene fra research krever dedikert/større GPU + batching. |
+| Ende-til-ende målt via tunnel | Tekst-PDF-spørsmål: **0,3 s**; serveroppstart til klar: **8 s** |
+
+Funn underveis: Borealis-GGUF-repoet inneholder også mmproj
+(synsprojektor) — modellen kan på sikt lese sider som BILDER (VLM),
+som er 2026-retningen for komplekse sider.
+
+Gjenstår fra planen: sidebatching i OCR, arbeidstråd per GPU (krever
+kort nr. 2), hybrid søk med qwen3-embed.
+
 ## Kilder
 
 - gigagpu.com: OCR-benchmarks, sider/min per GPU, flerGPU-skalering

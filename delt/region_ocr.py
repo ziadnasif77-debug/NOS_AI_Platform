@@ -46,6 +46,27 @@ def _hent_easyocr():
     return _easyocr["leser"]
 
 
+# Valgbar motor for trykt tekst (generelt motorlag):
+#   easy  (standard) — EasyOCR på GPU; raskest på denne maskinen (målt)
+#   rapid            — RapidOCR/PP-modeller på CPU; avlaster GPU-en
+OCR_MOTOR = os.environ.get("OCR_MOTOR", "easy").strip().lower()
+_rapid = {"motor": None}
+
+
+def _les_regioner(bilde_np) -> list:
+    """Motoruavhengig regionlesing: liste av (punkter, tekst, konfidens)."""
+    if OCR_MOTOR == "rapid":
+        try:
+            if _rapid["motor"] is None:
+                from rapidocr_onnxruntime import RapidOCR
+                _rapid["motor"] = RapidOCR()
+            resultat, _ = _rapid["motor"](bilde_np)
+            return [(r[0], r[1], float(r[2])) for r in (resultat or [])]
+        except Exception:
+            pass   # RapidOCR utilgjengelig → EasyOCR
+    return _hent_easyocr().readtext(bilde_np, detail=1, paragraph=False)
+
+
 def _hent_norhand():
     """Laster TrOCR-norhand-v3. fp16 på GPU hvis det er plass, ellers CPU."""
     if _norhand["modell"] is None:
@@ -224,8 +245,7 @@ def ocr_side(bilde_np) -> dict:
          "norhand_tekst": str|None, "norhand_konfidens": float|None}
     ]}"""
     with _las:
-        leser = _hent_easyocr()
-        funn = leser.readtext(bilde_np, detail=1, paragraph=False)
+        funn = _les_regioner(bilde_np)
 
         h, b = bilde_np.shape[0], bilde_np.shape[1]
         regioner = []
