@@ -1,0 +1,40 @@
+# ================================================================
+#  Krav for det LOKALE dokument-API-et (dokument_api.py + delt/)
+#  Eksakte versjoner, låst mot maskinen pakken bygges på.
+#  Mål: Windows x64, Python 3.11 (samme som utviklingsmaskinen).
+#
+#  MERK indeksene: torch/torchvision og llama-cpp-python finnes IKKE
+#  på PyPI i CUDA-utgave — pakk_for_offline.py henter dem fra riktige
+#  indekser. Offline installeres ALT fra wheels-mappen (--no-index).
+# ================================================================
+
+# --- PDF, bilde, OCR ---
+PyMuPDF==1.27.2.3
+numpy==2.2.6
+pillow==12.2.0
+opencv-python-headless==4.11.0.86
+easyocr==1.7.2
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.27.0
+pyzbar==0.1.9
+
+# --- Språkmodell (Borealis) ---
+# GPU-hjul (CUDA 12.4) — hentes fra PyTorch- og abetlen-indeksene
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+llama-cpp-python==0.3.34
+transformers==5.14.1
+accelerate==1.13.0
+bitsandbytes==0.49.2
+huggingface-hub==1.23.0
+
+# --- Dokumentformater ---
+python-docx==1.2.0
+openpyxl==3.1.5
+
+# --- Nett/verktøy ---
+requests==2.32.5
+beautifulsoup4==4.14.3
+
+# --- Test ---
+pytest==9.1.1
