@@ -461,7 +461,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
 BOREALIS_STI = os.path.join(ROT, "modeller", "borealis")
 BOREALIS_GGUF_STI = os.path.join(
     ROT, "modeller", "borealis-gguf", "borealis-4b-instruct-preview-Q8_0.gguf")
-BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "8192"))
+BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "12288"))
 _borealis = {"status": "ikke_startet", "motor": "", "llama": None,
              "tok": None, "model": None, "feil": None}
 _borealis_las = threading.Lock()   # GPU-en tar én generering om gangen
@@ -521,13 +521,54 @@ def _last_borealis_bakgrunn():
         print(f"  Borealis kunne ikke lastes: {exc}")
 
 
+# Ankerpar som avgrenser den KLIPPBARE dokumentdelen i promptene våre
+_PROMPT_ANKRE = [("\nDokument:\n", "\n\nSpørsmål:"),
+                 ("OCR-tekst:\n", "\n\nKorrigert tekst:")]
+
+
+def _tilpass_kontekst(llm, prompt: str, maks_tokens: int) -> str:
+    """Klipper dokumentdelen av prompten så den FAKTISK får plass i
+    kontekstvinduet — målt i tokens, ikke tegn (OCR-tekst og tallrike
+    dokumenter tokeniserer 2–3× tettere enn normaltekst, så tegnbaserte
+    grenser er upålitelige). Binærsøk på dokumentlengden; kuttet
+    merkes eksplisitt i prompten."""
+    budsjett = BOREALIS_KONTEKST - maks_tokens - 64
+
+    def antall(p: str) -> int:
+        return len(llm.tokenize(p.encode("utf-8"), add_bos=True, special=True))
+
+    if antall(prompt) <= budsjett:
+        return prompt
+    for hode_anker, hale_anker in _PROMPT_ANKRE:
+        i = prompt.find(hode_anker)
+        j = prompt.rfind(hale_anker)
+        if i == -1 or j <= i:
+            continue
+        hode = prompt[:i + len(hode_anker)]
+        dok = prompt[i + len(hode_anker):j]
+        hale = prompt[j:]
+        merke = "\n[DOKUMENTET ER AVKORTET HER pga. kontekstvinduet]"
+        lav, hoy = 0, len(dok)
+        while lav < hoy:
+            midt = (lav + hoy + 1) // 2
+            if antall(hode + dok[:midt] + merke + hale) <= budsjett:
+                lav = midt
+            else:
+                hoy = midt - 1
+        return hode + dok[:lav] + merke + hale
+    # Ukjent promptstruktur: klipp bakfra, men behold slutten (spørsmålet)
+    return prompt[:len(prompt) // 2] + "\n[AVKORTET]\n" + prompt[-800:]
+
+
 def _borealis_generer(prompt: str, maks_tokens: int = 256) -> tuple:
     """Én deterministisk generering med Borealis (GPU-lås rundt kallet).
     Returnerer (tekst, avkortet) — avkortet=True betyr at svaret traff
     tokentaket og KAN være ufullstendig. Det skal aldri skjules."""
     if _borealis["motor"] == "llama_cpp_q8":
+        llm = _borealis["llama"]
+        prompt = _tilpass_kontekst(llm, prompt, maks_tokens)
         with _borealis_las:
-            ut = _borealis["llama"].create_chat_completion(
+            ut = llm.create_chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=maks_tokens, temperature=0.0)
         valg = ut["choices"][0]
@@ -901,6 +942,20 @@ class Handler(BaseHTTPRequestHandler):
         return self._svar(404, {"ok": False, "feil": "Se GET /hjelp for endepunkter"})
 
     def do_POST(self):
+        # Sikkerhetsnett: en uventet feil skal gi et ærlig JSON-svar
+        # (500), aldri en taus lukket forbindelse som blir 502 i tunnelen
+        try:
+            return self._do_post_intern()
+        except Exception as exc:
+            try:
+                return self._svar(500, {
+                    "ok": False,
+                    "feil": f"Uventet serverfeil: {type(exc).__name__}: {exc}",
+                })
+            except Exception:
+                pass
+
+    def _do_post_intern(self):
         sti = self.path.rstrip("/")
         if not self._autorisert():
             return self._svar(401, {"ok": False, "feil": "Ugyldig eller manglende X-API-Key"})
