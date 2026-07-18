@@ -463,11 +463,32 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
 # ------------------------------------------------------------------ #
 
 BOREALIS_STI = os.path.join(ROT, "modeller", "borealis")
-BOREALIS_GGUF_STI = os.path.join(
-    ROT, "modeller", "borealis-gguf", "borealis-4b-instruct-preview-Q8_0.gguf")
+BOREALIS_GGUF_MAPPE = os.path.join(ROT, "modeller", "borealis-gguf")
 BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "12288"))
-_borealis = {"status": "ikke_startet", "motor": "", "llama": None,
-             "tok": None, "model": None, "feil": None}
+
+
+def _finn_gguf() -> str:
+    """Modellbytte skal være «legg filen i mappen og restart»: bruk
+    BOREALIS_GGUF-miljøvariabelen hvis satt, ellers den nyeste
+    .gguf-filen i modeller/borealis-gguf (mmproj-filer er
+    synsprojektorer, ikke språkmodeller — hoppes over)."""
+    valgt = os.environ.get("BOREALIS_GGUF", "").strip()
+    if valgt:
+        return valgt if os.path.isabs(valgt) else os.path.join(
+            BOREALIS_GGUF_MAPPE, valgt)
+    try:
+        kandidater = [os.path.join(BOREALIS_GGUF_MAPPE, n)
+                      for n in os.listdir(BOREALIS_GGUF_MAPPE)
+                      if n.lower().endswith(".gguf")
+                      and not n.lower().startswith("mmproj")]
+    except OSError:
+        return ""
+    return max(kandidater, key=os.path.getmtime) if kandidater else ""
+
+
+BOREALIS_GGUF_STI = _finn_gguf()
+_borealis = {"status": "ikke_startet", "motor": "", "modellfil": "",
+             "llama": None, "tok": None, "model": None, "feil": None}
 _borealis_las = threading.Lock()   # GPU-en tar én generering om gangen
 
 
@@ -478,17 +499,24 @@ def _last_borealis_bakgrunn():
     nf4). transformers beholdes som generell fallback."""
     try:
         _borealis["status"] = "laster"
-        if os.path.isfile(BOREALIS_GGUF_STI):
+        gguf_sti = _finn_gguf()
+        if gguf_sti and os.path.isfile(gguf_sti):
             try:
                 # llama.dll trenger CUDA-DLL-ene som følger med torch
                 import torch as _torch
                 os.add_dll_directory(
                     os.path.join(os.path.dirname(_torch.__file__), "lib"))
                 from llama_cpp import Llama
-                llm = Llama(model_path=BOREALIS_GGUF_STI, n_gpu_layers=-1,
+                # n_gpu_layers=-1 legger alt på GPU hvis det er plass;
+                # BOREALIS_GPU_LAG lar deg dele en STØRRE modell (12B/27B)
+                # mellom GPU og RAM på et mindre kort (f.eks. 40)
+                gpu_lag = int(os.environ.get("BOREALIS_GPU_LAG", "-1"))
+                llm = Llama(model_path=gguf_sti, n_gpu_layers=gpu_lag,
                             n_ctx=BOREALIS_KONTEKST, verbose=False)
-                _borealis.update(llama=llm, status="klar", motor="llama_cpp_q8")
-                print("  Borealis (GGUF Q8, llama.cpp/CUDA) klar — POST /spor er klar.")
+                navn = os.path.basename(gguf_sti)
+                _borealis.update(llama=llm, status="klar",
+                                 motor="llama_cpp", modellfil=navn)
+                print(f"  Borealis ({navn}, llama.cpp/CUDA) klar — POST /spor er klar.")
                 return
             except Exception as exc:
                 print(f"  GGUF-backend feilet ({exc}) — prøver transformers.")
@@ -569,7 +597,7 @@ def _borealis_generer(prompt: str, maks_tokens: int = 256) -> tuple:
     """Én deterministisk generering med Borealis (GPU-lås rundt kallet).
     Returnerer (tekst, avkortet) — avkortet=True betyr at svaret traff
     tokentaket og KAN være ufullstendig. Det skal aldri skjules."""
-    if _borealis["motor"] == "llama_cpp_q8":
+    if _borealis["motor"].startswith("llama_cpp"):
         llm = _borealis["llama"]
         prompt = _tilpass_kontekst(llm, prompt, maks_tokens)
         with _borealis_las:
@@ -1217,6 +1245,7 @@ class Handler(BaseHTTPRequestHandler):
                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
                 "borealis": _borealis["status"],
                 "borealis_motor": _borealis["motor"],
+                "borealis_modell": _borealis["modellfil"],
                 "klient_eksempel": ("Enhver HTTP-klient (GUI, UiPath, curl, egne skript): "
                                     "POST med filen som multipart-felt 'fil'"),
             })
@@ -1316,7 +1345,7 @@ class Handler(BaseHTTPRequestHandler):
             "tid_sekunder": round(time.time() - t0, 1),
             "kilde": "borealis_" + (_borealis["motor"] or "ukjent") + "+kodevalidering",
             "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
-                        "modell": _borealis["motor"]},
+                        "modell": _borealis["modellfil"] or _borealis["motor"]},
         }
         if via_spor:
             svar["melding"] = ("JSON-mal oppdaget i spørsmålet — behandlet "
@@ -1531,7 +1560,7 @@ class Handler(BaseHTTPRequestHandler):
                 "kilde": "borealis_" + (_borealis["motor"] or "ukjent")
                          + "_uten_dokument",
                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
-                            "modell": _borealis["motor"]},
+                            "modell": _borealis["modellfil"] or _borealis["motor"]},
             })
 
         t0 = time.time()
@@ -1744,7 +1773,7 @@ class Handler(BaseHTTPRequestHandler):
             "kilde": ("borealis_" + (_borealis["motor"] or "ukjent")
                       + ("+regionocr" if ocr_brukt else "")),
             "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
-                        "modell": _borealis["motor"]},
+                        "modell": _borealis["modellfil"] or _borealis["motor"]},
         })
 
     def log_message(self, fmt, *args):

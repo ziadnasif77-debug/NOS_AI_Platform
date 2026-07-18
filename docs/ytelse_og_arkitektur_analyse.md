@@ -100,6 +100,34 @@ som er 2026-retningen for komplekse sider.
 Gjenstår fra planen: sidebatching i OCR, arbeidstråd per GPU (krever
 kort nr. 2), hybrid søk med qwen3-embed.
 
+## 7. Modellbytte ved GPU-oppgradering (12B/27B)
+
+Alt rundt modellen er modellnøytralt (vakter, endepunkter, prompter,
+GUI, tunnel) — bytte til en større Borealis er derfor nesten «slett og
+legg inn ny»:
+
+1. Last ned ønsket GGUF (f.eks. `borealis-27b-instruct-Q4_K_M.gguf`)
+   til `modeller/borealis-gguf/`
+2. Start API-et på nytt
+
+Serveren finner selv den nyeste `.gguf`-filen i mappen (mmproj-filer
+hoppes over) — ingen kodeendring, ingen sti å redigere. `/hjelp` og
+hvert svar deklarerer hvilken modellfil som faktisk kjører.
+
+Finstyring (valgfritt, miljøvariabler):
+
+| Variabel | Effekt |
+|---|---|
+| `BOREALIS_GGUF` | Tving en bestemt fil i stedet for «nyeste» |
+| `BOREALIS_GPU_LAG` | Antall lag på GPU (standard −1 = alt). Sett f.eks. 40 for å dele en 27B mellom GPU og RAM på et mindre kort |
+| `BOREALIS_KONTEKST` | Kontekstvindu (standard 12288) |
+
+Realistiske tall på **denne** maskinen (RTX 3070 8 GB): 4B Q8 ~34 tok/s
+(passer helt på GPU). 12B ~8–12 tok/s (delt). 27B ~2–5 tok/s (mest på
+CPU/RAM — går, men tregt). Full nytte av 27B krever et 24 GB-kort
+(RTX 3090/4090) → da ~20–35 tok/s, altså dagens opplevelse med en langt
+sterkere modell. Ingen andre endringer nødvendig.
+
 ## Kilder
 
 - gigagpu.com: OCR-benchmarks, sider/min per GPU, flerGPU-skalering
