@@ -48,8 +48,10 @@ if hasattr(sys.stdout, "buffer"):
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 
-from delt.tekstuttrekk import (er_gyldig_orgnr, finn_alle_belop,
-                               finn_alle_datoer, finn_koder_med_kontekst,
+from delt.tekstuttrekk import (er_gyldig_orgnr, finn_adresser,
+                               finn_alle_belop, finn_alle_datoer,
+                               finn_alle_eposter, finn_alle_fodselsnummer,
+                               finn_alle_telefoner, finn_koder_med_kontekst,
                                klassifiser_datoer, strukturert_uttrekk,
                                utvid_entiteter)
 
@@ -70,7 +72,7 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
 API_VERSJON = "1.1.0"
-PROMPT_VERSJON = "p8"
+PROMPT_VERSJON = "p9"
 # Maks lengde på generert svar. Taket er en RESSURSGRENSE, ikke en
 # stilregel: korte svar stopper naturlig ved EOS uansett. Treffer et
 # svar taket, flagges det ALLTID eksplisitt (svar_avkortet + advarsel).
@@ -662,6 +664,9 @@ def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
         "Dokumentet kan ha FLERE sider (merket [Side i av n]). Gjelder "
         "spørsmålet hele dokumentet eller «alle sider», gå gjennom ALLE "
         "sidene og ta med alle treff i svaret — ikke bare det siste.\n"
+        "Begrensninger i spørsmålet skal respekteres NØYE: ber brukeren "
+        "om noe «uten X» (f.eks. «uten adresse»), skal X ikke være med "
+        "i svaret i det hele tatt.\n"
         "SPØRSMÅLET kan inneholde skrivefeil — tolk hva brukeren mest "
         "sannsynlig mener (f.eks. «summmen» = «summen») og svar på det. "
         "Måtte du tolke et uklart spørsmål vesentlig om, nevn kort "
@@ -698,6 +703,37 @@ def uverifiserte_tall(svar: str, kilde: str) -> list:
         if len(kompakt) >= 3 and kompakt not in kilde_kompakt:
             mangler.append(tall.strip())
     return mangler
+
+
+# R48: eksklusjoner i spørsmålet («uten adresse») håndheves av kode —
+# små modeller er notorisk svake på negasjoner, så vi SJEKKER svaret
+# med de deterministiske detektorene i stedet for å stole på modellen
+_EKSKLUSJONS_DETEKTORER = {
+    "adresse": lambda s: bool(re.search(r"\b\d{4}\s+[A-ZÆØÅ][a-zæøå]", s))
+                          or bool(finn_adresser(s)),
+    "telefon": lambda s: bool(finn_alle_telefoner(s)),
+    "epost": lambda s: bool(finn_alle_eposter(s)),
+    "dato": lambda s: bool(finn_alle_datoer(s)),
+    "fødselsnummer": lambda s: bool(finn_alle_fodselsnummer(s)),
+    "tall": lambda s: bool(re.search(r"\d", s)),
+}
+
+
+def eksklusjoner_brutt(sporsmal: str, svar: str) -> list:
+    """Hvilke «uten X»-begrensninger i spørsmålet bryter svaret?
+    Generell: matcher uten/ikke med/foruten + kjente entitetstyper
+    som vi kan detektere deterministisk."""
+    brutt = []
+    for treff in re.finditer(
+            r"(?i)\b(?:uten|ikke\s+med|foruten)\s+([a-zæøåA-ZÆØÅ]+)",
+            sporsmal):
+        ordet = treff.group(1).lower()
+        for nokkel, detektor in _EKSKLUSJONS_DETEKTORER.items():
+            stamme = min(len(nokkel), len(ordet), 4)
+            if nokkel[:stamme] == ordet[:stamme] and detektor(svar) \
+                    and nokkel not in brutt:
+                brutt.append(nokkel)
+    return brutt
 
 
 def _parse_json_svar(tekst: str):
@@ -1645,6 +1681,22 @@ class Handler(BaseHTTPRequestHandler):
                 if not svar2.strip().lower().startswith("finnes ikke"):
                     svar, svar_avkortet = svar2, avkortet2
                     tolket_sporsmal = normalisert
+
+        # R48: «uten X»-begrensninger i spørsmålet håndheves — én streng
+        # ny runde ved brudd, deretter ærlig varsling
+        brutt = eksklusjoner_brutt(sporsmal, svar)
+        if brutt:
+            svar2, avkortet2 = spor_borealis(
+                tekst,
+                sporsmal + " (VIKTIG: svaret skal IKKE inneholde "
+                + ", ".join(brutt) + " — utelat dette helt)",
+                fra_ocr=ocr_brukt)
+            if not eksklusjoner_brutt(sporsmal, svar2):
+                svar, svar_avkortet, brutt = svar2, avkortet2, []
+        if brutt:
+            advarsler.append(
+                "Spørsmålet ba om svar uten " + ", ".join(brutt)
+                + ", men modellen tok det likevel med — kontroller svaret")
 
         # Tallvakt: inneholder svaret tall som ikke står i dokumentet,
         # prøves én streng ny runde — hjelper ikke det, flagges svaret

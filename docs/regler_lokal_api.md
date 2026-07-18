@@ -119,3 +119,4 @@ på ID-en — så oppdateres koden tilsvarende.
 
 *Endringsforslag: noter ID + ønsket endring og lever tilbake — koden
 oppdateres og dokumentet holdes i takt.*
+| R48 | Eksklusjoner i spørsmålet («uten adresse/telefon/epost/dato/fødselsnummer/tall») håndheves av KODE: svaret sjekkes med de deterministiske detektorene; ved brudd én streng ny runde, deretter ærlig varsling i advarsel. Små modeller er svake på negasjoner — derfor kode, ikke tillit. | KODE |
