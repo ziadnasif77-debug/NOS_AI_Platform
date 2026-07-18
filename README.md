@@ -1,11 +1,68 @@
 # NAV Archive Intelligence System — V2.1
 
+## 📖 Live API-dokumentasjon (Swagger UI)
+
+### **https://cemetery-troops-abraham-math.trycloudflare.com/dokumentasjon**
+
+> Merk: trycloudflare-adressen er midlertidig og skifter når tunnelen
+> restartes. Lokalt er dokumentasjonen alltid på
+> `http://localhost:8600/dokumentasjon` (OpenAPI 3: `/openapi.json`).
+
 Et produksjonsklart AI-pipeline for automatisk digitalisering, analyse og søk i historiske NAV-dokumenter (30–60 millioner sider). V2.1 introduserer **Postgres som eneste kilde til sannhet**, asynkrone worker-prosesser, idempotent opplasting og full audit-logg — i henhold til NAV-krav for offentlig forvaltning.
+
+---
+
+## Lokalt dokument-API (uten Docker)
+
+Et generelt, klientnøytralt API som kjører native på Windows med GPU
+([skript/dokument_api.py](skript/dokument_api.py)) — brukes fra GUI-er,
+UiPath, curl eller egne skript. Full brukerdokumentasjon:
+[docs/api_dokumentasjon.md](docs/api_dokumentasjon.md) · komplett
+regelverk (R1–R47): [docs/regler_lokal_api.md](docs/regler_lokal_api.md).
+
+**Kontrakten:**
+
+| Du sender | Du får |
+|---|---|
+| Fil alene | HELE den utleste teksten, ordrett — deterministisk, aldri via modell |
+| Fil + `korriger=ja` | LLM-korrigert OCR-tekst i tillegg (rå tekst beholdes alltid) |
+| Fil + tekst | Spørsmål besvares (tallvakt) / JSON-mal fylles (kodevalidert) |
+| Tekst alene | Generelt modellsvar, ærlig merket `uten_dokument` |
+
+**Endepunkter:** `/spor` (spørsmål/fulltekst/mal), `/analyser`
+(deterministiske felter + datoklassifisering + strekkoder), `/uttrekk`
+(komplett strukturert JSON, alle nøkler alltid til stede), `/fyll_skjema`
+(din egen JSON-mal, kodevalidert), `/jobb` (asynkron OCR av ubegrenset
+antall sider med fremdrift), `/dokumentasjon` + `/openapi.json`.
+
+**Nøkkelegenskaper:**
+
+- **Regionbasert OCR** ([delt/region_ocr.py](delt/region_ocr.py)):
+  EasyOCR leser alt, usikre regioner leses i tillegg av norhand (norsk
+  håndskrift), konservativ arbitrering med tallvern, visuell
+  håndskrift/trykt-klassifisering, fletting i leserekkefølge
+- **Kodevakter, ikke løfter:** tallvakt (tall i svar må stå ordrett i
+  dokumentet), mod11-validering (fnr/konto/orgnr), KID (mod10/mod11),
+  aritmetisk konsistens i skjemautfylling, aldri stille trunkering
+- **Borealis 4B** (Nasjonalbibliotekets GGUF Q8 via llama.cpp/CUDA):
+  modell-lasting ~3 s, ~34 tok/s; tekst-PDF-svar ~0,3 s; filhash-cache
+  gjør oppfølgingsspørsmål øyeblikkelige
+- **Brukerstyrt uten kodeendring:** [egne_regler.txt](egne_regler.txt)
+  (svarstil) og [egne_etiketter.txt](egne_etiketter.txt) (nye
+  dato-etiketter) leses umiddelbart — nye dokumenttyper krever aldri
+  kodefiks
+- **Generelt verktøy for lovtekster:**
+  [skript/hent_lovtekst.py](skript/hent_lovtekst.py) henter enhver lov
+  fra Lovdata (f.eks. [data/lover/Lov om folketrygd.md](data/lover/))
+- Sikkerhet: valgfri `X-API-Key` (`API_NOKKEL`), versjonsstempling i
+  alle svar, ytelsesanalyse i
+  [docs/ytelse_og_arkitektur_analyse.md](docs/ytelse_og_arkitektur_analyse.md)
 
 ---
 
 ## Innholdsfortegnelse
 
+- [Lokalt dokument-API (uten Docker)](#lokalt-dokument-api-uten-docker)
 - [Oversikt](#oversikt)
 - [V2.1-arkitektur](#v21-arkitektur)
 - [Tilstandsmaskin](#tilstandsmaskin)
