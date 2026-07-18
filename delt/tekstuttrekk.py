@@ -581,10 +581,11 @@ def finn_alle_belop(tekst: str, maks: int = 100) -> list:
     ut = []
     for treff in re.finditer(
         r"(?:kr\.?|NOK)\s?([\d][\d .]*(?:,\d{2}|,-)?)|"
-        r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))",
+        r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))|"
+        r"\b(\d{1,6},\d{2})\b",
         tekst, re.IGNORECASE,
     ):
-        raa = (treff.group(1) or treff.group(2)).strip()
+        raa = (treff.group(1) or treff.group(2) or treff.group(3)).strip()
         normalisert = (raa.replace(" ", "").replace(".", "")
                        .replace(",-", "").replace(",", "."))
         try:

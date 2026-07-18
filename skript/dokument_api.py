@@ -48,9 +48,9 @@ if hasattr(sys.stdout, "buffer"):
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 
-from delt.tekstuttrekk import (er_gyldig_orgnr, finn_alle_datoer,
-                               klassifiser_datoer, strukturert_uttrekk,
-                               utvid_entiteter)
+from delt.tekstuttrekk import (er_gyldig_orgnr, finn_alle_belop,
+                               finn_alle_datoer, klassifiser_datoer,
+                               strukturert_uttrekk, utvid_entiteter)
 
 PORT = int(os.environ.get("DOKUMENT_API_PORT",
                           os.environ.get("UIPATH_API_PORT", "8600")))
@@ -789,10 +789,25 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
         if e is not None and a is not None and s is not None and s > 0:
             rabatt = _tall(lav.get("rabatt")) or 0.0
             if abs(e * a - rabatt - s) > max(0.01 * s, 0.5):
-                avvik.append(
-                    f"{sti}: enhetspris×antall−rabatt ({e}×{a}−{rabatt}) "
-                    f"stemmer ikke med sum ({s}) — en verdi står "
-                    "sannsynligvis i feil felt, kontroller mot dokumentet")
+                if a == 1 and rabatt == 0:
+                    # Matematisk entydig: ved antall 1 uten rabatt ER
+                    # enhetsprisen lik summen — rettes av kode, deklarert
+                    e_nokkel = next((k for k in node
+                                     if k.lower() == "enhetspris"), None)
+                    s_nokkel = next((k for k in node
+                                     if k.lower() == "sum"), None)
+                    if e_nokkel and s_nokkel:
+                        gammel = node[e_nokkel]
+                        node[e_nokkel] = node[s_nokkel]
+                        avvik.append(
+                            f"{sti}: enhetspris «{gammel}» RETTET AV KODE "
+                            f"til «{node[s_nokkel]}» (antall=1, rabatt=0 → "
+                            "enhetspris er per definisjon lik sum)")
+                else:
+                    avvik.append(
+                        f"{sti}: enhetspris×antall−rabatt ({e}×{a}−{rabatt}) "
+                        f"stemmer ikke med sum ({s}) — en verdi står "
+                        "sannsynligvis i feil felt, kontroller mot dokumentet")
         for k, v in node.items():
             _konsistens(v, f"{sti}.{k}" if sti else k)
 
@@ -1047,6 +1062,79 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(200, vis)
         return self._svar(404, {"ok": False, "feil": "Se GET /hjelp for endepunkter"})
 
+    def _fyll_skjema_flyt(self, filnavn, slag, innhold, maks_ocr, mal,
+                          via_spor=False):
+        """Fyller brukerens egen JSON-mal fra dokumentet: modellen
+        fyller, KODEN validerer (rens_skjemasvar). Modellen grunnes med
+        deterministisk funnede beløp MED kontekst — så verdier havner i
+        riktige felter (kampanjepris vs produktpris osv.)."""
+        t0 = time.time()
+        if _borealis["status"] != "klar":
+            return self._svar(503, {"ok": False,
+                                    "feil": f"Borealis er ikke klar ({_borealis['status']})",
+                                    "borealis": _borealis["status"]})
+        fra_cache = False
+        if slag == "tekst":
+            dok = innhold
+        else:
+            a = analyser_med_cache(filnavn, innhold, maks_ocr)
+            if not a.get("ok"):
+                return self._svar(400, a)
+            dok = a.get("tekst", "")
+            fra_cache = a.get("fra_cache", False)
+
+        # Deterministisk beløpsgrunnlag: hvert beløp med konteksten sin,
+        # så modellen ser HVA hvert tall hører til før den plasserer det
+        belop_del = ""
+        belop_liste = finn_alle_belop(dok, maks=40)
+        if belop_liste:
+            belop_del = ("\nBeløp funnet i dokumentet, med kontekst — bruk "
+                         "konteksten til å plassere hvert beløp i riktig felt:\n"
+                         + "\n".join(f"- {b['raatekst']}: «{b['kontekst']}»"
+                                     for b in belop_liste) + "\n")
+
+        prompt = (
+            "Fyll ut JSON-malen nederst KUN med opplysninger som står "
+            "i dokumentet.\nStrenge regler:\n"
+            "- Verdier gjengis ORDRETT fra dokumentet — aldri regn eller omform\n"
+            "- Finner du ikke en opplysning, la feltet stå som tom streng \"\"\n"
+            "- ALDRI sett en verdi i et annet felt enn det den hører til i "
+            "dokumentets sammenheng — er plasseringen usikker, la feltet stå tomt\n"
+            "- Prosentsatser hører aldri hjemme i beløpsfelter\n"
+            "- Behold malens struktur og nøkler NØYAKTIG\n"
+            "Svar KUN med den utfylte JSON-en.\n"
+            f"\nDokument:\n{dok[:MAKS_LLM_TEGN]}\n"
+            + belop_del +
+            f"\nJSON-mal:\n{json.dumps(mal, ensure_ascii=False, indent=1)}\n"
+            "\nUtfylt JSON:"
+        )
+        svar_tekst, _ = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
+        utfylt = _parse_json_svar(svar_tekst)
+        if utfylt is None:
+            svar_tekst, _ = _borealis_generer(
+                prompt + "\n(Husk: svar KUN med gyldig JSON, ingenting annet.)",
+                MAKS_SVAR_TOKENS)
+            utfylt = _parse_json_svar(svar_tekst)
+        if utfylt is None:
+            return self._svar(200, {"ok": False,
+                                    "feil": "Modellen ga ikke gyldig JSON etter to forsøk",
+                                    "raasvar": svar_tekst[:1500]})
+        renset, avvik = rens_skjemasvar(mal, utfylt, dok)
+        svar = {
+            "ok": True, "filnavn": filnavn,
+            "skjema": renset,
+            "avvik": avvik,
+            "fra_cache": fra_cache,
+            "tid_sekunder": round(time.time() - t0, 1),
+            "kilde": "borealis_" + (_borealis["motor"] or "ukjent") + "+kodevalidering",
+            "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
+                        "modell": _borealis["motor"]},
+        }
+        if via_spor:
+            svar["melding"] = ("JSON-mal oppdaget i spørsmålet — behandlet "
+                               "som skjemautfylling med full kodevalidering")
+        return self._svar(200, svar)
+
     def do_POST(self):
         # Sikkerhetsnett: en uventet feil skal gi et ærlig JSON-svar
         # (500), aldri en taus lukket forbindelse som blir 502 i tunnelen
@@ -1199,9 +1287,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(200 if resultat.get("ok") else 400, resultat)
 
         if sti == "/fyll_skjema":
-            # Fyll brukerens EGEN JSON-mal fra dokumentet — modellen
-            # fyller, KODEN validerer (rens_skjemasvar)
-            t0 = time.time()
             skjema_raa = tekstfelter.get("skjema", "").strip()
             if not skjema_raa:
                 return self._svar(400, {"ok": False, "feil": "Mangler multipart-felt 'skjema' (JSON-malen din)"})
@@ -1209,62 +1294,22 @@ class Handler(BaseHTTPRequestHandler):
                 mal = json.loads(skjema_raa)
             except json.JSONDecodeError as exc:
                 return self._svar(400, {"ok": False, "feil": f"Ugyldig JSON i 'skjema': {exc}"})
-            if _borealis["status"] != "klar":
-                return self._svar(503, {"ok": False, "feil": f"Borealis er ikke klar ({_borealis['status']})", "borealis": _borealis["status"]})
-
-            fra_cache = False
-            if slag == "tekst":
-                dok = innhold
-            else:
-                a = analyser_med_cache(filnavn, innhold, maks_ocr)
-                if not a.get("ok"):
-                    return self._svar(400, a)
-                dok = a.get("tekst", "")
-                fra_cache = a.get("fra_cache", False)
-
-            prompt = (
-                "Fyll ut JSON-malen nederst KUN med opplysninger som står "
-                "i dokumentet.\nStrenge regler:\n"
-                "- Verdier gjengis ORDRETT fra dokumentet — aldri regn eller omform\n"
-                "- Finner du ikke en opplysning, la feltet stå som tom streng \"\"\n"
-                "- ALDRI sett en verdi i et annet felt enn det den hører til i "
-                "dokumentets sammenheng — er plasseringen usikker, la feltet stå tomt\n"
-                "- Prosentsatser hører aldri hjemme i beløpsfelter\n"
-                "- Kampanje-/abonnementspriser («X per måned») er IKKE "
-                "produktets enhetspris\n"
-                "- Behold malens struktur og nøkler NØYAKTIG\n"
-                "Svar KUN med den utfylte JSON-en.\n"
-                f"\nDokument:\n{dok[:MAKS_LLM_TEGN]}\n"
-                f"\nJSON-mal:\n{json.dumps(mal, ensure_ascii=False, indent=1)}\n"
-                "\nUtfylt JSON:"
-            )
-            svar_tekst, _ = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
-            utfylt = _parse_json_svar(svar_tekst)
-            if utfylt is None:
-                svar_tekst, _ = _borealis_generer(
-                    prompt + "\n(Husk: svar KUN med gyldig JSON, ingenting annet.)",
-                    MAKS_SVAR_TOKENS)
-                utfylt = _parse_json_svar(svar_tekst)
-            if utfylt is None:
-                return self._svar(200, {"ok": False,
-                                        "feil": "Modellen ga ikke gyldig JSON etter to forsøk",
-                                        "raasvar": svar_tekst[:1500]})
-            renset, avvik = rens_skjemasvar(mal, utfylt, dok)
-            return self._svar(200, {
-                "ok": True, "filnavn": filnavn,
-                "skjema": renset,
-                "avvik": avvik,
-                "fra_cache": fra_cache,
-                "tid_sekunder": round(time.time() - t0, 1),
-                "kilde": "borealis_" + (_borealis["motor"] or "ukjent") + "+kodevalidering",
-                "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
-                            "modell": _borealis["motor"]},
-            })
+            return self._fyll_skjema_flyt(filnavn, slag, innhold, maks_ocr, mal)
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
         sporsmal = tekstfelter.get("sporsmal", "").strip()
         if not sporsmal:
             return self._svar(400, {"ok": False, "feil": "Mangler multipart-felt 'sporsmal' (spørsmålet ditt)"})
+
+        # Er «spørsmålet» en JSON-mal (limt inn i spørsmålsfeltet i en
+        # GUI), rutes den automatisk til skjemautfylling MED
+        # kodevalidering — brukeren skal ikke trenge å kjenne endepunkter
+        if not jobb_ref and "{" in sporsmal and "}" in sporsmal:
+            mal_kandidat = _parse_json_svar(sporsmal)
+            if isinstance(mal_kandidat, dict) and mal_kandidat:
+                return self._fyll_skjema_flyt(filnavn, slag, innhold,
+                                              maks_ocr, mal_kandidat,
+                                              via_spor=True)
         if _borealis["status"] == "laster":
             return self._svar(503, {"ok": False, "feil": "Borealis laster fortsatt — prøv igjen om ett minutt", "borealis": "laster"})
         if _borealis["status"] != "klar":
