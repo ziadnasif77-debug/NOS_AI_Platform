@@ -1133,6 +1133,13 @@ class Handler(BaseHTTPRequestHandler):
         if via_spor:
             svar["melding"] = ("JSON-mal oppdaget i spørsmålet — behandlet "
                                "som skjemautfylling med full kodevalidering")
+            # GUI-er viser 'svar'-feltet: legg den utfylte malen (og
+            # eventuelle avvik) der som ferdigformatert tekst
+            vis = json.dumps(renset, ensure_ascii=False, indent=2)
+            if avvik:
+                vis += ("\n\n--- Avvik (kodevalidering) ---\n"
+                        + "\n".join(f"• {a}" for a in avvik))
+            svar["svar"] = vis
         return self._svar(200, svar)
 
     def do_POST(self):
