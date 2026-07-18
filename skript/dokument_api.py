@@ -1005,6 +1005,109 @@ def _jobb_arbeider() -> None:
 
 
 # ------------------------------------------------------------------ #
+#  OpenAPI-spesifikasjon + Swagger UI (GET /openapi.json, /dokumentasjon)
+# ------------------------------------------------------------------ #
+
+def _openapi() -> dict:
+    fil_felt = {"type": "string", "format": "binary",
+                "description": "Dokumentet: PDF, bilde (JPG/PNG/TIFF/BMP/WEBP), DOCX, XLSX/XLSM, CSV eller TXT"}
+    return {
+        "openapi": "3.0.3",
+        "info": {
+            "title": "NAV dokument-API (generelt)",
+            "version": API_VERSJON,
+            "description": (
+                "Generelt dokument-API: deterministisk uttrekk, regionbasert OCR "
+                "(trykt + norsk håndskrift), strekkoder/QR, fritt spørsmål/svar med "
+                "Borealis, skjemautfylling med kodevalidering og bakgrunnsjobber "
+                "for store dokumenter.\n\n"
+                "**Kontrakt:** fil UTEN spørsmål → hele den utleste teksten ordrett "
+                "(deterministisk). Fil MED tekst → bestillingen utføres. Alle svar "
+                "deklarerer ærlig hva som skjedde (advarsel/avvik/tall_verifisert)."),
+        },
+        "components": {"securitySchemes": {"ApiKeyAuth": {
+            "type": "apiKey", "in": "header", "name": "X-API-Key",
+            "description": "Kreves kun når serveren er startet med API_NOKKEL"}}},
+        "paths": {
+            "/hjelp": {"get": {"summary": "Tjenestestatus og oversikt",
+                               "responses": {"200": {"description": "Status, endepunkter, grenser, Borealis-motor"}}}},
+            "/spor": {"post": {
+                "summary": "Spørsmål/innhold fra dokument — eller rent spørsmål",
+                "description": (
+                    "1) fil uten sporsmal → HELE den utleste teksten ordrett (deterministisk)\n"
+                    "2) fil + sporsmal → svar fra Borealis med tallvakt og vern\n"
+                    "3) fil + sporsmal som er en JSON-mal → skjemautfylling med kodevalidering\n"
+                    "4) sporsmal uten fil → generelt svar fra modellen (merkes uten_dokument)\n"
+                    "Valgfritt: korriger=ja (LLM-korrigert OCR-tekst), jobb_id (spør mot ferdig jobb), "
+                    "maks_sider (OCR-sidegrense)"),
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object",
+                    "properties": {"fil": fil_felt,
+                                   "sporsmal": {"type": "string"},
+                                   "jobb_id": {"type": "string"},
+                                   "korriger": {"type": "string", "enum": ["ja"]},
+                                   "maks_sider": {"type": "integer"}}}}}},
+                "responses": {"200": {"description":
+                    "svar, tall_verifisert, tolket_sporsmal, svar_avkortet, handskrift, strekkoder, "
+                    "ocr_motorer, advarsel, fra_cache, tid_sekunder, kilde, versjon"}}}},
+            "/analyser": {"post": {
+                "summary": "Deterministisk analyse (felter, datoer, strekkoder, full tekst)",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "properties": {"fil": fil_felt,
+                                   "maks_sider": {"type": "integer"}}}}}},
+                "responses": {"200": {"description":
+                    "felter, datoer, datoer_detaljert, strekkoder, handskrift, tekst, antall_tegn, "
+                    "ocr_brukt/ocr_motorer, advarsel"}}}},
+            "/uttrekk": {"post": {
+                "summary": "Komplett strukturert totaluttrekk (fast skjema, alle nøkler alltid til stede)",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "properties": {"fil": fil_felt}}}}},
+                "responses": {"200": {"description":
+                    "dokument, identifikatorer (sjekksumvalidert), kontakt, adresser, datoer, perioder, "
+                    "belop, strekkoder, handskrift, tekst, kvalitet, versjon"}}}},
+            "/fyll_skjema": {"post": {
+                "summary": "Fyll DIN egen JSON-mal fra dokumentet — kodevalidert felt for felt",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil", "skjema"],
+                    "properties": {"fil": fil_felt,
+                                   "skjema": {"type": "string", "description": "JSON-malen din (tomme strenger som verdier)"}}}}}},
+                "responses": {"200": {"description": "skjema (utfylt og renset), avvik (alle inngrep deklarert)"}}}},
+            "/jobb": {"post": {
+                "summary": "Asynkron OCR av store dokumenter (ubegrenset antall sider)",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "properties": {"fil": fil_felt}}}}},
+                "responses": {"202": {"description": "jobb_id — følg med på GET /jobb/{id}"}}}},
+            "/jobb/{id}": {"get": {"summary": "Jobbstatus og fremdrift",
+                "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "status, sider_ferdig/sider_totalt, tidsestimat, felter m.m."}}}},
+            "/jobb/{id}/tekst": {"get": {"summary": "Hele den utleste teksten fra en ferdig jobb",
+                "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "tekst, antall_tegn"}}}},
+            "/jobb/{id}/avbryt": {"post": {"summary": "Avbryt en kø/pågående jobb",
+                "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "status avbrytes"}}}},
+        },
+    }
+
+
+_SWAGGER_HTML = """<!DOCTYPE html>
+<html lang="no"><head><meta charset="utf-8">
+<title>NAV dokument-API — dokumentasjon</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+</head><body>
+<div id="swagger-ui"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui",
+                 docExpansion: "list", defaultModelsExpandDepth: -1});
+</script>
+</body></html>"""
+
+
+# ------------------------------------------------------------------ #
 #  HTTP                                                               #
 # ------------------------------------------------------------------ #
 
@@ -1019,13 +1122,35 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(kode)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(payload)
 
+    def _html(self, innhold: str):
+        payload = innhold.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_OPTIONS(self):
+        # CORS-preflight for nettleserklienter
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+        self.end_headers()
+
     def do_GET(self):
+        if self.path.rstrip("/") == "/openapi.json":
+            return self._svar(200, _openapi())
+        if self.path.rstrip("/") in ("/dokumentasjon", "/docs"):
+            return self._html(_SWAGGER_HTML)
         if self.path.rstrip("/") in ("", "/hjelp"):
             return self._svar(200, {
                 "tjeneste": "NAV dokument-API (generelt)",
+                "dokumentasjon": "GET /dokumentasjon (Swagger UI) · GET /openapi.json (OpenAPI 3)",
                 "endepunkter": {
                     "POST /analyser": "multipart/form-data, felt 'fil' → deterministiske felter + trenger_ocr",
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
@@ -1214,15 +1339,18 @@ class Handler(BaseHTTPRequestHandler):
             # tillat òg rå PDF-bytes i body (Content-Type: application/pdf)
             filnavn, data = "opplastet.pdf", body
 
-        # /spor kan bruke jobb_id i stedet for fil
+        # /spor kan bruke jobb_id i stedet for fil — eller stå helt uten
+        # fil (rent spørsmål → generelt modellsvar)
         jobb_ref = tekstfelter.get("jobb_id", "").strip() if sti == "/spor" else ""
-        if data is None and not jobb_ref:
+        rent_sporsmal = bool(sti == "/spor" and data is None and not jobb_ref
+                             and tekstfelter.get("sporsmal", "").strip())
+        if data is None and not jobb_ref and not rent_sporsmal:
             return self._svar(400, {"ok": False, "feil": "Ingen fil funnet i multipart-body (felt 'fil')"})
 
         # Normaliser filtypen: PDF forblir PDF, bilder blir PDF,
         # DOCX/TXT gir teksten direkte
         slag, innhold = None, None
-        if not jobb_ref:
+        if not jobb_ref and data is not None:
             slag, innhold = normaliser_fil(filnavn, data)
             if slag is None:
                 return self._svar(400, {"ok": False, "feil": innhold})
@@ -1339,7 +1467,7 @@ class Handler(BaseHTTPRequestHandler):
         # Er «spørsmålet» en JSON-mal (limt inn i spørsmålsfeltet i en
         # GUI), rutes den automatisk til skjemautfylling MED
         # kodevalidering — brukeren skal ikke trenge å kjenne endepunkter
-        if not jobb_ref and "{" in sporsmal and "}" in sporsmal:
+        if not jobb_ref and innhold is not None and "{" in sporsmal and "}" in sporsmal:
             mal_kandidat = _parse_json_svar(sporsmal)
             if isinstance(mal_kandidat, dict) and mal_kandidat:
                 return self._fyll_skjema_flyt(filnavn, slag, innhold,
@@ -1349,6 +1477,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(503, {"ok": False, "feil": "Borealis laster fortsatt — prøv igjen om ett minutt", "borealis": "laster"})
         if not tom_foresporsel and _borealis["status"] != "klar":
             return self._svar(503, {"ok": False, "feil": f"Borealis er ikke tilgjengelig ({_borealis['status']}): {_borealis['feil']}", "borealis": _borealis["status"]})
+
+        # Rent spørsmål uten dokument → generelt modellsvar, ærlig merket
+        if rent_sporsmal:
+            t0 = time.time()
+            svar, avkortet = _borealis_generer(
+                "Svar kort, presist og på norsk:\n" + sporsmal,
+                MAKS_SVAR_TOKENS)
+            return self._svar(200, {
+                "ok": True, "sporsmal": sporsmal, "svar": svar,
+                "uten_dokument": True,
+                "melding": ("Ingen fil vedlagt — svaret er generell "
+                            "modellkunnskap, IKKE hentet fra noe dokument, "
+                            "og tallvakten gjelder derfor ikke"),
+                "svar_avkortet": avkortet,
+                "tid_sekunder": round(time.time() - t0, 1),
+                "kilde": "borealis_" + (_borealis["motor"] or "ukjent")
+                         + "_uten_dokument",
+                "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
+                            "modell": _borealis["motor"]},
+            })
 
         t0 = time.time()
         ocr_brukt = False
