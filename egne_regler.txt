@@ -1,17 +1,17 @@
-# ================================================================
+﻿# ================================================================
 #  DINE EGNE REGLER for svar fra /spor (Borealis)
 # ================================================================
-#  - Skriv én regel per linje, på norsk.
+#  - Skriv أ©n regel per linje, pأ¥ norsk.
 #  - Linjer som starter med # ignoreres (kommentarer).
-#  - Endringer virker UMIDDELBART — ingen omstart av serveren.
+#  - Endringer virker UMIDDELBART â€” ingen omstart av serveren.
 #  - Reglene legges inn i prompten ETTER standardreglene
 #    (aldri regne, tall ordrett, ikke gjette) og kan ikke
-#    oppheve tallvakten — den er kode, ikke prompt.
+#    oppheve tallvakten â€” den er kode, ikke prompt.
 #
-#  Eksempler (fjern # for å aktivere):
+#  Eksempler (fjern # for أ¥ aktivere):
 # Svar alltid med hele setninger.
-# Skriv beløp alltid med valutakode, f.eks. NOK 268,00.
-# Datoer skal alltid gjengis som dd.mm.åååå.
+# Skriv belأ¸p alltid med valutakode, f.eks. NOK 268,00.
+# Datoer skal alltid gjengis som dd.mm.أ¥أ¥أ¥أ¥.
 # Hvis dokumentet er en kvittering, nevn alltid hvem som er betaler.
-# Svar på nynorsk.
-Skriv beløp alltid med valutakode, f.eks. NOK 268,00.
+# Svar pأ¥ nynorsk.
+Skriv belأ¸p alltid med valutakode, f.eks. NOK 268,00.

@@ -1,0 +1,18 @@
+# ================================================================
+#  DINE EGNE DATO-ETIKETTER — for nye dokumenttyper med nye ord
+# ================================================================
+#  Format: ord = type   (én per linje, # = kommentar)
+#  Ordet er det som står FORAN datoen i dokumentet; typen er
+#  klassifiseringen datoen får i «datoer»/«datoer_detaljert».
+#
+#  Endringer virker UMIDDELBART — ingen omstart, ingen kodeendring.
+#  Dine etiketter sjekkes FØR de innebygde og kan overstyre dem.
+#
+#  Eksempler (fjern # for å aktivere):
+# hentedato = hentedato
+# forfallsdato = forfall
+# dødsdato = dodsdato
+# ansettelsesdato = ansettelse
+# oppsigelsesdato = oppsigelse
+# vigselsdato = vigsel
+hentedato = hentedato

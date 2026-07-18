@@ -9,6 +9,7 @@ Brukes av NLPWorker som et lag OVER modell-uttrekket:
 Deterministiske treff vinner for strukturerte felter; modellene vinner
 for navn (fritekst uten fast mønster).
 """
+import os
 import re
 from datetime import datetime
 
@@ -206,6 +207,38 @@ _DATO_ETIKETTER = [
 ]
 
 
+# Brukerdefinerte etiketter fra egne_etiketter.txt i prosjektroten:
+# «ord = type» per linje. Nye dokumenttyper med nye ord krever dermed
+# ALDRI kodeendring — én linje i en tekstfil, uten omstart.
+_EGNE_ETIKETTER_STI = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "egne_etiketter.txt")
+_egne_etiketter_cache = {"mtime": None, "liste": []}
+
+
+def _egne_dato_etiketter() -> list:
+    try:
+        mtime = os.path.getmtime(_EGNE_ETIKETTER_STI)
+    except OSError:
+        return []
+    if _egne_etiketter_cache["mtime"] != mtime:
+        liste = []
+        try:
+            with open(_EGNE_ETIKETTER_STI, encoding="utf-8") as f:
+                for linje in f:
+                    linje = linje.strip()
+                    if not linje or linje.startswith("#") or "=" not in linje:
+                        continue
+                    ordet, typen = (d.strip() for d in linje.split("=", 1))
+                    if ordet and typen:
+                        liste.append((re.escape(ordet),
+                                      re.sub(r"[^\wæøå]", "_", typen.lower())))
+        except OSError:
+            return _egne_etiketter_cache["liste"]
+        _egne_etiketter_cache.update(mtime=mtime, liste=liste)
+    return _egne_etiketter_cache["liste"]
+
+
 def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
     """Klassifiserer HVER dato i teksten: hva den er og hvorfor.
 
@@ -255,10 +288,11 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
                 dtype = "periode_slutt"
                 begrunnelse = "andre dato i et fra–til-intervall"
 
-        # 2) Etikett rett før datoen (på samme linje)
+        # 2) Etikett rett før datoen (på samme linje) — brukerens egne
+        #    etiketter sjekkes FØRST og kan dermed overstyre de innebygde
         if dtype is None:
             etikett_sok = tekst[max(linje_start, start - 35):start]
-            for monster, kandidat in _DATO_ETIKETTER:
+            for monster, kandidat in _egne_dato_etiketter() + _DATO_ETIKETTER:
                 m = re.search(monster, etikett_sok, re.IGNORECASE)
                 if m:
                     dtype, etikett = kandidat, m.group(0)

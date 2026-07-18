@@ -1,10 +1,9 @@
 """
-UiPath-klart analyse-API — kjører lokalt på din maskin, uten Docker.
+Generelt dokument-API — kjører lokalt på din maskin, uten Docker.
 
-Forskjellen fra lokal_api.py: dette endepunktet tar imot selve FILEN
-(multipart/form-data upload), akkurat slik UiPath / Power Automate /
-enhver ekstern klient sender den — ikke en filsti. Det er DENNE
-kontrakten et RPA-verktøy bruker.
+Tar imot selve FILEN (multipart/form-data) slik ENHVER klient sender
+den — GUI-er, UiPath, Power Automate, curl, egne skript. Ingenting i
+API-et er knyttet til én bestemt klient eller én bestemt dokumenttype.
 
 Flyt:
     UiPath  --(HTTP POST, fil vedlagt)-->  /analyser
@@ -25,10 +24,10 @@ I tillegg: POST /spor tar imot FIL + SPØRSMÅL (multipart-felter «fil» og
 GPU). Modellen lastes i bakgrunnen ved oppstart; /spor svarer 503 med
 forklaring til den er klar.
 
-Kun standardbibliotek + PyMuPDF (+ transformers/torch for /spor). Start:
-    python skript/uipath_api.py
-Så, fra UiPath: HTTP Request-aktivitet, POST http://localhost:8600/analyser,
-med filen som "attachment"/multipart-felt "fil".
+Start:
+    python skript/dokument_api.py
+Enhver HTTP-klient: POST http://localhost:8600/analyser med filen som
+multipart-felt «fil». Se GET /hjelp for alle endepunkter.
 """
 import hashlib
 import io
@@ -53,7 +52,8 @@ from delt.tekstuttrekk import (er_gyldig_orgnr, finn_alle_datoer,
                                klassifiser_datoer, strukturert_uttrekk,
                                utvid_entiteter)
 
-PORT = int(os.environ.get("UIPATH_API_PORT", "8600"))
+PORT = int(os.environ.get("DOKUMENT_API_PORT",
+                          os.environ.get("UIPATH_API_PORT", "8600")))
 MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
 # Hvor mange tegn av dokumentet LLM-en leser direkte. Større dokumenter
 # suppleres med deterministisk uttrekk fra HELE teksten + advarsel.
@@ -993,7 +993,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.rstrip("/") in ("", "/hjelp"):
             return self._svar(200, {
-                "tjeneste": "NAV UiPath-klart analyse-API",
+                "tjeneste": "NAV dokument-API (generelt)",
                 "endepunkter": {
                     "POST /analyser": "multipart/form-data, felt 'fil' → deterministiske felter + trenger_ocr",
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
@@ -1023,7 +1023,8 @@ class Handler(BaseHTTPRequestHandler):
                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
                 "borealis": _borealis["status"],
                 "borealis_motor": _borealis["motor"],
-                "uipath": "HTTP Request → Method POST → Attachment/Body: filen som multipart-felt 'fil'",
+                "klient_eksempel": ("Enhver HTTP-klient (GUI, UiPath, curl, egne skript): "
+                                    "POST med filen som multipart-felt 'fil'"),
             })
         if self.path.startswith("/jobb/"):
             if not self._autorisert():
@@ -1471,7 +1472,7 @@ def main():
         server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     except OSError as exc:
         print(f"\n!!! Port {PORT} opptatt: {exc}")
-        print("    Bruk en annen: set UIPATH_API_PORT=8601 && python skript/uipath_api.py\n")
+        print("    Bruk en annen: set DOKUMENT_API_PORT=8601 && python skript/dokument_api.py\n")
         return
     # Borealis lastes i bakgrunnen — /analyser virker med en gang,
     # /spor blir klar når modellen er lastet (~1-2 min).
@@ -1486,12 +1487,11 @@ def main():
 
     strek = "=" * 64
     print(strek)
-    print("  NAV UiPath-klart analyse-API — SERVEREN KJØRER NÅ")
+    print("  NAV dokument-API (generelt) — SERVEREN KJØRER NÅ")
     print(strek)
-    print("  IKKE lukk dette vinduet mens UiPath tester.")
     print(f"  Felter (deterministisk): POST http://<din-ip>:{PORT}/analyser   (felt: fil)")
     print(f"  Fritt spørsmål (LLM):    POST http://<din-ip>:{PORT}/spor       (felter: fil + sporsmal)")
-    print("  Svar: JSON. Borealis laster i bakgrunnen — se /hjelp for status.")
+    print("  Alle endepunkter: GET /hjelp. Borealis laster i bakgrunnen.")
     print("  Avslutt med Ctrl+C.")
     print(strek + "\n")
     try:
