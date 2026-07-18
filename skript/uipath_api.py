@@ -49,8 +49,9 @@ if hasattr(sys.stdout, "buffer"):
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 
-from delt.tekstuttrekk import (finn_alle_datoer, klassifiser_datoer,
-                               strukturert_uttrekk, utvid_entiteter)
+from delt.tekstuttrekk import (er_gyldig_orgnr, finn_alle_datoer,
+                               klassifiser_datoer, strukturert_uttrekk,
+                               utvid_entiteter)
 
 PORT = int(os.environ.get("UIPATH_API_PORT", "8600"))
 MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
@@ -523,6 +524,7 @@ def _last_borealis_bakgrunn():
 
 # Ankerpar som avgrenser den KLIPPBARE dokumentdelen i promptene våre
 _PROMPT_ANKRE = [("\nDokument:\n", "\n\nSpørsmål:"),
+                 ("\nDokument:\n", "\n\nJSON-mal:"),
                  ("OCR-tekst:\n", "\n\nKorrigert tekst:")]
 
 
@@ -695,6 +697,107 @@ def uverifiserte_tall(svar: str, kilde: str) -> list:
         if len(kompakt) >= 3 and kompakt not in kilde_kompakt:
             mangler.append(tall.strip())
     return mangler
+
+
+def _parse_json_svar(tekst: str):
+    """Henter JSON-objektet ut av et modellsvar (tåler ```-gjerder og
+    tekst rundt). None hvis ingen gyldig JSON finnes."""
+    tekst = re.sub(r"```(?:json)?", "", tekst)
+    start, slutt = tekst.find("{"), tekst.rfind("}")
+    if start == -1 or slutt <= start:
+        return None
+    try:
+        return json.loads(tekst[start:slutt + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def rens_skjemasvar(mal, svar, dok_tekst: str):
+    """Tvinger modellens utfylling inn i malens struktur og validerer
+    hvert felt med KODE (skjemautfylling er der modeller oftest setter
+    riktige verdier i feil felt):
+      * struktur-lås: kun malens nøkler beholdes, manglende → ""
+      * tallvakt per felt: tall som ikke står i dokumentet → tømmes
+      * navnedrevne typesjekker (generelle, styrt av feltnavnet):
+        beløp/pris/sum/grunnlag avviser prosentsatser;
+        organisasjonsnummer må bestå mod11; telefon må ha 8 sifre
+    Returnerer (renset_skjema, liste_med_avvik)."""
+    avvik = []
+
+    def _rekurs(m, s, sti):
+        if isinstance(m, dict):
+            return {k: _rekurs(v, s.get(k) if isinstance(s, dict) else None,
+                               f"{sti}.{k}" if sti else k)
+                    for k, v in m.items()}
+        if isinstance(m, list):
+            kilde = s if isinstance(s, list) else []
+            malelement = m[0] if m else ""
+            return [_rekurs(malelement, e, f"{sti}[{i}]")
+                    for i, e in enumerate(kilde)]
+        verdi = "" if s is None or isinstance(s, (dict, list)) else str(s).strip()
+        if not verdi:
+            return ""
+        mangler = uverifiserte_tall(verdi, dok_tekst)
+        if mangler:
+            avvik.append(f"{sti}: «{verdi}» inneholder tall som ikke står "
+                         "i dokumentet — feltet er tømt")
+            return ""
+        navn = sti.lower()
+        if re.search(r"bel[øo]p|pris|sum|grunnlag", navn):
+            if "%" in verdi:
+                avvik.append(f"{sti}: prosentsats («{verdi}») hører ikke "
+                             "hjemme i et beløpsfelt — feltet er tømt")
+                return ""
+            if not re.search(r"\d", verdi):
+                avvik.append(f"{sti}: «{verdi}» inneholder ingen tall og kan "
+                             "ikke være en pris/et beløp — feltet er tømt")
+                return ""
+        if "organisasjonsnummer" in navn:
+            sifre = re.sub(r"\D", "", verdi)
+            if len(sifre) < 9 or not er_gyldig_orgnr(sifre[:9]):
+                avvik.append(f"{sti}: «{verdi}» består ikke mod11-kontrollen "
+                             "for organisasjonsnummer — feltet er tømt")
+                return ""
+        if "telefon" in navn:
+            sifre = re.sub(r"\D", "", verdi)
+            if sifre.startswith("47") and len(sifre) == 10:
+                sifre = sifre[2:]
+            if len(sifre) != 8:
+                avvik.append(f"{sti}: «{verdi}» er ikke et gyldig norsk "
+                             "telefonnummer — feltet er tømt")
+                return ""
+        return verdi
+
+    renset = _rekurs(mal, svar, "")
+
+    # Aritmetisk konsistens (generell, feltnavndrevet): der en gruppe
+    # har enhetspris/antall/sum, må regnestykket gå opp — ellers er en
+    # verdi sannsynligvis plassert i feil felt
+    def _tall(v):
+        try:
+            return float(str(v).replace(" ", "").replace(".", "")
+                         .replace(",", "."))
+        except (ValueError, AttributeError):
+            return None
+
+    def _konsistens(node, sti):
+        if not isinstance(node, dict):
+            return
+        lav = {k.lower(): v for k, v in node.items()}
+        e, a, s = (_tall(lav.get("enhetspris")), _tall(lav.get("antall")),
+                   _tall(lav.get("sum")))
+        if e is not None and a is not None and s is not None and s > 0:
+            rabatt = _tall(lav.get("rabatt")) or 0.0
+            if abs(e * a - rabatt - s) > max(0.01 * s, 0.5):
+                avvik.append(
+                    f"{sti}: enhetspris×antall−rabatt ({e}×{a}−{rabatt}) "
+                    f"stemmer ikke med sum ({s}) — en verdi står "
+                    "sannsynligvis i feil felt, kontroller mot dokumentet")
+        for k, v in node.items():
+            _konsistens(v, f"{sti}.{k}" if sti else k)
+
+    _konsistens(renset, "")
+    return renset, avvik
 
 
 def korriger_borealis(ocr_tekst: str) -> str:
@@ -898,6 +1001,8 @@ class Handler(BaseHTTPRequestHandler):
                     "POST /uttrekk": ("felt 'fil' → KOMPLETT strukturert JSON: alle identifikatorer "
                                       "(sjekksumvalidert), kontakt, adresser, datoer, perioder, beløp, "
                                       "strekkoder, håndskrift, kvalitet — alle nøkler alltid til stede"),
+                    "POST /fyll_skjema": ("felter 'fil' + 'skjema' (din egen JSON-mal) → malen utfylt "
+                                          "fra dokumentet, kodevalidert felt for felt (avvik rapporteres)"),
                     "POST /jobb": "felt 'fil' → jobb_id med en gang; OCR av HELE dokumentet kjører i bakgrunnen",
                     "GET /jobb/<id>": "status + fremdrift (sider_ferdig/sider_totalt, tidsestimat)",
                     "GET /jobb/<id>/tekst": "hele den utlestne teksten når jobben er ferdig",
@@ -971,8 +1076,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._svar(200, {"ok": True, "jobb_id": jid, "status": "avbrytes"})
             return self._svar(409, {"ok": False, "feil": f"Jobben er allerede {jobb.get('status')}"})
 
-        if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor, /uttrekk eller /jobb (se /hjelp)"})
+        if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk", "/fyll_skjema"):
+            return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor, /uttrekk, /fyll_skjema eller /jobb (se /hjelp)"})
         lengde = int(self.headers.get("Content-Length", "0"))
         if lengde > MAKS_BYTES:
             return self._svar(413, {"ok": False, "feil": f"Filen er for stor (maks {MAKS_BYTES//1024//1024} MB)"})
@@ -1091,6 +1196,69 @@ class Handler(BaseHTTPRequestHandler):
                 })
             resultat = analyser_med_cache(filnavn, innhold, maks_ocr)
             return self._svar(200 if resultat.get("ok") else 400, resultat)
+
+        if sti == "/fyll_skjema":
+            # Fyll brukerens EGEN JSON-mal fra dokumentet — modellen
+            # fyller, KODEN validerer (rens_skjemasvar)
+            t0 = time.time()
+            skjema_raa = tekstfelter.get("skjema", "").strip()
+            if not skjema_raa:
+                return self._svar(400, {"ok": False, "feil": "Mangler multipart-felt 'skjema' (JSON-malen din)"})
+            try:
+                mal = json.loads(skjema_raa)
+            except json.JSONDecodeError as exc:
+                return self._svar(400, {"ok": False, "feil": f"Ugyldig JSON i 'skjema': {exc}"})
+            if _borealis["status"] != "klar":
+                return self._svar(503, {"ok": False, "feil": f"Borealis er ikke klar ({_borealis['status']})", "borealis": _borealis["status"]})
+
+            fra_cache = False
+            if slag == "tekst":
+                dok = innhold
+            else:
+                a = analyser_med_cache(filnavn, innhold, maks_ocr)
+                if not a.get("ok"):
+                    return self._svar(400, a)
+                dok = a.get("tekst", "")
+                fra_cache = a.get("fra_cache", False)
+
+            prompt = (
+                "Fyll ut JSON-malen nederst KUN med opplysninger som står "
+                "i dokumentet.\nStrenge regler:\n"
+                "- Verdier gjengis ORDRETT fra dokumentet — aldri regn eller omform\n"
+                "- Finner du ikke en opplysning, la feltet stå som tom streng \"\"\n"
+                "- ALDRI sett en verdi i et annet felt enn det den hører til i "
+                "dokumentets sammenheng — er plasseringen usikker, la feltet stå tomt\n"
+                "- Prosentsatser hører aldri hjemme i beløpsfelter\n"
+                "- Kampanje-/abonnementspriser («X per måned») er IKKE "
+                "produktets enhetspris\n"
+                "- Behold malens struktur og nøkler NØYAKTIG\n"
+                "Svar KUN med den utfylte JSON-en.\n"
+                f"\nDokument:\n{dok[:MAKS_LLM_TEGN]}\n"
+                f"\nJSON-mal:\n{json.dumps(mal, ensure_ascii=False, indent=1)}\n"
+                "\nUtfylt JSON:"
+            )
+            svar_tekst, _ = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
+            utfylt = _parse_json_svar(svar_tekst)
+            if utfylt is None:
+                svar_tekst, _ = _borealis_generer(
+                    prompt + "\n(Husk: svar KUN med gyldig JSON, ingenting annet.)",
+                    MAKS_SVAR_TOKENS)
+                utfylt = _parse_json_svar(svar_tekst)
+            if utfylt is None:
+                return self._svar(200, {"ok": False,
+                                        "feil": "Modellen ga ikke gyldig JSON etter to forsøk",
+                                        "raasvar": svar_tekst[:1500]})
+            renset, avvik = rens_skjemasvar(mal, utfylt, dok)
+            return self._svar(200, {
+                "ok": True, "filnavn": filnavn,
+                "skjema": renset,
+                "avvik": avvik,
+                "fra_cache": fra_cache,
+                "tid_sekunder": round(time.time() - t0, 1),
+                "kilde": "borealis_" + (_borealis["motor"] or "ukjent") + "+kodevalidering",
+                "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
+                            "modell": _borealis["motor"]},
+            })
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
         sporsmal = tekstfelter.get("sporsmal", "").strip()
