@@ -34,6 +34,7 @@ på ID-en — så oppdateres koden tilsvarende.
 | R44 | Strukturert totaluttrekk (`POST /uttrekk`): komplett JSON-skjema der ALLE nøkler alltid er til stede (tomt = ""/[]), beløp er tall, datoer er normaliserte, og alle identifikatorer med sjekksum valideres matematisk: fødselsnummer og kontonummer (mod11), organisasjonsnummer (mod11), KID (mod10/mod11). Sifferkandidater finnes uansett gruppering («180527 422 30» = «18052742230»). Deterministisk — ingen modell involvert. | KODE |
 | R45 | Skjemautfylling mot brukerens egen JSON-mal (`POST /fyll_skjema`): modellen fyller, koden validerer — struktur-lås, tallvakt per felt, feltnavndrevne typesjekker (beløp/orgnr/telefon) og aritmetisk konsistens (enhetspris×antall−rabatt=sum). Alle inngrep rapporteres i `avvik` — ingen stille tømming. | KODE |
 | R46 | Nye ord for nye dokumenttyper krever ALDRI kodeendring: dato-etiketter kan legges til i `egne_etiketter.txt` («ord = type», virker umiddelbart, sjekkes før de innebygde). Ukjente etiketter gir fortsatt ærlig «ukjent» — aldri gjetting. | BRUKER |
+| R47 | Fil sendt UTEN spørsmål (`/spor` uten/med tomt `sporsmal`-felt) → svaret er hele den utleste teksten, ORDRETT og deterministisk (aldri modell) — uten tillegg eller utelatelser. Fil MED tekst → bestillingen utføres. | KODE |
 
 ## 2. OCR-korrigering (felt `korriger=ja`)
 

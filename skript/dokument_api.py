@@ -1029,6 +1029,7 @@ class Handler(BaseHTTPRequestHandler):
                 "endepunkter": {
                     "POST /analyser": "multipart/form-data, felt 'fil' → deterministiske felter + trenger_ocr",
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
+                                   "fil UTEN 'sporsmal' → hele den utleste teksten ordrett (deterministisk); "
                                    "valgfritt korriger=ja → LLM-korrigert OCR-tekst"),
                     "POST /uttrekk": ("felt 'fil' → KOMPLETT strukturert JSON: alle identifikatorer "
                                       "(sjekksumvalidert), kontakt, adresser, datoer, perioder, beløp, "
@@ -1330,9 +1331,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._fyll_skjema_flyt(filnavn, slag, innhold, maks_ocr, mal)
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
+        # R47: fil UTEN spørsmål = hele den utleste teksten, ordrett og
+        # deterministisk (aldri modell). Fil MED tekst = utfør bestillingen.
         sporsmal = tekstfelter.get("sporsmal", "").strip()
-        if not sporsmal:
-            return self._svar(400, {"ok": False, "feil": "Mangler multipart-felt 'sporsmal' (spørsmålet ditt)"})
+        tom_foresporsel = not sporsmal
 
         # Er «spørsmålet» en JSON-mal (limt inn i spørsmålsfeltet i en
         # GUI), rutes den automatisk til skjemautfylling MED
@@ -1343,9 +1345,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._fyll_skjema_flyt(filnavn, slag, innhold,
                                               maks_ocr, mal_kandidat,
                                               via_spor=True)
-        if _borealis["status"] == "laster":
+        if not tom_foresporsel and _borealis["status"] == "laster":
             return self._svar(503, {"ok": False, "feil": "Borealis laster fortsatt — prøv igjen om ett minutt", "borealis": "laster"})
-        if _borealis["status"] != "klar":
+        if not tom_foresporsel and _borealis["status"] != "klar":
             return self._svar(503, {"ok": False, "feil": f"Borealis er ikke tilgjengelig ({_borealis['status']}): {_borealis['feil']}", "borealis": _borealis["status"]})
 
         t0 = time.time()
@@ -1394,12 +1396,17 @@ class Handler(BaseHTTPRequestHandler):
 
         raa_tekst = tekst   # ren OCR/dokumenttekst — før merking og vedlegg
 
-        # Verbatim-forespørsler («hele teksten») besvares av KODEN, ikke
-        # modellen: en språkmodell som skriver av kan hoppe over linjer
-        # — koden kan ikke. Komplett, øyeblikkelig, null risiko.
-        if re.search(r"(?i)hele\s+(tekst|dokument|innhold)|all\s+tekst", sporsmal):
+        # Verbatim-svar besvares av KODEN, ikke modellen: en språkmodell
+        # som skriver av kan hoppe over linjer — koden kan ikke.
+        # Gjelder både eksplisitte «hele teksten»-forespørsler (R43) og
+        # fil sendt UTEN spørsmål (R47).
+        if tom_foresporsel or re.search(
+                r"(?i)hele\s+(tekst|dokument|innhold)|all\s+tekst", sporsmal):
             return self._svar(200, {
                 "ok": True, "filnavn": filnavn, "sporsmal": sporsmal,
+                "melding": ("Ingen spørsmål oppgitt — hele den utleste "
+                            "teksten returneres ordrett, uten tillegg "
+                            "eller utelatelser") if tom_foresporsel else None,
                 "svar": raa_tekst,
                 "trenger_ocr": False, "ocr_brukt": ocr_brukt,
                 "strekkoder": strekkoder, "ocr_motorer": ocr_motorer,
