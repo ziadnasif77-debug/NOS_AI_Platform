@@ -49,8 +49,9 @@ ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 
 from delt.tekstuttrekk import (er_gyldig_orgnr, finn_alle_belop,
-                               finn_alle_datoer, klassifiser_datoer,
-                               strukturert_uttrekk, utvid_entiteter)
+                               finn_alle_datoer, finn_koder_med_kontekst,
+                               klassifiser_datoer, strukturert_uttrekk,
+                               utvid_entiteter)
 
 PORT = int(os.environ.get("DOKUMENT_API_PORT",
                           os.environ.get("UIPATH_API_PORT", "8600")))
@@ -752,6 +753,9 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
                 avvik.append(f"{sti}: «{verdi}» inneholder ingen tall og kan "
                              "ikke være en pris/et beløp — feltet er tømt")
                 return ""
+        if "rabatt" in navn and "%" in verdi:
+            avvik.append(f"{sti}: «{verdi}» er en prosentsats i rabattfeltet "
+                         "— kontroller om dette egentlig er mva-satsen")
         if "organisasjonsnummer" in navn:
             sifre = re.sub(r"\D", "", verdi)
             if len(sifre) < 9 or not er_gyldig_orgnr(sifre[:9]):
@@ -787,9 +791,10 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
         e, a, s = (_tall(lav.get("enhetspris")), _tall(lav.get("antall")),
                    _tall(lav.get("sum")))
         if e is not None and a is not None and s is not None and s > 0:
-            rabatt = _tall(lav.get("rabatt")) or 0.0
-            if abs(e * a - rabatt - s) > max(0.01 * s, 0.5):
-                if a == 1 and rabatt == 0:
+            rabatt = _tall(lav.get("rabatt"))
+            toleranse = max(0.01 * s, 0.5)
+            if abs(e * a - (rabatt or 0.0) - s) > toleranse:
+                if a == 1 and (rabatt or 0.0) == 0.0:
                     # Matematisk entydig: ved antall 1 uten rabatt ER
                     # enhetsprisen lik summen — rettes av kode, deklarert
                     e_nokkel = next((k for k in node
@@ -799,6 +804,7 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
                     if e_nokkel and s_nokkel:
                         gammel = node[e_nokkel]
                         node[e_nokkel] = node[s_nokkel]
+                        e = s
                         avvik.append(
                             f"{sti}: enhetspris «{gammel}» RETTET AV KODE "
                             f"til «{node[s_nokkel]}» (antall=1, rabatt=0 → "
@@ -808,6 +814,17 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
                         f"{sti}: enhetspris×antall−rabatt ({e}×{a}−{rabatt}) "
                         f"stemmer ikke med sum ({s}) — en verdi står "
                         "sannsynligvis i feil felt, kontroller mot dokumentet")
+            # Uparselig rabatt (f.eks. prosentsats) mens regnestykket går
+            # opp UTEN rabatt → rabatten er per definisjon null
+            r_nokkel = next((k for k in node if k.lower() == "rabatt"), None)
+            if (r_nokkel is not None and rabatt is None
+                    and str(node.get(r_nokkel, "")).strip()
+                    and abs(e * a - s) <= toleranse):
+                gammel = node[r_nokkel]
+                node[r_nokkel] = "0,00"
+                avvik.append(
+                    f"{sti}: rabatt «{gammel}» RETTET AV KODE til «0,00» "
+                    "(enhetspris×antall stemmer med sum uten rabatt)")
         for k, v in node.items():
             _konsistens(v, f"{sti}.{k}" if sti else k)
 
@@ -1092,6 +1109,12 @@ class Handler(BaseHTTPRequestHandler):
                          "konteksten til å plassere hvert beløp i riktig felt:\n"
                          + "\n".join(f"- {b['raatekst']}: «{b['kontekst']}»"
                                      for b in belop_liste) + "\n")
+        koder_liste = finn_koder_med_kontekst(dok, maks=25)
+        if koder_liste:
+            belop_del += ("\nTall og koder funnet i dokumentet, med kontekst "
+                          "— plasser hver kode i feltet konteksten tilsier:\n"
+                          + "\n".join(f"- {k['verdi']}: «{k['kontekst']}»"
+                                      for k in koder_liste) + "\n")
 
         prompt = (
             "Fyll ut JSON-malen nederst KUN med opplysninger som står "
@@ -1100,7 +1123,10 @@ class Handler(BaseHTTPRequestHandler):
             "- Finner du ikke en opplysning, la feltet stå som tom streng \"\"\n"
             "- ALDRI sett en verdi i et annet felt enn det den hører til i "
             "dokumentets sammenheng — er plasseringen usikker, la feltet stå tomt\n"
-            "- Prosentsatser hører aldri hjemme i beløpsfelter\n"
+            "- Prosentsatser hører aldri hjemme i beløps- eller rabattfelter\n"
+            "- Maskeringstegn beholdes som i dokumentet («****5277», ikke «5277»)\n"
+            "- Firmanavn-felter skal ha den JURIDISKE enheten (navnet ved "
+            "Org. nr.), ikke butikk-/avdelingsnavn\n"
             "- Behold malens struktur og nøkler NØYAKTIG\n"
             "Svar KUN med den utfylte JSON-en.\n"
             f"\nDokument:\n{dok[:MAKS_LLM_TEGN]}\n"

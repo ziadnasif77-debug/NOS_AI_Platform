@@ -601,6 +601,26 @@ def finn_alle_belop(tekst: str, maks: int = 100) -> list:
     return ut
 
 
+def finn_koder_med_kontekst(tekst: str, maks: int = 25) -> list:
+    """Frittstående tall (4–10 sifre) og alfanumeriske koder, hver med
+    sin kontekst — generelt grunnlag for å plassere identifikatorer i
+    riktige felter (produktnummer vs aktiveringskode vs ordrenummer)."""
+    ut, sett = [], set()
+    for monster in (r"(?<!\d)\d{4,10}(?!\d)",
+                    r"\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{6,12}\b"):
+        for treff in re.finditer(monster, tekst):
+            verdi = treff.group(0)
+            if verdi in sett:
+                continue
+            sett.add(verdi)
+            kontekst = " ".join(
+                tekst[max(0, treff.start() - 35):treff.end() + 20].split())
+            ut.append({"verdi": verdi, "kontekst": kontekst})
+            if len(ut) >= maks:
+                return ut
+    return ut
+
+
 def finn_adresser(tekst: str) -> list:
     """Alle postnummer/poststed-forekomster, med gateadresse fra linjen
     over når den ligner en gate (bokstaver + husnummer)."""
