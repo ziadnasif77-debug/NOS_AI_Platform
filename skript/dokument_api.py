@@ -565,7 +565,10 @@ def _tilpass_kontekst(llm, prompt: str, maks_tokens: int) -> str:
     dokumenter tokeniserer 2–3× tettere enn normaltekst, så tegnbaserte
     grenser er upålitelige). Binærsøk på dokumentlengden; kuttet
     merkes eksplisitt i prompten."""
-    budsjett = BOREALIS_KONTEKST - maks_tokens - 64
+    # Minst 256 tokens til dokumentet uansett, så en feilkonfigurert
+    # MAKS_SVAR_TOKENS ikke gir et negativt budsjett (og en prompt som
+    # likevel sprenger vinduet)
+    budsjett = max(BOREALIS_KONTEKST - maks_tokens - 64, 256)
 
     def antall(p: str) -> int:
         return len(llm.tokenize(p.encode("utf-8"), add_bos=True, special=True))
@@ -723,12 +726,18 @@ def uverifiserte_tall(svar: str, kilde: str) -> list:
     3+ sifre i svaret må finnes igjen i kildeteksten (sammenlignet uten
     mellomrom/punktum, så «45 18 68 73» matcher «45186873»). Returnerer
     listen av tall som mangler — tom liste = alt verifisert."""
-    import re as _re
-    kilde_kompakt = _re.sub(r"[ ., ]", "", kilde)
+    # VIKTIG token-vakt: (1) eksakt token-match, ikke delstreng - ellers
+    # ville "1777" passert som delstreng av "11777"; (2) monsteret tar
+    # med komma-desimaler sa "268,00" ikke splittes til "268"+"00" og
+    # slipper endrede orebelop gjennom. Gruppering ("45 18 68 73") og
+    # NBSP fjernes symmetrisk i bade svar og kilde.
+    monster = r"\d[\d . ]*\d(?:,\d+)?|\d(?:,\d+)?"
+    rens = lambda t: re.sub(r"[ ., ]", "", t)
+    kilde_tokens = {rens(t) for t in re.findall(monster, kilde)}
     mangler = []
-    for tall in _re.findall(r"\d[\d . ]*\d|\d+", svar):
-        kompakt = _re.sub(r"[ ., ]", "", tall)
-        if len(kompakt) >= 3 and kompakt not in kilde_kompakt:
+    for tall in re.findall(monster, svar):
+        kompakt = rens(tall)
+        if len(kompakt) >= 3 and kompakt not in kilde_tokens:
             mangler.append(tall.strip())
     return mangler
 
@@ -842,11 +851,23 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
     # har enhetspris/antall/sum, må regnestykket gå opp — ellers er en
     # verdi sannsynligvis plassert i feil felt
     def _tall(v):
+        # Strip ASCII space, NBSP (\xa0) og smal NBSP ( ) — norske
+        # belop bruker ofte disse som tusenskille; ellers slo den
+        # aritmetiske vakten seg av nettopp pa store belop.
         try:
-            return float(str(v).replace(" ", "").replace(".", "")
+            return float(re.sub(r"[ \xa0 .]", "", str(v))
                          .replace(",", "."))
         except (ValueError, AttributeError):
             return None
+
+    def _rabatt_er_null(v) -> bool:
+        # Kun en FRAVÆRENDE eller eksplisitt null rabatt teller som null.
+        # En uparselig rabatt (f.eks. «10 %») er IKKE null — da skal vi
+        # ikke auto-rette, for premisset «rabatt=0» ville vært falskt.
+        if v is None or str(v).strip() == "":
+            return True
+        t = _tall(v)
+        return t is not None and t == 0.0
 
     def _konsistens(node, sti):
         if not isinstance(node, dict):
@@ -856,9 +877,10 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
                    _tall(lav.get("sum")))
         if e is not None and a is not None and s is not None and s > 0:
             rabatt = _tall(lav.get("rabatt"))
+            rabatt_null = _rabatt_er_null(lav.get("rabatt"))
             toleranse = max(0.01 * s, 0.5)
             if abs(e * a - (rabatt or 0.0) - s) > toleranse:
-                if a == 1 and (rabatt or 0.0) == 0.0:
+                if a == 1 and rabatt_null:
                     # Matematisk entydig: ved antall 1 uten rabatt ER
                     # enhetsprisen lik summen — rettes av kode, deklarert
                     e_nokkel = next((k for k in node
@@ -932,11 +954,13 @@ def korriger_borealis(ocr_tekst: str) -> str:
 JOBB_STI = os.path.join(ROT, "data", "jobber")
 _jobber = {}
 _jobb_ko = queue.Queue()
+_jobb_las = threading.Lock()   # beskytter jobb-mutasjon mot samtidig lesing
 
 
 def _jobb_lagre(jobb: dict) -> None:
     os.makedirs(JOBB_STI, exist_ok=True)
-    lagres = {k: v for k, v in jobb.items() if not k.startswith("_")}
+    with _jobb_las:
+        lagres = {k: v for k, v in jobb.items() if not k.startswith("_")}
     with open(os.path.join(JOBB_STI, jobb["jobb_id"] + ".json"), "w",
               encoding="utf-8") as f:
         json.dump(lagres, f, ensure_ascii=False)
@@ -978,11 +1002,14 @@ def _jobb_arbeider() -> None:
         if jobb is None or jobb.get("avbrutt"):
             if jobb is not None:
                 jobb["status"] = "avbrutt"
+                with _jobb_las:
+                    jobb.pop("_data", None)   # frigjør filbytene
                 _jobb_lagre(jobb)
             continue
         try:
             jobb["status"] = "pågår"
-            data = jobb.pop("_data")
+            with _jobb_las:
+                data = jobb.pop("_data", None)
             doc = fitz.open(stream=data, filetype="pdf")
             jobb["sider_totalt"] = doc.page_count
 
@@ -1050,7 +1077,7 @@ def _jobb_arbeider() -> None:
                         for i, t in enumerate(tekster)).strip()
                 else:
                     tekst = "\n".join(tekster).strip()
-                jobb.pop("sekunder_igjen_estimat", None)
+                jobb["sekunder_igjen_estimat"] = None
                 jobb.update(
                     status="ferdig", tekst=tekst, antall_tegn=len(tekst),
                     felter=utvid_entiteter(tekst, {}),
@@ -1179,7 +1206,11 @@ class Handler(BaseHTTPRequestHandler):
     def _autorisert(self) -> bool:
         """R38: er API_NOKKEL satt, kreves matchende X-API-Key-header.
         Tom nøkkel = åpen modus (kun for lokal testing uten sensitive data)."""
-        return (not API_NOKKEL) or self.headers.get("X-API-Key", "") == API_NOKKEL
+        if not API_NOKKEL:
+            return True
+        # Konstant tid — unngå timing-sidekanal på nøkkelen
+        import hmac as _hmac
+        return _hmac.compare_digest(self.headers.get("X-API-Key", ""), API_NOKKEL)
 
     def _svar(self, kode, data):
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -1206,12 +1237,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
         self.end_headers()
 
+    def _sti(self) -> str:
+        """Stien uten query-streng og uten etterfølgende skråstrek —
+        så «/spor?x=1» og «/spor/» rutes som «/spor»."""
+        return self.path.split("?", 1)[0].rstrip("/")
+
     def do_GET(self):
-        if self.path.rstrip("/") == "/openapi.json":
+        # Samme sikkerhetsnett som do_POST: uventet feil → ærlig JSON-500,
+        # aldri en taus lukket forbindelse (som blir 502 i en tunnel)
+        try:
+            return self._do_get_intern()
+        except Exception as exc:
+            try:
+                return self._svar(500, {"ok": False,
+                                        "feil": f"Uventet serverfeil: {type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+
+    def _do_get_intern(self):
+        sti = self._sti()
+        if sti == "/openapi.json":
             return self._svar(200, _openapi())
-        if self.path.rstrip("/") in ("/dokumentasjon", "/docs"):
+        if sti in ("/dokumentasjon", "/docs"):
             return self._html(_SWAGGER_HTML)
-        if self.path.rstrip("/") in ("", "/hjelp"):
+        if sti in ("", "/hjelp"):
             return self._svar(200, {
                 "tjeneste": "NAV dokument-API (generelt)",
                 "dokumentasjon": "GET /dokumentasjon (Swagger UI) · GET /openapi.json (OpenAPI 3)",
@@ -1249,13 +1298,18 @@ class Handler(BaseHTTPRequestHandler):
                 "klient_eksempel": ("Enhver HTTP-klient (GUI, UiPath, curl, egne skript): "
                                     "POST med filen som multipart-felt 'fil'"),
             })
-        if self.path.startswith("/jobb/"):
+        if sti.startswith("/jobb/"):
             if not self._autorisert():
                 return self._svar(401, {"ok": False, "feil": "Ugyldig eller manglende X-API-Key"})
-            deler = [d for d in self.path.rstrip("/").split("/") if d]
+            deler = [d for d in sti.split("/") if d]
             jobb = _jobber.get(deler[1]) if len(deler) >= 2 else None
             if jobb is None:
                 return self._svar(404, {"ok": False, "feil": "Ukjent jobb_id"})
+            # Arbeidstråden muterer det samme jobb-objektet — ta et
+            # atomisk øyeblikksbilde under lås (uten _data-bytene) så en
+            # samtidig statuspoll ikke krasjer på «dict changed size»
+            with _jobb_las:
+                jobb = {k: v for k, v in jobb.items() if not k.startswith("_")}
             if len(deler) == 3 and deler[2] == "tekst":
                 if jobb.get("status") != "ferdig":
                     return self._svar(409, {"ok": False, "status": jobb.get("status"),
@@ -1374,7 +1428,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _do_post_intern(self):
-        sti = self.path.rstrip("/")
+        sti = self._sti()
         if not self._autorisert():
             return self._svar(401, {"ok": False, "feil": "Ugyldig eller manglende X-API-Key"})
 
@@ -1391,9 +1445,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk", "/fyll_skjema"):
             return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor, /uttrekk, /fyll_skjema eller /jobb (se /hjelp)"})
-        lengde = int(self.headers.get("Content-Length", "0"))
-        if lengde > MAKS_BYTES:
-            return self._svar(413, {"ok": False, "feil": f"Filen er for stor (maks {MAKS_BYTES//1024//1024} MB)"})
+        try:
+            lengde = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return self._svar(400, {"ok": False, "feil": "Ugyldig Content-Length"})
+        # Negativ lengde ville ellers bli read(-1) = les til EOF og
+        # omgå størrelsesgrensen — avvis eksplisitt
+        if lengde < 0 or lengde > MAKS_BYTES:
+            return self._svar(413, {"ok": False, "feil": f"Ugyldig eller for stor forespørsel (maks {MAKS_BYTES//1024//1024} MB)"})
         body = self.rfile.read(lengde) if lengde else b""
         ct = self.headers.get("Content-Type", "")
 
@@ -1416,7 +1475,14 @@ class Handler(BaseHTTPRequestHandler):
         # DOCX/TXT gir teksten direkte
         slag, innhold = None, None
         if not jobb_ref and data is not None:
-            slag, innhold = normaliser_fil(filnavn, data)
+            # Korrupt/avkortet fil (bilde/DOCX/XLSX) skal gi et ryddig 400
+            # som PDF-er gjør — ikke et 500 som lekker intern feiltype
+            try:
+                slag, innhold = normaliser_fil(filnavn, data)
+            except Exception as exc:
+                return self._svar(400, {"ok": False,
+                                        "feil": f"Kunne ikke lese filen ({filnavn}): "
+                                                f"korrupt eller ugyldig format ({type(exc).__name__})"})
             if slag is None:
                 return self._svar(400, {"ok": False, "feil": innhold})
 
@@ -1429,8 +1495,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if sti == "/jobb":
             jobb_id = uuid.uuid4().hex[:12]
+            # Alle feltene arbeidstråden senere fyller, forhåndsdeklareres
+            # her — da endrer den bare VERDIER (aldri dict-størrelse), så
+            # en samtidig statuspoll aldri krasjer under iterasjon.
             jobb = {"jobb_id": jobb_id, "filnavn": filnavn, "status": "kø",
                     "sider_ferdig": 0, "sider_totalt": None,
+                    "sekunder_brukt": 0, "sekunder_igjen_estimat": None,
+                    "tekst": "", "antall_tegn": 0, "felter": {}, "datoer": [],
+                    "strekkoder": [], "handskrift": [], "ocr_motorer": {},
                     "opprettet": time.strftime("%Y-%m-%d %H:%M:%S")}
             if slag == "tekst":
                 t = innhold.strip()
