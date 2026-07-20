@@ -204,8 +204,15 @@ services:
       - MILVUS_PORT=${MILVUS_PORT:-19530}
       - MILVUS_SAMLING=${MILVUS_SAMLING:-nav_dokumenter}
       - MODELLER_STI=/modeller
+      # Sok-tjenesten manglet API_NOKKEL → autentiseringen var åpen
+      # (tom nøkkel = fri tilgang, autentisering.py:79). /indekser, /sok
+      # og DELETE var dermed nåbare uautentisert. Arver nå nøkkelen.
+      - API_NOKKEL=${API_NOKKEL:-}
     ports:
-      - "${SOK_PORT:-8003}:8003"
+      # Bundet til 127.0.0.1 som postgres/milvus — søkeindeksen skal
+      # aldri nås fra host-nettet. Var «8003:8003» (eksponert på alle
+      # grensesnitt) i motsetning til de andre datatjenestene.
+      - "127.0.0.1:${SOK_PORT:-8003}:8003"
     healthcheck:
       test: ["CMD", "python", "helsesjekk.py"]
       interval: 30s
@@ -405,8 +412,17 @@ services:
 
   redis:
     image: redis:7-alpine
+    # appendonly gjør at kø-elementer overlever et Redis-krasj (ellers
+    # kun RDB-snapshots → et krasj kan miste ferske jobber; ghost-
+    # detektoren tar dem, men med opptil ~15 min forsinkelse).
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   milvus:
@@ -567,7 +583,12 @@ services:
       - BACKUP_INTERVALL_TIMER=${BACKUP_INTERVALL_TIMER:-24}
       - BACKUP_DAGLIGE=${BACKUP_DAGLIGE:-7}
       - BACKUP_UKENTLIGE=${BACKUP_UKENTLIGE:-4}
-      - BACKUP_MAANEDLIGE=${BACKUP_MAANEDLIGE:-6}
+      # Månedlige kopier MÅ være av (0) for å holde 180-dagersbudsjettet
+      # (NAV 6-månedersregel). Koden i sikkerhetskopi.py:45 har 0 som
+      # standard med eksplisitt advarsel; denne fallbacken var 6, som ga
+      # eldste dump ~180 dager + 150 dagers oppbevaring ≈ 330 dager
+      # persondata i backup. Rettet til 0.
+      - BACKUP_MAANEDLIGE=${BACKUP_MAANEDLIGE:-0}
     volumes:
       - ${BACKUP_STI:-./data/sikkerhetskopi}:/backup
       - ${DATA_STI:-./data}:/data:ro

@@ -76,6 +76,12 @@ OCR_TAK_SIDER = int(os.environ.get("OCR_TAK_SIDER", "50"))
 # Sikkerhet: settes API_NOKKEL, kreves headeren X-API-Key på alle
 # endepunkter unntatt GET /hjelp. Tom = åpen (kun for lokal testing).
 API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
+# CORS: tom = INGEN CORS-header (mest restriktivt) — de faktiske
+# klientene (tkinter-GUI, UiPath, curl) er ikke nettlesere og trenger
+# ingen CORS. Var hardkodet «*» (enhver nettside kunne kalle API-et fra
+# en brukers nettleser). Sett en kommaseparert liste av tillatte opphav,
+# eller «*» bevisst, hvis en nettleserklient trenger det.
+CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "").strip()
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
 API_VERSJON = "1.1.0"
@@ -1384,12 +1390,42 @@ class Handler(BaseHTTPRequestHandler):
         import hmac as _hmac
         return _hmac.compare_digest(self.headers.get("X-API-Key", ""), API_NOKKEL)
 
+    def _cors_origin(self):
+        """Hvilket Access-Control-Allow-Origin skal svaret ha? None =
+        ingen header (restriktivt). Ekko av forespørselens Origin kun når
+        det står på den konfigurerte whitelisten (aldri blindt «*»)."""
+        if not CORS_ORIGINS:
+            return None
+        if CORS_ORIGINS == "*":
+            return "*"
+        origin = self.headers.get("Origin", "")
+        tillatte = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
+        return origin if origin in tillatte else None
+
+    def _serverfeil(self, exc):
+        """En uventet feil skal LOGGES i sin helhet på serveren, men bare
+        gi klienten en generisk melding. Den fulle exceptionen (type,
+        melding, stakksporing) kunne lekke interne stier, spørringer og
+        biblioteksdetaljer til enhver som treffer et endepunkt."""
+        import traceback
+        print("!!! Uventet serverfeil:", file=sys.stderr)
+        traceback.print_exc()
+        try:
+            return self._svar(500, {
+                "ok": False,
+                "feil": "Uventet serverfeil — detaljene står i serverloggen.",
+            })
+        except Exception:
+            pass
+
     def _svar(self, kode, data):
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(kode)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        opphav = self._cors_origin()
+        if opphav:
+            self.send_header("Access-Control-Allow-Origin", opphav)
         self.end_headers()
         self.wfile.write(payload)
 
@@ -1402,11 +1438,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_OPTIONS(self):
-        # CORS-preflight for nettleserklienter
+        # CORS-preflight for nettleserklienter — svarer kun med tillatelse
+        # når opphavet er på whitelisten (se _cors_origin / CORS_ORIGINS).
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+        opphav = self._cors_origin()
+        if opphav:
+            self.send_header("Access-Control-Allow-Origin", opphav)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
         self.end_headers()
 
     def _sti(self) -> str:
@@ -1420,11 +1459,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self._do_get_intern()
         except Exception as exc:
-            try:
-                return self._svar(500, {"ok": False,
-                                        "feil": f"Uventet serverfeil: {type(exc).__name__}: {exc}"})
-            except Exception:
-                pass
+            return self._serverfeil(exc)
 
     def _do_get_intern(self):
         sti = self._sti()
@@ -1627,13 +1662,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self._do_post_intern()
         except Exception as exc:
-            try:
-                return self._svar(500, {
-                    "ok": False,
-                    "feil": f"Uventet serverfeil: {type(exc).__name__}: {exc}",
-                })
-            except Exception:
-                pass
+            return self._serverfeil(exc)
 
     def _do_post_intern(self):
         sti = self._sti()

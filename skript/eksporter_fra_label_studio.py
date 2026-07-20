@@ -1,8 +1,10 @@
 """
 Eksporterer korreksjoner fra Label Studio og konverterer
 til treningsformat for finjustering av TrOCR-NorHand og NB-BERT.
-Kjores av: make eksporter-korreksjoner
-Eller automatisk etter 500 korreksjoner.
+
+Kjøres MANUELT: `make eksporter-korreksjoner`. Det finnes ingen
+automatisk «etter 500 korreksjoner»-utløser i koden (den påstanden var
+aldri implementert — verifisert 2026-07-20).
 """
 import os
 import json

@@ -1,6 +1,16 @@
 """
 Sender dokumenter med lav konfidens til Label Studio for korreksjon.
-Kalles automatisk av OCR-tjenesten nar konfidens < 85%.
+
+MERK (verifisert 2026-07-20): denne modulens `send_til_gjennomgang`
+kalles KUN fra den legacy HTTP-OCR-tjenesten (tjenester/ocr/hoved.py),
+som er profil-deaktivert og ikke starter i standard-deploy. Utløseren
+der er dessuten ruterens beslutning (fire grunner: bildekvalitet,
+OCR<85%, NLP<80%, valideringsfeil), ikke en bokstavelig 85%-sjekk her.
+
+Den KJØRENDE worker-pipelinen bruker IKKE denne modulen — den har sin
+egen Label Studio-sending i tjenester/workers/base_worker.py
+(send_til_label_studio) med 85%-porten i lag1_ocr. Denne fila er derfor
+i praksis død kode i standard-arkitekturen.
 """
 import os
 import shutil

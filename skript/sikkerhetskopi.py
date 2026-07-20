@@ -45,6 +45,36 @@ UKENTLIGE = int(os.environ.get("BACKUP_UKENTLIGE", "4"))
 MAANEDLIGE = int(os.environ.get("BACKUP_MAANEDLIGE", "0"))
 OPPBEVARING_MAKS_DAGER = int(os.environ.get("OPPBEVARING_MAKS_DAGER", "150"))
 
+# NAV-kravet håndheves nå i KODE, ikke bare i en kommentar. Eldste
+# sikkerhetskopi + oppbevaringstiden må holde seg under 180 dager, ellers
+# lever persondata for lenge. En feilkonfigurert BACKUP_MAANEDLIGE
+# (som docker-compose-fallbacken 6 tidligere ga) skal stoppe med en
+# gang, ikke oppdages i en revisjon måneder senere.
+OPPBEVARING_BUDSJETT_DAGER = int(os.environ.get("OPPBEVARING_BUDSJETT_DAGER", "180"))
+
+
+def kontroller_oppbevaringsbudsjett():
+    """Verifiserer at retention-innstillingene ikke bryter 180-dagers-
+    budsjettet. Kalles ved oppstart av backup-daemonen. Reiser
+    ValueError med en klar melding hvis budsjettet sprenges."""
+    # Grovt anslag på alderen til den eldste kopien vi beholder:
+    # månedlige dominerer (~30 d hver), ellers ukentlige (~7 d).
+    if MAANEDLIGE > 0:
+        eldste_kopi_dager = MAANEDLIGE * 30
+    elif UKENTLIGE > 0:
+        eldste_kopi_dager = UKENTLIGE * 7
+    else:
+        eldste_kopi_dager = DAGLIGE
+    total = OPPBEVARING_MAKS_DAGER + eldste_kopi_dager
+    if total > OPPBEVARING_BUDSJETT_DAGER:
+        raise ValueError(
+            "Oppbevaringsbudsjettet er sprengt: OPPBEVARING_MAKS_DAGER "
+            f"({OPPBEVARING_MAKS_DAGER}) + eldste sikkerhetskopi "
+            f"(~{eldste_kopi_dager} d) = {total} d > "
+            f"{OPPBEVARING_BUDSJETT_DAGER} d (NAV 6-månedersregel). "
+            "Sett BACKUP_MAANEDLIGE=0 eller senk OPPBEVARING_MAKS_DAGER."
+        )
+
 DUMP_PREFIKS = "nav_archive_"
 DUMP_SUFFIKS = ".dump"
 TIDSFORMAT = "%Y%m%d_%H%M%S"
@@ -355,6 +385,10 @@ def main():
         return
 
     if args.daemon:
+        # Håndhev NAV-budsjettet FØR daemonen starter — en
+        # feilkonfigurert retention skal stoppe med en gang, ikke lagre
+        # persondata for lenge og bli oppdaget i en revisjon senere.
+        kontroller_oppbevaringsbudsjett()
         logger.info("Backup-daemon: hver %.0f. time (GFS %d/%d/%d)",
                     args.intervall_timer, DAGLIGE, UKENTLIGE, MAANEDLIGE)
         while True:

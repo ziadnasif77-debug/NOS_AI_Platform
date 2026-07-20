@@ -30,6 +30,11 @@ logs/
 *.bak
 tmp/
 
+# Testdekning
+.coverage
+.coverage.*
+htmlcov/
+
 # IDE
 .vscode/
 .idea/

@@ -1,6 +1,11 @@
 """
-Periodisk finjustering av OCR- og NLP-modeller.
-Kjøres automatisk etter 500 korreksjoner eller 90 dager.
+Finjustering av OCR- og NLP-modeller (TrOCR, NB-BERT, LayoutLMv3).
+
+Kjøres MANUELT: `make finjuster` (eller via KFP-treningspipelinen).
+Det finnes INGEN automatisk utløser på korreksjonsantall eller tid i
+koden — den tidligere påstanden om «automatisk etter 500 korreksjoner
+eller 90 dager» var aldri implementert (verifisert 2026-07-20). Ønskes
+det, må en cron/recurring-run settes opp eksplisitt.
 """
 import os
 import json
