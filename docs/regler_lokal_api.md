@@ -120,3 +120,4 @@ på ID-en — så oppdateres koden tilsvarende.
 *Endringsforslag: noter ID + ønsket endring og lever tilbake — koden
 oppdateres og dokumentet holdes i takt.*
 | R48 | Eksklusjoner i spørsmålet («uten adresse/telefon/epost/dato/fødselsnummer/tall») håndheves av KODE: svaret sjekkes med de deterministiske detektorene; ved brudd én streng ny runde, deretter ærlig varsling i advarsel. Små modeller er svake på negasjoner — derfor kode, ikke tillit. | KODE |
+| R49 | Ber du om en JSON-mal, er `svar`-feltet NØYAKTIG den utfylte malen — ren, parsebar JSON uten påheng. Malens nøkler låses (ingen ekstra felter fra modellen), og eventuelle kodeinngrep ligger separat i `avvik`, aldri limt på JSON-en. Du får nøyaktig det du ba om, ikke mer. | KODE |
