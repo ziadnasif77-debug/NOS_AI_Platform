@@ -137,7 +137,11 @@ import requests
 
 # --- innstillinger som huskes mellom kjøringer -----------------------------
 KONFIG_STI = Path.home() / ".nav_api_klient.json"
-STANDARD_URL = "http://localhost:8600"
+# R51: IPv4-adressen direkte, IKKE «localhost». Windows slår opp
+# localhost som IPv6 (::1) først, mens serveren lytter på IPv4 — hvert
+# kall betaler da ~2 sekunder på et oppslag som må feile før det faller
+# tilbake. Målt: localhost 2,07 s mot 127.0.0.1 0,016 s for GET /hjelp.
+STANDARD_URL = "http://127.0.0.1:8600"
 
 TIDSAVBRUDD_KORT = 30    # sekunder — status/oppslag
 TIDSAVBRUDD_LANG = 180   # sekunder — opplasting + modellsvar
@@ -836,7 +840,7 @@ class DokumentKlientApp:
         )
         topp.pack(fill="x", **pad)
 
-        tk.Label(topp, text="Server-URL (tunneladresse eller http://localhost:8600, uten sti):",
+        tk.Label(topp, text="Server-URL (tunneladresse eller http://127.0.0.1:8600, uten sti):",
                  fg=FG_DEMPET, bg=BG_PANEL, anchor="w").pack(fill="x", padx=8, pady=(8, 0))
         self.url_var = tk.StringVar(value=self._lagret_url)
         url_felt = tema_innfelt(topp, self.url_var)

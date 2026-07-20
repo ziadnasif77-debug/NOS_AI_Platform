@@ -204,6 +204,43 @@ def normaliser_fil(filnavn: str, data: bytes):
 #  OCR-fallback — regionbasert ruting (EasyOCR + norhand)             #
 # ------------------------------------------------------------------ #
 
+OCR_DPI = int(os.environ.get("OCR_DPI", "200"))
+
+
+def _ocr_status() -> dict:
+    """OCR-motorenes enhetsvalg — for GET /hjelp."""
+    try:
+        from delt.region_ocr import motorstatus
+        return motorstatus()
+    except Exception as exc:
+        return {"feil": f"kunne ikke lese motorstatus: {exc}"}
+
+
+def ocr_skala(doc, side):
+    """Renderoppløsning for OCR av én side.
+
+    R51: en ekte tekst-PDF (A4 = 595 punkter bred) skal rendres ved
+    OCR_DPI. Men et OPPLASTET BILDE blir en PDF-side der ett punkt
+    tilsvarer én piksel — da ganger 200 dpi opp bildet 2,8× uten å
+    tilføre én eneste ny detalj. Det koster dobbelt tid OG gir dårligere
+    lesing (målt: «NAV Vedtak» ble til «NAV = Vedtak» etter oppskalering).
+    Derfor: aldri rendre finere enn bildets egen oppløsning.
+    """
+    import fitz
+
+    standard = OCR_DPI / 72
+    try:
+        bilder = side.get_images(full=True)
+        if len(bilder) == 1 and side.rect.width > 0:
+            bredde_px = doc.extract_image(bilder[0][0]).get("width", 0)
+            if bredde_px:
+                naturlig = bredde_px / side.rect.width
+                standard = min(standard, max(naturlig, 1.0))
+    except Exception:
+        pass   # klarer vi ikke å lese bildeinfo, bruk standard dpi
+    return fitz.Matrix(standard, standard)
+
+
 def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     """Renderer PDF-sider til bilder (200 dpi) og OCR-er dem med
     regionbasert modellruting (delt/region_ocr): EasyOCR leser alt,
@@ -225,7 +262,7 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     for i, side in enumerate(doc):
         if i >= maks_sider:
             break
-        pix = side.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72))
+        pix = side.get_pixmap(matrix=ocr_skala(doc, side))
         bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
         if pix.n == 4:      # RGBA → RGB
             bilde = bilde[:, :, :3]
@@ -268,7 +305,9 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = 5):
         for i, side in enumerate(doc):
             if i >= maks_sider:
                 break
-            pix = side.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72))
+            # R51: samme oppskaleringsfelle som i OCR — strekkoder blir
+            # ikke lettere å lese av å blåse opp bildet, bare tregere
+            pix = side.get_pixmap(matrix=ocr_skala(doc, side))
             bilde = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             for kode in decode(bilde):
                 koder.append({
@@ -464,7 +503,14 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
 
 BOREALIS_STI = os.path.join(ROT, "modeller", "borealis")
 BOREALIS_GGUF_MAPPE = os.path.join(ROT, "modeller", "borealis-gguf")
-BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "12288"))
+# R51: kontekstvinduet bestemmer hvor stor KV-hurtigbuffer llama.cpp
+# reserverer på GPU-en — og den reservasjonen er permanent, ikke etter
+# behov. Målt: 12288 la beslag på ~2,5 GiB og etterlot 746 MiB ledig på
+# et 8 GB-kort, som gjorde at OCR ikke fikk plass og falt til CPU (17 s
+# per side). 8192 frigjør ~1 GiB uten å koste noe: dokumentteksten som
+# faktisk sendes inn er uansett kappet på MAKS_LLM_TEGN (12000 tegn ≈
+# 4000 tokens), så budsjettet er mer enn dobbelt så stort som behovet.
+BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "8192"))
 
 
 def _finn_gguf() -> str:
@@ -490,6 +536,17 @@ BOREALIS_GGUF_STI = _finn_gguf()
 _borealis = {"status": "ikke_startet", "motor": "", "modellfil": "",
              "llama": None, "tok": None, "model": None, "feil": None}
 _borealis_las = threading.Lock()   # GPU-en tar én generering om gangen
+
+# R51: OCR-motorene og språkmodellen deler ett fysisk kort. Kjører de
+# samtidig, konkurrerer de om VRAM og BEGGE blir tregere (målt: modellen
+# alene 3,3 s → 18,5 s parallelt med OCR). Denne låsen eies av
+# delt.region_ocr og tas her rundt generering, slik at GPU-arbeid
+# serialiseres på tvers av de to. Ligger OCR på CPU, tar OCR-siden den
+# aldri — og da kan modellen svare parallelt uten å vente.
+try:
+    from delt.region_ocr import GPU_LAS as _gpu_las
+except Exception:                      # region_ocr utilgjengelig
+    _gpu_las = threading.RLock()
 
 
 def _last_borealis_bakgrunn():
@@ -603,7 +660,7 @@ def _borealis_generer(prompt: str, maks_tokens: int = 256) -> tuple:
     if _borealis["motor"].startswith("llama_cpp"):
         llm = _borealis["llama"]
         prompt = _tilpass_kontekst(llm, prompt, maks_tokens)
-        with _borealis_las:
+        with _borealis_las, _gpu_las:
             ut = llm.create_chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=maks_tokens, temperature=0.0)
@@ -617,7 +674,7 @@ def _borealis_generer(prompt: str, maks_tokens: int = 256) -> tuple:
         meldinger, add_generation_prompt=True,
         return_tensors="pt", return_dict=True,
     ).to("cuda:0")
-    with _borealis_las, torch.no_grad():
+    with _borealis_las, _gpu_las, torch.no_grad():
         ut = model.generate(
             **inn, max_new_tokens=maks_tokens, do_sample=False,
             pad_token_id=tok.eos_token_id,
@@ -1039,7 +1096,7 @@ def _jobb_arbeider() -> None:
                 if jobb.get("avbrutt"):
                     jobb["status"] = "avbrutt"
                     break
-                pix = side.get_pixmap(matrix=fitz.Matrix(200 / 72, 200 / 72))
+                pix = side.get_pixmap(matrix=ocr_skala(doc, side))
                 bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                     pix.height, pix.width, pix.n)
                 if pix.n == 4:
@@ -1295,6 +1352,10 @@ class Handler(BaseHTTPRequestHandler):
                 "borealis": _borealis["status"],
                 "borealis_motor": _borealis["motor"],
                 "borealis_modell": _borealis["modellfil"],
+                # R51: hvilken enhet OCR faktisk endte på. En stille
+                # CPU-fallback (fullt kort) er 20× tregere — den skal
+                # være synlig her, ikke noe man må måle seg fram til.
+                "ocr": _ocr_status(),
                 "klient_eksempel": ("Enhver HTTP-klient (GUI, UiPath, curl, egne skript): "
                                     "POST med filen som multipart-felt 'fil'"),
             })

@@ -13,7 +13,8 @@ Flyt per side:
        overlapp (median-høyde-basert), topp→bunn, venstre→høyre.
        Flettealgoritmen (flett_regioner) er ren funksjon — testbar alene.
 
-Modellene lastes én gang (lat), GPU med CPU-fallback ved fullt minne.
+Modellene lastes én gang (lat), GPU med CPU-fallback ved for lite ledig
+minne (R51 — se MINSTE_LEDIG_GPU under).
 Trådsikker: én lås rundt motorkallene (GPU-en tar én jobb om gangen).
 """
 import os
@@ -25,9 +26,67 @@ NORHAND_STI = os.path.join(ROT, "modeller", "norhand")
 # Under denne EasyOCR-konfidensen prøves norhand i tillegg på regionen
 TERSKEL_TRYKT = 0.60
 
+# R51: EasyOCR trenger ledig VRAM til arbeidsbuffere PER SIDE, ikke bare
+# til vektene. Er kortet nesten fullt (typisk: Borealis har lagt beslag
+# på det), lekker allokeringene over i Windows' delte minne og går over
+# PCIe — GPU-en viser 100 % bruk mens den i praksis står og venter.
+# Målt på RTX 3070 8 GB: 0,4 s med ledig minne mot 17 s uten.
+# CPU er da BEDRE enn en overfylt GPU, så vi velger CPU bevisst.
+#
+# Kravet er satt etter måling, ikke gjetning: EasyOCRs vekter tar ~310
+# MiB, og arbeidsbufferne skalerer med bildestørrelsen. Etter at den
+# unødige oppskaleringen ble fjernet (ocr_skala i dokument_api) er
+# sidebildene ~4× mindre, så 800 MiB gir god margin for en A4-side.
+MINSTE_LEDIG_GPU_MB = int(os.environ.get("OCR_MINSTE_LEDIG_GPU_MB", "800"))
+
 _las = threading.Lock()
+
+# Delt GPU-lås: OCR og språkmodellen ligger på SAMME kort. Kjører de
+# samtidig, konkurrerer de om minnet og begge blir tregere (målt: modell
+# alene 3,3 s → 18,5 s samtidig med OCR). Denne låsen slippes bare rundt
+# faktisk GPU-arbeid, så OCR på CPU aldri blokkerer modellen.
+GPU_LAS = threading.RLock()
+
 _easyocr = {"leser": None, "gpu": False}
 _norhand = {"prosessor": None, "modell": None, "enhet": None}
+
+
+def ledig_gpu_mb() -> float:
+    """Ledig VRAM i MiB — 0.0 når det ikke finnes CUDA-kort."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return 0.0
+        return torch.cuda.mem_get_info()[0] / (1024 * 1024)
+    except Exception:
+        return 0.0
+
+
+def frigjor_gpu() -> None:
+    """Gir PyTorch sine ubrukte, hurtigbufrede blokker tilbake til
+    driveren. Frigjør IKKE modellvekter (verken EasyOCRs eller
+    llama.cpp sine) — de skal bli liggende, ellers må de lastes på nytt
+    for hver forespørsel. Kalles etter hver OCR-side."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def motorstatus() -> dict:
+    """Hvilken enhet hver motor faktisk endte på — eksponeres i
+    GET /hjelp så en stille CPU-fallback aldri går ubemerket hen."""
+    return {
+        "ocr_motor_valgt": OCR_MOTOR,
+        "ocr_motor_i_bruk": _valgt["motor"] or "ikke_valgt_enda",
+        "easyocr_enhet": ("ikke_lastet" if _easyocr["leser"] is None
+                          else ("gpu" if _easyocr["gpu"] else "cpu")),
+        "norhand_enhet": _norhand["enhet"] or "ikke_lastet",
+        "ledig_gpu_mb": round(ledig_gpu_mb()),
+        "krever_ledig_gpu_mb": MINSTE_LEDIG_GPU_MB,
+    }
 
 
 # ------------------------------------------------------------------ #
@@ -37,33 +96,76 @@ _norhand = {"prosessor": None, "modell": None, "enhet": None}
 def _hent_easyocr():
     if _easyocr["leser"] is None:
         import easyocr
-        try:
-            import torch
-            gpu = torch.cuda.is_available()
-        except Exception:
-            gpu = False
+        # R51: at et CUDA-kort FINNES er ikke nok — det må være plass på
+        # det. torch.cuda.is_available() sier bare det første, og en
+        # overfylt GPU er målt 20× tregere enn CPU (se toppen av filen).
+        ledig = ledig_gpu_mb()
+        gpu = ledig >= MINSTE_LEDIG_GPU_MB
+        if not gpu and ledig > 0:
+            print(f"  [OCR] Bare {ledig:.0f} MiB ledig VRAM (krever "
+                  f"{MINSTE_LEDIG_GPU_MB}) — EasyOCR kjører på CPU, som er "
+                  "raskere enn en overfylt GPU.")
         _easyocr.update(leser=easyocr.Reader(["no", "en"], gpu=gpu), gpu=gpu)
     return _easyocr["leser"]
 
 
 # Valgbar motor for trykt tekst (generelt motorlag):
-#   easy  (standard) — EasyOCR på GPU; raskest på denne maskinen (målt)
-#   rapid            — RapidOCR/PP-modeller på CPU; avlaster GPU-en
-OCR_MOTOR = os.environ.get("OCR_MOTOR", "easy").strip().lower()
+#   auto (standard) — velger etter hva maskinen faktisk har plass til:
+#                     ledig VRAM  → EasyOCR på GPU (best lesekvalitet)
+#                     fullt kort  → RapidOCR på CPU
+#   easy            — tving EasyOCR (GPU om det er plass, ellers CPU)
+#   rapid           — tving RapidOCR på CPU; avlaster GPU-en helt
+#
+# R51, målt på RTX 3070 8 GB med Borealis Q8_0 lastet (samme bilde):
+#   EasyOCR  GPU  0,5 s  |  EasyOCR  CPU  6–8 s  |  EasyOCR overfylt GPU  17 s
+#   RapidOCR CPU  1,1 s
+# Derfor: når kortet er fullt er RapidOCR på CPU ~7× raskere enn å tvinge
+# EasyOCR gjennom en CPU den ikke er bygget for — og den lar samtidig
+# språkmodellen beholde GPU-en for seg selv, så de to kan jobbe PARALLELT
+# i stedet for å vente på hverandre.
+OCR_MOTOR = os.environ.get("OCR_MOTOR", "auto").strip().lower()
 _rapid = {"motor": None}
+_valgt = {"motor": None}      # hva auto faktisk landet på
+
+
+def _hent_rapid():
+    if _rapid["motor"] is None:
+        from rapidocr_onnxruntime import RapidOCR
+        _rapid["motor"] = RapidOCR()
+    return _rapid["motor"]
+
+
+def _velg_motor_for_maskinen() -> str:
+    """Avgjør motor én gang, ut fra ledig VRAM her og nå."""
+    if _valgt["motor"] is not None:
+        return _valgt["motor"]
+    if OCR_MOTOR in ("easy", "rapid"):
+        _valgt["motor"] = OCR_MOTOR
+        return OCR_MOTOR
+    ledig = ledig_gpu_mb()
+    if ledig >= MINSTE_LEDIG_GPU_MB:
+        _valgt["motor"] = "easy"          # GPU har plass → beste kvalitet
+    else:
+        try:                              # fullt kort → rask CPU-motor
+            _hent_rapid()
+            _valgt["motor"] = "rapid"
+            print(f"  [OCR] Bare {ledig:.0f} MiB ledig VRAM — bruker "
+                  "RapidOCR på CPU (~1 s/side) i stedet for EasyOCR, og "
+                  "lar språkmodellen beholde GPU-en.")
+        except Exception as exc:
+            _valgt["motor"] = "easy"      # RapidOCR mangler → EasyOCR/CPU
+            print(f"  [OCR] RapidOCR utilgjengelig ({exc}) — EasyOCR på CPU.")
+    return _valgt["motor"]
 
 
 def _les_regioner(bilde_np) -> list:
     """Motoruavhengig regionlesing: liste av (punkter, tekst, konfidens)."""
-    if OCR_MOTOR == "rapid":
+    if _velg_motor_for_maskinen() == "rapid":
         try:
-            if _rapid["motor"] is None:
-                from rapidocr_onnxruntime import RapidOCR
-                _rapid["motor"] = RapidOCR()
-            resultat, _ = _rapid["motor"](bilde_np)
+            resultat, _ = _hent_rapid()(bilde_np)
             return [(r[0], r[1], float(r[2])) for r in (resultat or [])]
         except Exception:
-            pass   # RapidOCR utilgjengelig → EasyOCR
+            pass   # RapidOCR feilet på denne siden → fall tilbake til EasyOCR
     return _hent_easyocr().readtext(bilde_np, detail=1, paragraph=False)
 
 
@@ -77,7 +179,9 @@ def _hent_norhand():
         enhet = "cpu"
         try:
             import torch
-            if torch.cuda.is_available():
+            # R51: samme minnekrav som EasyOCR — et fullt kort gjør
+            # norhand tregere enn CPU, ikke raskere
+            if torch.cuda.is_available() and ledig_gpu_mb() >= MINSTE_LEDIG_GPU_MB:
                 modell = modell.half().to("cuda")
                 enhet = "cuda"
         except Exception:
@@ -245,46 +349,72 @@ def ocr_side(bilde_np) -> dict:
          "norhand_tekst": str|None, "norhand_konfidens": float|None}
     ]}"""
     with _las:
-        funn = _les_regioner(bilde_np)
+        # Motoren velges og lastes her (ikke inne i løkken) så vi VET om
+        # den havnet på GPU før vi bestemmer om GPU-låsen trengs.
+        if _velg_motor_for_maskinen() == "easy":
+            _hent_easyocr()
+        try:
+            if _paa_gpu():
+                # OCR og språkmodellen deler samme kort — la dem aldri
+                # kjøre samtidig, ellers konkurrerer de om minnet og
+                # begge blir tregere (målt: 3,3 s → 18,5 s).
+                with GPU_LAS:
+                    return _ocr_side_intern(bilde_np)
+            # OCR på CPU (R51-fallback): ingen GPU-lås, så språkmodellen
+            # kan svare parallelt på kortet uten å vente på OCR.
+            return _ocr_side_intern(bilde_np)
+        finally:
+            frigjor_gpu()
 
-        h, b = bilde_np.shape[0], bilde_np.shape[1]
-        regioner = []
-        for punkter, tekst, konf in funn:
-            xs = [p[0] for p in punkter]
-            ys = [p[1] for p in punkter]
-            x0, y0 = max(int(min(xs)) - 3, 0), max(int(min(ys)) - 3, 0)
-            x1, y1 = min(int(max(xs)) + 3, b), min(int(max(ys)) + 3, h)
 
-            region = {
-                "boks": [x0, y0, x1, y1],
-                "tekst": tekst.strip(),
-                "motor": "easyocr",
-                "konfidens": float(konf),
-                "easyocr_tekst": tekst.strip(),
-                "easyocr_konfidens": float(konf),
-                "norhand_tekst": None,
-                "norhand_konfidens": None,
-            }
+def _paa_gpu() -> bool:
+    """Bruker noen av OCR-motorene GPU-en akkurat nå?"""
+    return bool(_easyocr["gpu"]) or _norhand["enhet"] == "cuda"
 
-            # Lav konfidens → sannsynlig håndskrift/degradert → prøv norhand
-            if konf < TERSKEL_TRYKT and (x1 - x0) >= 8 and (y1 - y0) >= 8:
-                try:
-                    nh_tekst, nh_konf = _norhand_les(bilde_np[y0:y1, x0:x1])
-                    region["norhand_tekst"] = nh_tekst
-                    region["norhand_konfidens"] = round(nh_konf, 3)
-                    if velg_motor(tekst.strip(), float(konf), nh_tekst, nh_konf) == "norhand":
-                        region["tekst"] = nh_tekst
-                        region["motor"] = "norhand"
-                        region["konfidens"] = nh_konf
-                except Exception:
-                    pass   # norhand utilgjengelig → behold EasyOCR-lesningen
 
-            region["konfidens"] = round(float(region["konfidens"]), 3)
-            # Visuell klassifisering: håndskrift eller trykt — uavhengig
-            # av hvilken motor som leste regionen
-            region["skrift"] = _skriftslag(bilde_np[y0:y1, x0:x1], region["tekst"])
-            if region["motor"] == "norhand":
-                region["skrift"] = "handskrift"
-            regioner.append(region)
+def _ocr_side_intern(bilde_np) -> dict:
+    """Selve sidebehandlingen. Kalles alltid med _las holdt (og med
+    GPU_LAS i tillegg når motorene ligger på GPU)."""
+    funn = _les_regioner(bilde_np)
 
-        return {"tekst": flett_regioner(regioner), "regioner": regioner}
+    h, b = bilde_np.shape[0], bilde_np.shape[1]
+    regioner = []
+    for punkter, tekst, konf in funn:
+        xs = [p[0] for p in punkter]
+        ys = [p[1] for p in punkter]
+        x0, y0 = max(int(min(xs)) - 3, 0), max(int(min(ys)) - 3, 0)
+        x1, y1 = min(int(max(xs)) + 3, b), min(int(max(ys)) + 3, h)
+
+        region = {
+            "boks": [x0, y0, x1, y1],
+            "tekst": tekst.strip(),
+            "motor": "easyocr",
+            "konfidens": float(konf),
+            "easyocr_tekst": tekst.strip(),
+            "easyocr_konfidens": float(konf),
+            "norhand_tekst": None,
+            "norhand_konfidens": None,
+        }
+
+        # Lav konfidens → sannsynlig håndskrift/degradert → prøv norhand
+        if konf < TERSKEL_TRYKT and (x1 - x0) >= 8 and (y1 - y0) >= 8:
+            try:
+                nh_tekst, nh_konf = _norhand_les(bilde_np[y0:y1, x0:x1])
+                region["norhand_tekst"] = nh_tekst
+                region["norhand_konfidens"] = round(nh_konf, 3)
+                if velg_motor(tekst.strip(), float(konf), nh_tekst, nh_konf) == "norhand":
+                    region["tekst"] = nh_tekst
+                    region["motor"] = "norhand"
+                    region["konfidens"] = nh_konf
+            except Exception:
+                pass   # norhand utilgjengelig → behold EasyOCR-lesningen
+
+        region["konfidens"] = round(float(region["konfidens"]), 3)
+        # Visuell klassifisering: håndskrift eller trykt — uavhengig
+        # av hvilken motor som leste regionen
+        region["skrift"] = _skriftslag(bilde_np[y0:y1, x0:x1], region["tekst"])
+        if region["motor"] == "norhand":
+            region["skrift"] = "handskrift"
+        regioner.append(region)
+
+    return {"tekst": flett_regioner(regioner), "regioner": regioner}
