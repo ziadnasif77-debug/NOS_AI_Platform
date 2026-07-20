@@ -72,7 +72,7 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
 API_VERSJON = "1.1.0"
-PROMPT_VERSJON = "p9"
+PROMPT_VERSJON = "p10"
 # Maks lengde på generert svar. Taket er en RESSURSGRENSE, ikke en
 # stilregel: korte svar stopper naturlig ved EOS uansett. Treffer et
 # svar taket, flagges det ALLTID eksplisitt (svar_avkortet + advarsel).
@@ -1612,11 +1612,24 @@ class Handler(BaseHTTPRequestHandler):
         if not tom_foresporsel and _borealis["status"] != "klar":
             return self._svar(503, {"ok": False, "feil": f"Borealis er ikke tilgjengelig ({_borealis['status']}): {_borealis['feil']}", "borealis": _borealis["status"]})
 
-        # Rent spørsmål uten dokument → generelt modellsvar, ærlig merket
+        # Rent spørsmål uten dokument → generelt modellsvar, ærlig merket.
+        # R50: modellen skal svare direkte — små modeller ber ellers om
+        # «mer kontekst» på åpne oversiktsspørsmål i stedet for å svare.
         if rent_sporsmal:
             t0 = time.time()
             svar, avkortet = _borealis_generer(
-                "Svar kort, presist og på norsk:\n" + sporsmal,
+                # Domeneanker: «ytelser» alene tolkes ellers som ytelse/
+                # poeng (ytelse=performance) — NAV-konteksten fjerner
+                # flertydigheten for kortfattede spørsmål
+                "Du er en norsk assistent for NAV-domenet (arbeid, velferd "
+                "og ytelser). Du svarer på norsk, direkte og hjelpsomt.\n"
+                "- Svar med det beste du vet — be ALDRI om mer kontekst "
+                "eller presisering\n"
+                "- Ber spørsmålet om en liste eller oversikt, gi en konkret "
+                "punktliste\n"
+                "- Er du usikker, si det kort i svaret — men svar likevel så "
+                "godt du kan\n"
+                f"\nSpørsmål:\n{sporsmal}\n\nSvar:",
                 MAKS_SVAR_TOKENS)
             return self._svar(200, {
                 "ok": True, "sporsmal": sporsmal, "svar": svar,
