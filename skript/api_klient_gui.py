@@ -933,7 +933,12 @@ class DokumentKlientApp:
                                "manglende API-nøkkel. Fyll inn riktig X-API-Key i "
                                "feltet øverst.")
                 elif status == 503:
-                    melding = "Serveren laster fortsatt modellen (Borealis). Prøv igjen om ett minutt."
+                    # Serveren skiller mellom «språkmodellen laster» og
+                    # «OCR-motorene varmer opp», og de har svært ulik
+                    # ventetid. Vis dens egen forklaring når den finnes,
+                    # i stedet for én gjetning som passer på begge.
+                    melding = detalj or ("Serveren laster fortsatt modellen "
+                                         "(Borealis). Prøv igjen om ett minutt.")
                 elif status == 409 and detalj:
                     melding = f"Ikke klart ennå (409): {detalj}"
                 elif detalj:

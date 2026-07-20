@@ -356,6 +356,13 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = 5, sider=None):
 
 _analyse_cache = OrderedDict()
 _analyse_cache_las = threading.Lock()
+
+# R58: er OCR-oppvarmingen (R54) i gang, holder den motorlåsen mens den
+# laster modellene. En forespørsel som kom inn i det vinduet ble stående
+# og vente — målt 28,5 sekunder, uten at klienten fikk vite hvorfor.
+# Da er et ærlig «prøv igjen om litt» langt bedre enn en taus henging,
+# og det er samme mønster som Borealis alt bruker mens den laster.
+_oppvarming = {"pagaar": False}
 ANALYSE_CACHE_MAKS = int(os.environ.get("ANALYSE_CACHE_MAKS", "32"))
 
 
@@ -1701,6 +1708,17 @@ class Handler(BaseHTTPRequestHandler):
         les_strekkoder = tekstfelter.get(
             "strekkoder", "ja").strip().lower() not in ("nei", "0", "false", "av")
 
+        # R58: kom forespørselen mens OCR-motorene lastes, ville den blitt
+        # stående på motorlåsen i opptil et halvt minutt. Si fra med en
+        # gang i stedet — klienten kan prøve igjen straks etterpå.
+        if _oppvarming["pagaar"] and innhold is not None and slag == "pdf":
+            return self._svar(503, {
+                "ok": False,
+                "feil": ("OCR-motorene varmer opp etter oppstart — prøv igjen "
+                         "om cirka 15 sekunder"),
+                "ocr": "varmer_opp",
+            })
+
         if sti == "/jobb":
             jobb_id = uuid.uuid4().hex[:12]
             # Alle feltene arbeidstråden senere fyller, forhåndsdeklareres
@@ -2083,11 +2101,17 @@ def _varm_opp_ocr():
     OCR-motorene kunne legge beslag på minne språkmodellen trenger, og
     rekkefølgen på GPU-en ville avhenge av tilfeldig timing.
     """
-    for _ in range(120):                      # opptil ~2 min
-        if _borealis["status"] in ("klar", "feil"):
-            break
-        time.sleep(1)
+    # R58: flagget settes FØR ventingen, ikke etter. Settes det etterpå,
+    # finnes det et vindu på opptil ett sekund mellom at Borealis blir
+    # klar og at oppvarmingen tar motorlåsen — og en forespørsel som
+    # traff akkurat der ble stående i nesten et halvt minutt i stedet for
+    # å få beskjed om å prøve igjen.
+    _oppvarming["pagaar"] = True
     try:
+        for _ in range(60):                   # opptil ~1 min på Borealis
+            if _borealis["status"] in ("klar", "feil"):
+                break
+            time.sleep(1)
         import numpy as _np
 
         from delt.region_ocr import ocr_side
@@ -2101,6 +2125,8 @@ def _varm_opp_ocr():
         # Oppvarming er en optimalisering, aldri et krav: feiler den,
         # lastes modellene som før ved første forespørsel.
         print(f"  [OCR] Oppvarming hoppet over ({type(exc).__name__}: {exc})")
+    finally:
+        _oppvarming["pagaar"] = False
 
 
 def main():
