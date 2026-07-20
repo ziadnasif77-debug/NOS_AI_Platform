@@ -146,6 +146,10 @@ def _hent_easyocr():
 # språkmodellen beholde GPU-en for seg selv, så de to kan jobbe PARALLELT
 # i stedet for å vente på hverandre.
 OCR_MOTOR = os.environ.get("OCR_MOTOR", "auto").strip().lower()
+# Hvor mange tekstregioner EasyOCR gjenkjenner per GPU-kall. Standarden
+# i biblioteket er 1, som gir én rundtur per region — dyrt på sider med
+# mange linjer. 32 målt som god balanse mellom fart og minnebruk.
+OCR_BATCH = int(os.environ.get("OCR_BATCH", "32"))
 _rapid = {"motor": None}
 _valgt = {"motor": None}      # hva auto faktisk landet på
 
@@ -188,7 +192,12 @@ def _les_regioner(bilde_np) -> list:
             return [(r[0], r[1], float(r[2])) for r in (resultat or [])]
         except Exception:
             pass   # RapidOCR feilet på denne siden → fall tilbake til EasyOCR
-    return _hent_easyocr().readtext(bilde_np, detail=1, paragraph=False)
+    # R54: EasyOCR bruker batch_size=1 som standard, altså ett eget
+    # GPU-kall per tekstregion. På en lang kvittering med 127 regioner
+    # ble det 127 små kall. Målt på samme bilde: 2,19 s med standard mot
+    # 0,68 s med batch 32 — samme tekst ut, bare færre rundturer.
+    return _hent_easyocr().readtext(bilde_np, detail=1, paragraph=False,
+                                    batch_size=OCR_BATCH)
 
 
 def _hent_norhand():

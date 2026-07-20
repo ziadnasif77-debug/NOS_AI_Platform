@@ -1991,6 +1991,33 @@ class Handler(BaseHTTPRequestHandler):
         print(f"  [{self.command}] {self.path} → {args[1] if len(args) > 1 else ''}")
 
 
+def _varm_opp_ocr():
+    """Laster OCR-modellene på forhånd, i bakgrunnen.
+
+    Venter til Borealis har tatt sin plass på GPU-en først — ellers ville
+    OCR-motorene kunne legge beslag på minne språkmodellen trenger, og
+    rekkefølgen på GPU-en ville avhenge av tilfeldig timing.
+    """
+    for _ in range(120):                      # opptil ~2 min
+        if _borealis["status"] in ("klar", "feil"):
+            break
+        time.sleep(1)
+    try:
+        import numpy as _np
+
+        from delt.region_ocr import ocr_side
+        # Et bittelite hvitt bilde: laster og initialiserer motorene uten
+        # å gjøre noe reelt arbeid.
+        ocr_side(_np.full((64, 256, 3), 255, dtype=_np.uint8))
+        from delt.region_ocr import _hent_norhand
+        _hent_norhand()
+        print("  OCR-motorene er varme — første dokument slipper ventetiden.")
+    except Exception as exc:
+        # Oppvarming er en optimalisering, aldri et krav: feiler den,
+        # lastes modellene som før ved første forespørsel.
+        print(f"  [OCR] Oppvarming hoppet over ({type(exc).__name__}: {exc})")
+
+
 def main():
     try:
         server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
@@ -2008,6 +2035,13 @@ def main():
     # Jobbsystem: last ferdige jobber fra disk og start arbeidstråden
     _jobb_last_fra_disk()
     threading.Thread(target=_jobb_arbeider, daemon=True).start()
+
+    # R54: varm opp OCR-motorene i bakgrunnen. Uten dette betaler den
+    # FØRSTE brukerforespørselen for at modellene lastes — målt på en
+    # taxikvittering: 10,3 s første gang, 4,3 s deretter, der ~6 s var
+    # ren lasting av håndskriftmodellen. Den kostnaden hører hjemme i
+    # oppstarten, ikke i et tilfeldig brukerkall.
+    threading.Thread(target=_varm_opp_ocr, daemon=True).start()
 
     strek = "=" * 64
     print(strek)
