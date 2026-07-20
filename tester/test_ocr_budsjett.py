@@ -26,18 +26,19 @@ from delt import region_ocr
 
 @pytest.fixture
 def stubbet(monkeypatch):
-    """Bytter ut begge OCR-motorene med tellende stubber.
+    """Bytter ut håndskriftmodellen med en tellende stubb.
 
-    Returnerer en dict der 'norhand' teller hvor mange ganger
-    håndskriftmodellen ble kalt.
+    Returnerer en dict der 'norhand' teller hvor mange REGIONER som ble
+    sendt til modellen. Regionene leses porsjonsvis (R55), så antall
+    modellkall er ikke det interessante — antall regioner er.
     """
     teller = {"norhand": 0}
 
-    def falsk_norhand(_utsnitt):
-        teller["norhand"] += 1
-        return "handskrevet tekst", 0.90
+    def falsk_batch(utsnitt_liste):
+        teller["norhand"] += len(utsnitt_liste)
+        return [("handskrevet tekst", 0.90) for _ in utsnitt_liste]
 
-    monkeypatch.setattr(region_ocr, "_norhand_les", falsk_norhand)
+    monkeypatch.setattr(region_ocr, "_norhand_les_batch", falsk_batch)
     # Ingen ekte GPU-lås eller cache-tømming i testen
     monkeypatch.setattr(region_ocr, "frigjor_gpu", lambda: None)
     monkeypatch.setattr(region_ocr, "_paa_gpu", lambda: False)
@@ -121,20 +122,22 @@ def test_antallstaket_holder(stubbet, monkeypatch):
 
 
 def test_tidstaket_holder(monkeypatch):
-    """Er hvert kall tregt (som på CPU), skal tidsbudsjettet stoppe
-    videre kall — ellers skalerer svartiden med antall regioner."""
-    teller = {"n": 0}
+    """Er modellen treg (som på CPU), skal tidsbudsjettet stoppe videre
+    porsjoner — ellers skalerer svartiden med antall regioner."""
+    teller = {"regioner": 0, "porsjoner": 0}
     klokke = {"na": 0.0}
 
-    def treg_norhand(_utsnitt):
-        teller["n"] += 1
-        klokke["na"] += 3.7        # ett CPU-kall, målt
-        return "tekst", 0.90
+    def treg_batch(utsnitt_liste):
+        teller["porsjoner"] += 1
+        teller["regioner"] += len(utsnitt_liste)
+        klokke["na"] += 3.7 * len(utsnitt_liste)     # CPU-takt, målt
+        return [("tekst", 0.90) for _ in utsnitt_liste]
 
-    monkeypatch.setattr(region_ocr, "_norhand_les", treg_norhand)
+    monkeypatch.setattr(region_ocr, "_norhand_les_batch", treg_batch)
     monkeypatch.setattr(region_ocr, "frigjor_gpu", lambda: None)
     monkeypatch.setattr(region_ocr, "_paa_gpu", lambda: False)
     monkeypatch.setattr(region_ocr.time, "perf_counter", lambda: klokke["na"])
+    monkeypatch.setattr(region_ocr, "NORHAND_BATCH", 2)
     monkeypatch.setattr(region_ocr, "_les_regioner",
                         lambda _b: _regioner(30, konfidens=0.40))
     monkeypatch.setattr(region_ocr, "_skriftslag", lambda *_: "handskrift")
@@ -142,10 +145,11 @@ def test_tidstaket_holder(monkeypatch):
     bilde = np.full((1000, 500, 3), 255, dtype=np.uint8)
     region_ocr.ocr_side(bilde)
 
-    # Budsjettet sjekkes FØR hvert kall, så siste kall kan krysse grensen:
-    # det avgjørende er at det stopper, ikke at det treffer eksakt.
-    assert teller["n"] <= int(region_ocr.MAKS_NORHAND_SEKUNDER / 3.7) + 1
-    assert teller["n"] < 30
+    # Budsjettet sjekkes FØR hver porsjon, så den siste kan krysse
+    # grensen: det avgjørende er at det STOPPER, ikke at det treffer
+    # eksakt. Uten taket ville alle 12 kandidatene blitt lest.
+    assert teller["porsjoner"] == 1
+    assert teller["regioner"] < region_ocr.MAKS_NORHAND_PER_SIDE
 
 
 def test_oppgitt_easyocr_prover_norhand_uansett(stubbet, monkeypatch):

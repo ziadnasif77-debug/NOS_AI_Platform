@@ -43,6 +43,13 @@ TERSKEL_OPPGITT = 0.25
 # ikke har noe å bidra med (den er trent på håndskrift, ikke på støy).
 MAKS_NORHAND_PER_SIDE = int(os.environ.get("MAKS_NORHAND_PER_SIDE", "12"))
 MAKS_NORHAND_SEKUNDER = float(os.environ.get("MAKS_NORHAND_SEKUNDER", "4.0"))
+# Hvor mange regioner som leses i samme modellkall. Porsjonering gjør at
+# tidstaket fortsatt kan virke (det sjekkes mellom porsjonene), samtidig
+# som vi beholder gevinsten ved å slippe én rundtur per region.
+NORHAND_BATCH = int(os.environ.get("NORHAND_BATCH", "8"))
+# Én tekstlinje trenger aldri mange tokens. Taket beskytter mot at en
+# støyregion får modellen til å rable i vei.
+MAKS_NORHAND_TOKENS = int(os.environ.get("MAKS_NORHAND_TOKENS", "96"))
 
 # R51: EasyOCR trenger ledig VRAM til arbeidsbuffere PER SIDE, ikke bare
 # til vektene. Er kortet nesten fullt (typisk: Borealis har lagt beslag
@@ -225,43 +232,64 @@ def _hent_norhand():
     return _norhand["prosessor"], _norhand["modell"], _norhand["enhet"]
 
 
-def _norhand_les(bilde_np) -> tuple:
-    """Leser ett region-utsnitt med norhand. Returnerer (tekst, konfidens).
-    Konfidensen er geometrisk snitt av token-sannsynlighetene."""
+def _norhand_les_batch(utsnitt_liste: list) -> list:
+    """Leser FLERE regionutsnitt i ETT modellkall.
+
+    Returnerer [(tekst, konfidens), ...] i samme rekkefølge som inn.
+    Konfidensen er geometrisk snitt av token-sannsynlighetene, regnet
+    per sekvens og uten paddingen korte svar fylles opp med.
+
+    R55: modellen genererer tokens autoregressivt, så hvert kall er
+    latensbundet — kortet står og venter mellom hver bittelille kjerne.
+    Ett kall om gangen ga 26,7 % GPU-utnyttelse. Målt på ti regioner fra
+    en ekte kvittering: 2,64 s hver for seg mot 0,97 s samlet (2,7×).
+    """
     import numpy as np
     import torch
     from PIL import Image
 
+    if not utsnitt_liste:
+        return []
     prosessor, modell, enhet = _hent_norhand()
-    bilde = Image.fromarray(bilde_np).convert("RGB")
-    piksler = prosessor(images=bilde, return_tensors="pt").pixel_values
+    bilder = [Image.fromarray(u).convert("RGB") for u in utsnitt_liste]
+    piksler = prosessor(images=bilder, return_tensors="pt").pixel_values
     if enhet == "cuda":
         piksler = piksler.half().to("cuda")
     try:
         with torch.no_grad():
             ut = modell.generate(
-                piksler, max_new_tokens=96,
+                piksler, max_new_tokens=MAKS_NORHAND_TOKENS,
                 output_scores=True, return_dict_in_generate=True,
             )
     except torch.cuda.OutOfMemoryError:
         # GPU full (Borealis + EasyOCR) → flytt norhand til CPU og prøv igjen
         _norhand.update(modell=modell.float().to("cpu"), enhet="cpu")
-        return _norhand_les(bilde_np)
+        return _norhand_les_batch(utsnitt_liste)
 
-    sekvens = ut.sequences[0]
-    tekst = prosessor.batch_decode(ut.sequences, skip_special_tokens=True)[0].strip()
+    tekster = prosessor.batch_decode(ut.sequences, skip_special_tokens=True)
+    tok_er = getattr(prosessor, "tokenizer", None)
+    slutt = getattr(tok_er, "eos_token_id", None)
+    fyll = getattr(tok_er, "pad_token_id", slutt)
 
-    # Geometrisk snitt av sannsynligheten for hvert valgt token
-    sannsynligheter = []
-    gen_tokens = sekvens[1:]
-    for tok, score in zip(gen_tokens, ut.scores):
-        p = torch.softmax(score[0].float(), dim=-1)[tok].item()
-        sannsynligheter.append(max(p, 1e-9))
-    if sannsynligheter:
-        konf = float(np.exp(np.mean(np.log(sannsynligheter))))
-    else:
-        konf = 0.0
-    return tekst, konf
+    resultat = []
+    for i, tekst in enumerate(tekster):
+        sannsynligheter = []
+        for steg, score in enumerate(ut.scores):
+            tok = ut.sequences[i, steg + 1].item()
+            if tok in (slutt, fyll):
+                break        # resten er padding — skal ikke telle med
+            p = torch.softmax(score[i].float(), dim=-1)[tok].item()
+            sannsynligheter.append(max(p, 1e-9))
+        konf = (float(np.exp(np.mean(np.log(sannsynligheter))))
+                if sannsynligheter else 0.0)
+        resultat.append((tekst.strip(), konf))
+    return resultat
+
+
+def _norhand_les(bilde_np) -> tuple:
+    """Leser ett region-utsnitt. Tynt lag over batch-varianten — beholdt
+    fordi ett enkelt oppslag er lettere å lese og teste."""
+    return _norhand_les_batch([bilde_np])[0]
 
 
 # ------------------------------------------------------------------ #
@@ -413,10 +441,10 @@ def _ocr_side_intern(bilde_np) -> dict:
 
     h, b = bilde_np.shape[0], bilde_np.shape[1]
     regioner = []
-    # R52: hardt tak på hvor mange ganger håndskriftmodellen kan kalles
-    # for én side. Uten taket vokser tiden ubegrenset med antall usikre
+    # R52: hardt tak på hvor mange regioner håndskriftmodellen får se på
+    # én side. Uten taket vokser tiden ubegrenset med antall usikre
     # regioner — en dårlig skannet side kunne alene koste minutter.
-    budsjett = {"igjen": MAKS_NORHAND_PER_SIDE, "brukt_s": 0.0}
+    kandidater = []          # [(indeks i `regioner`, bildeutsnitt)]
     for punkter, tekst, konf in funn:
         xs = [p[0] for p in punkter]
         ys = [p[1] for p in punkter]
@@ -450,26 +478,47 @@ def _ocr_side_intern(bilde_np) -> dict:
         verdt_norhand = (region["skrift"] == "handskrift"
                          or konf < TERSKEL_OPPGITT)
         if (konf < TERSKEL_TRYKT and stor_nok and verdt_norhand
-                and budsjett["igjen"] > 0
-                and budsjett["brukt_s"] < MAKS_NORHAND_SEKUNDER):
-            budsjett["igjen"] -= 1
-            _t0 = time.perf_counter()
-            try:
-                nh_tekst, nh_konf = _norhand_les(utsnitt)
-                region["norhand_tekst"] = nh_tekst
-                region["norhand_konfidens"] = round(nh_konf, 3)
-                if velg_motor(tekst.strip(), float(konf), nh_tekst, nh_konf) == "norhand":
-                    region["tekst"] = nh_tekst
-                    region["motor"] = "norhand"
-                    region["konfidens"] = nh_konf
-                    # Ny tekst → klassifiseringen over gjaldt den gamle
-                    region["skrift"] = "handskrift"
-            except Exception:
-                pass   # norhand utilgjengelig → behold EasyOCR-lesningen
-            finally:
-                budsjett["brukt_s"] += time.perf_counter() - _t0
+                and len(kandidater) < MAKS_NORHAND_PER_SIDE):
+            # R55: samles opp og leses samlet etter løkka i stedet for ett
+            # kall per region — se _norhand_les_batch.
+            kandidater.append((len(regioner), utsnitt))
 
         region["konfidens"] = round(float(region["konfidens"]), 3)
         regioner.append(region)
 
+    _les_med_norhand(regioner, kandidater)
     return {"tekst": flett_regioner(regioner), "regioner": regioner}
+
+
+def _les_med_norhand(regioner: list, kandidater: list) -> None:
+    """Leser kandidatregionene med håndskriftmodellen og lar beste motor
+    vinne hver region. Muterer `regioner` på plass.
+
+    Kandidatene deles i porsjoner: da får tidstaket fortsatt virke (det
+    sjekkes mellom porsjonene), samtidig som vi beholder det meste av
+    gevinsten ved å lese flere regioner i samme modellkall.
+    """
+    brukt = 0.0
+    for start in range(0, len(kandidater), NORHAND_BATCH):
+        if brukt >= MAKS_NORHAND_SEKUNDER:
+            break              # budsjettet er brukt opp — resten står over
+        porsjon = kandidater[start:start + NORHAND_BATCH]
+        t0 = time.perf_counter()
+        try:
+            svar = _norhand_les_batch([u for _, u in porsjon])
+        except Exception:
+            return             # norhand utilgjengelig → behold EasyOCR
+        finally:
+            brukt += time.perf_counter() - t0
+
+        for (i, _), (nh_tekst, nh_konf) in zip(porsjon, svar):
+            region = regioner[i]
+            region["norhand_tekst"] = nh_tekst
+            region["norhand_konfidens"] = round(nh_konf, 3)
+            if velg_motor(region["easyocr_tekst"], region["easyocr_konfidens"],
+                          nh_tekst, nh_konf) == "norhand":
+                region["tekst"] = nh_tekst
+                region["motor"] = "norhand"
+                region["konfidens"] = round(float(nh_konf), 3)
+                # Ny tekst → den visuelle klassifiseringen gjaldt den gamle
+                region["skrift"] = "handskrift"

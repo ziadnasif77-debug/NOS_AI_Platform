@@ -264,6 +264,9 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     tekster = []
     motorer = {}
     handskrift = []
+    # R55: sidebildene tas vare på og returneres, så strekkodelesingen
+    # kan bruke de samme i stedet for å rendre hele dokumentet på nytt.
+    rendrede = []
     for i, side in enumerate(doc):
         if i >= maks_sider:
             break
@@ -271,6 +274,7 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
         bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
         if pix.n == 4:      # RGBA → RGB
             bilde = bilde[:, :, :3]
+        rendrede.append(bilde)
         resultat = ocr_side(bilde)
         tekster.append(resultat["tekst"])
         for r in resultat["regioner"]:
@@ -287,40 +291,56 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     return {"tekst": samlet, "motorer": motorer,
             "handskrift": handskrift,
             "sider_lest": min(sider_totalt, maks_sider),
-            "sider_totalt": sider_totalt}
+            "sider_totalt": sider_totalt,
+            # Understrek = internt felt, aldri med i et JSON-svar (samme
+            # konvensjon som jobb["_data"]). Dette er numpy-arrayer.
+            "_sidebilder": rendrede}
 
 
 # ------------------------------------------------------------------ #
 #  Strekkoder og QR-koder (pyzbar)                                    #
 # ------------------------------------------------------------------ #
 
-def les_strekkoder_bytes(data: bytes, maks_sider: int = 5):
+def les_strekkoder_bytes(data: bytes, maks_sider: int = 5, sider=None):
     """Dekoder strekkoder (Code128, EAN m.fl.) og QR-koder fra
     PDF-sidene. Returnerer liste av {type, verdi, side} — tom liste
-    hvis ingen finnes eller pyzbar mangler."""
+    hvis ingen finnes eller pyzbar mangler.
+
+    R55: `sider` er ferdig rendrede sidebilder (numpy RGB). Kjører OCR
+    på det samme dokumentet, har sidene allerede blitt rendret én gang,
+    og å rendre dem om igjen her var rent dobbeltarbeid (målt 0,19 s på
+    en A4-side). Uten `sider` rendres de som før — det er tilfellet når
+    dokumentet har tekstlag og OCR aldri kjøres.
+    """
     try:
-        import fitz
         from PIL import Image
         from pyzbar.pyzbar import decode
     except ImportError:
         return []
     koder = []
     try:
-        doc = fitz.open(stream=data, filetype="pdf")
-        for i, side in enumerate(doc):
-            if i >= maks_sider:
-                break
-            # R51: samme oppskaleringsfelle som i OCR — strekkoder blir
-            # ikke lettere å lese av å blåse opp bildet, bare tregere
-            pix = side.get_pixmap(matrix=ocr_skala(doc, side))
-            bilde = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        if sider is not None:
+            bilder = [Image.fromarray(s) for s in sider[:maks_sider]]
+        else:
+            import fitz
+            doc = fitz.open(stream=data, filetype="pdf")
+            bilder = []
+            for i, side in enumerate(doc):
+                if i >= maks_sider:
+                    break
+                # R51: samme oppskaleringsfelle som i OCR — strekkoder
+                # blir ikke lettere å lese av å blåse opp bildet
+                pix = side.get_pixmap(matrix=ocr_skala(doc, side))
+                bilder.append(
+                    Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+            doc.close()
+        for i, bilde in enumerate(bilder):
             for kode in decode(bilde):
                 koder.append({
                     "type": kode.type,
                     "verdi": kode.data.decode("utf-8", "replace"),
                     "side": i + 1,
                 })
-        doc.close()
     except Exception:
         pass
     return koder
@@ -337,14 +357,19 @@ _analyse_cache_las = threading.Lock()
 ANALYSE_CACHE_MAKS = int(os.environ.get("ANALYSE_CACHE_MAKS", "32"))
 
 
-def analyser_med_cache(filnavn: str, data: bytes, ocr_maks_sider=None) -> dict:
-    nokkel = hashlib.sha256(data).hexdigest() + f":{ocr_maks_sider}"
+def analyser_med_cache(filnavn: str, data: bytes, ocr_maks_sider=None,
+                       les_strekkoder: bool = True) -> dict:
+    # R55: strekkodevalget er DEL AV nøkkelen. Ellers ville en
+    # forespørsel som hoppet over strekkoder kunne servere sitt tomme
+    # resultat videre til en som faktisk ba om dem.
+    nokkel = (hashlib.sha256(data).hexdigest()
+              + f":{ocr_maks_sider}:{int(les_strekkoder)}")
     with _analyse_cache_las:
         if nokkel in _analyse_cache:
             _analyse_cache.move_to_end(nokkel)
             return {**_analyse_cache[nokkel],
                     "filnavn": filnavn, "fra_cache": True}
-    resultat = analyser_bytes(filnavn, data, ocr_maks_sider)
+    resultat = analyser_bytes(filnavn, data, ocr_maks_sider, les_strekkoder)
     if resultat.get("ok"):
         with _analyse_cache_las:
             _analyse_cache[nokkel] = resultat
@@ -383,8 +408,14 @@ def _pdf_metadata_datoer(meta: dict) -> list:
 #  Analyse                                                            #
 # ------------------------------------------------------------------ #
 
-def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dict:
-    """Analyserer PDF-bytes (normaliser_fil har alt konvertert bilder)."""
+def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
+                   les_strekkoder: bool = True) -> dict:
+    """Analyserer PDF-bytes (normaliser_fil har alt konvertert bilder).
+
+    les_strekkoder=False hopper over strekkode-/QR-skanningen. Den koster
+    ~0,2 s per side og er bortkastet på dokumenter som ikke har koder;
+    styres per forespørsel med multipart-feltet strekkoder=nei.
+    """
     if not data:
         return {"ok": False, "feil": "Tom fil"}
     try:
@@ -420,14 +451,23 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None) -> dic
             if k not in felter and v not in (None, ""):
                 felter[k] = v
 
-    strekkoder = les_strekkoder_bytes(data)
-
-    # Skannet bilde uten tekstlag → kjør OCR automatisk
+    # Skannet bilde uten tekstlag → kjør OCR automatisk.
+    # R55: OCR kjøres FØR strekkodelesingen, slik at den kan gjenbruke
+    # sidebildene OCR allerede har rendret. Før dette rendret de to
+    # stegene hver sin kopi av de samme sidene (målt 0,19 s per A4-side
+    # i ren dobbeltjobb).
+    ocr_res = None
     if total_tekst < 20:
         try:
             ocr_res = ocr_pdf_bytes(data, ocr_maks_sider)
         except Exception as exc:
             return {"ok": False, "feil": f"OCR feilet: {exc}"}
+
+    strekkoder = les_strekkoder_bytes(
+        data, sider=ocr_res["_sidebilder"] if ocr_res else None
+    ) if les_strekkoder else []
+
+    if ocr_res is not None:
         ocr_tekst = ocr_res["tekst"]
         ocr_advarsel = None
         if ocr_res["sider_lest"] < ocr_res["sider_totalt"]:
@@ -1439,7 +1479,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._svar(404, {"ok": False, "feil": "Se GET /hjelp for endepunkter"})
 
     def _fyll_skjema_flyt(self, filnavn, slag, innhold, maks_ocr, mal,
-                          via_spor=False):
+                          via_spor=False, les_strekkoder=True):
         """Fyller brukerens egen JSON-mal fra dokumentet: modellen
         fyller, KODEN validerer (rens_skjemasvar). Modellen grunnes med
         deterministisk funnede beløp MED kontekst — så verdier havner i
@@ -1453,7 +1493,7 @@ class Handler(BaseHTTPRequestHandler):
         if slag == "tekst":
             dok = innhold
         else:
-            a = analyser_med_cache(filnavn, innhold, maks_ocr)
+            a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
             if not a.get("ok"):
                 return self._svar(400, a)
             dok = a.get("tekst", "")
@@ -1618,6 +1658,13 @@ class Handler(BaseHTTPRequestHandler):
             _onsket_sider = 0
         maks_ocr = min(_onsket_sider, OCR_TAK_SIDER) if _onsket_sider > 0 else None
 
+        # R55: strekkodeskanning kan slås av per forespørsel
+        # (strekkoder=nei). Den koster ~0,2 s per side, og de fleste
+        # NAV-dokumenter har ingen koder å finne. Standard er PÅ, så
+        # ingen eksisterende klient mister noe uten å be om det.
+        les_strekkoder = tekstfelter.get(
+            "strekkoder", "ja").strip().lower() not in ("nei", "0", "false", "av")
+
         if sti == "/jobb":
             jobb_id = uuid.uuid4().hex[:12]
             # Alle feltene arbeidstråden senere fyller, forhåndsdeklareres
@@ -1657,7 +1704,7 @@ class Handler(BaseHTTPRequestHandler):
                      "datoer_detaljert": None, "strekkoder": [],
                      "handskrift": [], "advarsel": None}
             else:
-                a = analyser_med_cache(filnavn, innhold, maks_ocr)
+                a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
                 if not a.get("ok"):
                     return self._svar(400, a)
             s = strukturert_uttrekk(a.get("tekst", ""))
@@ -1707,7 +1754,7 @@ class Handler(BaseHTTPRequestHandler):
                     "strekkoder": [],
                     "tekst": tekst, "antall_tegn": len(tekst),
                 })
-            resultat = analyser_med_cache(filnavn, innhold, maks_ocr)
+            resultat = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
             return self._svar(200 if resultat.get("ok") else 400, resultat)
 
         if sti == "/fyll_skjema":
@@ -1718,7 +1765,8 @@ class Handler(BaseHTTPRequestHandler):
                 mal = json.loads(skjema_raa)
             except json.JSONDecodeError as exc:
                 return self._svar(400, {"ok": False, "feil": f"Ugyldig JSON i 'skjema': {exc}"})
-            return self._fyll_skjema_flyt(filnavn, slag, innhold, maks_ocr, mal)
+            return self._fyll_skjema_flyt(filnavn, slag, innhold, maks_ocr, mal,
+                                          les_strekkoder=les_strekkoder)
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
         # R47: fil UTEN spørsmål = hele den utleste teksten, ordrett og
@@ -1734,7 +1782,8 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(mal_kandidat, dict) and mal_kandidat:
                 return self._fyll_skjema_flyt(filnavn, slag, innhold,
                                               maks_ocr, mal_kandidat,
-                                              via_spor=True)
+                                              via_spor=True,
+                                              les_strekkoder=les_strekkoder)
         if not tom_foresporsel and _borealis["status"] == "laster":
             return self._svar(503, {"ok": False, "feil": "Borealis laster fortsatt — prøv igjen om ett minutt", "borealis": "laster"})
         if not tom_foresporsel and _borealis["status"] != "klar":
@@ -1805,7 +1854,7 @@ class Handler(BaseHTTPRequestHandler):
             # Hele analysen (tekstlag/OCR/strekkoder) går gjennom cachen:
             # samme fil OCR-es aldri to ganger, og /spor deler nøyaktig
             # samme ekstraksjonslogikk som /analyser og /uttrekk
-            a = analyser_med_cache(filnavn, innhold, maks_ocr)
+            a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
             if not a.get("ok"):
                 return self._svar(400, a)
             tekst = a.get("tekst", "")
