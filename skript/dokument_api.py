@@ -42,16 +42,21 @@ import uuid
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-if hasattr(sys.stdout, "buffer"):
+# Norske tegn (æøå) på et Windows-konsoll krever UTF-8 på stdout.
+# R53: gjøres BARE når fila kjøres som program. Å bytte ut global stdout
+# ved import er en bivirkning som rammer alle som importerer modulen —
+# blant annet testene, der pytests egen fangst da får en lukket buffer.
+if __name__ == "__main__" and hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 
-from delt.tekstuttrekk import (er_gyldig_orgnr, finn_adresser,
+from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_belop, finn_alle_datoer,
                                finn_alle_eposter, finn_alle_fodselsnummer,
-                               finn_alle_telefoner, finn_koder_med_kontekst,
+                               finn_alle_telefoner, finn_dato,
+                               finn_koder_med_kontekst,
                                klassifiser_datoer, strukturert_uttrekk,
                                utvid_entiteter)
 
@@ -775,7 +780,24 @@ def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
     return svar, avkortet
 
 
-def uverifiserte_tall(svar: str, kilde: str) -> list:
+def dato_tokens(kilde: str) -> set:
+    """Kompaktformen av hver dato den deterministiske parseren finner i
+    kilden.
+
+    R53: tallvakten krever EKSAKT token-treff (med vilje — «1777» skal
+    ikke slippe gjennom som delstreng av «11777»). En normalisert dato
+    er derimot ikke et nytt tall: «12.06.2026» er den samme datoen som
+    «12 06 2026» i dokumentet, bare skrevet på standardform. Uten dette
+    ble en korrekt lest dato avvist som «tall som ikke står i
+    dokumentet» — to sikkerhetsmekanismer som slo hverandre i hjel.
+    """
+    try:
+        return {re.sub(r"[ ., \xa0]", "", d) for d in finn_alle_datoer(kilde)}
+    except Exception:
+        return set()
+
+
+def uverifiserte_tall(svar: str, kilde: str, ekstra_tokens: set = None) -> list:
     """Tallvakt: finner tall i svaret som IKKE står ordrett i kilden.
 
     Modellen har regler mot å regne selv, men språkmodeller kan likevel
@@ -791,6 +813,8 @@ def uverifiserte_tall(svar: str, kilde: str) -> list:
     monster = r"\d[\d . ]*\d(?:,\d+)?|\d(?:,\d+)?"
     rens = lambda t: re.sub(r"[ ., ]", "", t)
     kilde_tokens = {rens(t) for t in re.findall(monster, kilde)}
+    if ekstra_tokens:
+        kilde_tokens |= ekstra_tokens
     mangler = []
     for tall in re.findall(monster, svar):
         kompakt = rens(tall)
@@ -854,6 +878,9 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
         organisasjonsnummer må bestå mod11; telefon må ha 8 sifre
     Returnerer (renset_skjema, liste_med_avvik)."""
     avvik = []
+    # Beregnes én gang for hele skjemaet, ikke per felt — parsingen går
+    # over hele dokumentteksten og ville ellers kjørt for hvert felt.
+    kjente_datoer = dato_tokens(dok_tekst)
 
     def _rekurs(m, s, sti):
         if isinstance(m, dict):
@@ -868,7 +895,7 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
         verdi = "" if s is None or isinstance(s, (dict, list)) else str(s).strip()
         if not verdi:
             return ""
-        mangler = uverifiserte_tall(verdi, dok_tekst)
+        mangler = uverifiserte_tall(verdi, dok_tekst, kjente_datoer)
         if mangler:
             avvik.append(f"{sti}: «{verdi}» inneholder tall som ikke står "
                          "i dokumentet — feltet er tømt")
@@ -900,6 +927,32 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
                 avvik.append(f"{sti}: «{verdi}» er ikke et gyldig norsk "
                              "telefonnummer — feltet er tømt")
                 return ""
+        # R53: fødselsnummer var IKKE validert, selv om orgnr og telefon
+        # var det og er_gyldig_fnr fantes i delt/tekstuttrekk. På en
+        # taxikvittering havnet løyvenummeret «N02272» i fnr-feltet og
+        # kom uimotsagt gjennom — i et NAV-system er nettopp fnr det
+        # feltet som minst av alt skal kunne fylles med noe tilfeldig.
+        if re.search(r"f[øo]dselsnummer|fnr\b|personnummer", navn):
+            sifre = re.sub(r"\D", "", verdi)
+            if not er_gyldig_fnr(sifre):
+                avvik.append(f"{sti}: «{verdi}» er ikke et gyldig norsk "
+                             "fødselsnummer (11 sifre med mod11-kontroll) "
+                             "— feltet er tømt")
+                return ""
+            verdi = sifre
+        # R53: datofelter var heller ikke validert. Feilleste datoer som
+        # «1970 12 06 2026» (OCR leste «DATO» som «1970») ble stående som
+        # om de var en dato.
+        if re.search(r"\bdato\b|dato$|_dato|dato_", navn):
+            normalisert = finn_dato(verdi)
+            if normalisert is None:
+                avvik.append(f"{sti}: «{verdi}» er ikke en gjenkjennelig "
+                             "dato — feltet er tømt")
+                return ""
+            if normalisert != verdi:
+                avvik.append(f"{sti}: «{verdi}» ble normalisert til "
+                             f"«{normalisert}»")
+            verdi = normalisert
         return verdi
 
     renset = _rekurs(mal, svar, "")
@@ -1421,6 +1474,20 @@ class Handler(BaseHTTPRequestHandler):
                           "— plasser hver kode i feltet konteksten tilsier:\n"
                           + "\n".join(f"- {k['verdi']}: «{k['kontekst']}»"
                                       for k in koder_liste) + "\n")
+        # R53: datoene manglet i grunnlaget, selv om beløp og koder var
+        # med. På en kvittering der OCR hadde forvansket datolinjen fant
+        # modellen ingen brukbar dato og fylte feltet med søppel, mens
+        # den deterministiske parseren hadde lest «12.06.2026» riktig
+        # hele tiden. Nå får modellen de faktiske datoene å velge blant.
+        dato_liste = klassifiser_datoer(dok, maks=15)
+        if dato_liste:
+            belop_del += ("\nDatoer funnet i dokumentet (normalisert til "
+                          "dd.mm.åååå, med hva hver av dem er) — bruk en av "
+                          "disse ORDRETT i datofelter:\n"
+                          + "\n".join(
+                              f"- {d['dato']} ({d.get('etikett') or d['type']}):"
+                              f" «{d.get('kontekst', '')}»"
+                              for d in dato_liste) + "\n")
 
         prompt = (
             "Fyll ut JSON-malen nederst KUN med opplysninger som står "

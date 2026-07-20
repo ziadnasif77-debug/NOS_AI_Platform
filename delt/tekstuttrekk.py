@@ -396,10 +396,22 @@ def finn_postnummer_sted(tekst: str):
     return None, None
 
 
+# R53: tusenskille er ALLTID grupper på nøyaktig tre sifre («46 300»,
+# «1 234 567»). Mønsteret tillot tidligere hvilken som helst blanding av
+# sifre, mellomrom og punktum, og slo dem sammen til ett tall. På en
+# kvittering der OCR hadde mistet desimalkommaet ble «NOK 463 00»
+# (altså 463,00) lest som 46300 — hundre ganger for mye, i et felt som
+# skal tåle å bli lest av et saksbehandlingssystem.
+#
+# Med kravet om tregrupper stopper mønsteret etter «463», som er riktig
+# krone-verdi, i stedet for å sluke de to ørene som om de var tusener.
+_BELOP_TALL = r"\d+(?:[ .]\d{3})*(?:,\d{2}|,-)?"
+
+
 def finn_belop(tekst: str):
     """Kronebeløp: «kr 12 345,50», «NOK 5000», «12.345,-»."""
     treff = re.search(
-        r"(?:kr\.?|NOK)\s?([\d][\d .]*(?:,\d{2}|,-)?)|"
+        r"(?:kr\.?|NOK)\s?(" + _BELOP_TALL + r")|"
         r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))",
         tekst, re.IGNORECASE,
     )
@@ -580,7 +592,7 @@ def finn_alle_belop(tekst: str, maks: int = 100) -> list:
     """Alle kronebeløp med kontekst — verdier som tall (float)."""
     ut = []
     for treff in re.finditer(
-        r"(?:kr\.?|NOK)\s?([\d][\d .]*(?:,\d{2}|,-)?)|"
+        r"(?:kr\.?|NOK)\s?(" + _BELOP_TALL + r")|"
         r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))|"
         r"\b(\d{1,6},\d{2})\b",
         tekst, re.IGNORECASE,
