@@ -1,0 +1,22 @@
+{
+  "fil": "taxikvittering.pdf",
+  "beskrivelse": "Fotografert taxikvittering (MU TAXI), matriseskrift på termopapir, 1147x4712 px, ingen tekstlag. Den vanskeligste dokumenttypen vi har: lav kontrast, sammensmeltede sifre, ekstremt høyt format.",
+  "fasit_lest_av": "menneske, fra originalbildet 2026-07-20",
+
+  "felter": {
+    "kontakt.telefoner": ["97335868"],
+    "belop.0.verdi": 463.0,
+    "belop.1.verdi": 23.0,
+    "datoer.0": "12.06.2026"
+  },
+
+  "tekst_maa_inneholde": ["TAX", "TOTAL", "486", "97335868", "12"],
+
+  "kjent_svakhet": {
+    "identifikatorer.organisasjonsnummer": "Kvitteringen har ORG.NR NO994230964MVA, men OCR leser det som «NU9H423096AMVA» — sjekksummen kan derfor ikke bekreftes og nummeret utelates (riktig oppførsel, dårlig lesing).",
+    "datoer": "Listen inneholder også 23.06.2026, som ikke står i dokumentet — den oppstår når «23» fra beløpslinja kombineres med et årstall. Feilkilde å rydde opp i.",
+    "totalbelop": "TOTAL NOK 486,00 fanges i teksten, men belop-lista starter på PRIS (463). Det finnes ingen regel som utpeker HVILKET beløp som er totalen."
+  },
+
+  "maks_sekunder": 8
+}

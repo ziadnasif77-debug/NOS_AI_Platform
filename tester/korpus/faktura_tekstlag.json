@@ -1,0 +1,26 @@
+{
+  "fil": "faktura_tekstlag.pdf",
+  "beskrivelse": "Ordrebekreftelse fra Elkjøp med ekte tekstlag — ingen OCR skal kjøres. Kontrollerer den raske veien: at tekstlag oppdages, og at beløp med tusenskille og moms leses riktig.",
+  "fasit_lest_av": "menneske, fra dokumentets tekstlag",
+  "merknad_personvern": "Dokumentet inneholder navn, adresse, e-post og telefon. Fasiten sjekker med vilje BARE forretningsdata, så ingen personopplysninger havner i git.",
+
+  "felter": {
+    "dokument.kilde": "deterministisk_tekstlag",
+    "identifikatorer.organisasjonsnummer": ["912360113"],
+    "datoer.0": "15.02.2025"
+  },
+
+  "tekst_maa_inneholde": [
+    "Ordrebekreftelse",
+    "2254711543",
+    "8888.00",
+    "NOK 8.888,00",
+    "1777.60"
+  ],
+
+  "kjent_svakhet": {
+    "belop": "Første beløp i lista er 56,33 (en kampanjepris inne i produktbeskrivelsen), ikke ordrens totalsum 8888,00. Rekkefølgen følger teksten, ikke betydningen."
+  },
+
+  "maks_sekunder": 2
+}

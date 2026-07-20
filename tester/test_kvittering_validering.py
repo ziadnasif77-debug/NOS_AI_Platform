@@ -42,6 +42,31 @@ def test_belop_krever_tregrupper(tekst, forventet):
     assert finn_belop(tekst) == forventet
 
 
+@pytest.mark.parametrize("tekst,forventet", [
+    # R60, funnet av regresjonskorpuset: OCR leser null som bokstaven O
+    # på håndskrift og matriseskrift. «kr 15 000» ble til 15 — tusen
+    # ganger for lite i et beløpsfelt.
+    ("Beløp jeg søker om: kr 15 OOO per måned", 15000.0),
+    ("NOK 1 OOO OOO", 1000000.0),
+    ("kr 2 5OO", 2500.0),
+    # Skal fortsatt virke som før
+    ("kr 15 000 per måned", 15000.0),
+    ("kr 12 345,50", 12345.50),
+])
+def test_o_leses_som_null_i_belop(tekst, forventet):
+    assert finn_belop(tekst) == forventet
+
+
+@pytest.mark.parametrize("tekst", [
+    "Reise til NOK OSLO by",
+    "kr OOO",
+])
+def test_bokstaver_alene_blir_ikke_belop(tekst):
+    """O godtas bare INNE i en tregruppe etter et tall — løpende tekst
+    skal aldri kunne bli til et kronebeløp."""
+    assert finn_belop(tekst) is None
+
+
 def test_alle_belop_paa_kvitteringstekst():
     """Hele kvitteringslinjene slik OCR faktisk leste dem: ingen av
     kronebeløpene skal blåses opp med en faktor hundre."""

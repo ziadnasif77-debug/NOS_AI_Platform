@@ -405,7 +405,24 @@ def finn_postnummer_sted(tekst: str):
 #
 # Med kravet om tregrupper stopper mønsteret etter «463», som er riktig
 # krone-verdi, i stedet for å sluke de to ørene som om de var tusener.
-_BELOP_TALL = r"\d+(?:[ .]\d{3})*(?:,\d{2}|,-)?"
+#
+# R60: tusengruppene godtar også bokstaven O. På håndskrift og
+# matriseskrift leser OCR jevnlig null som O — «kr 15 000 per måned» ble
+# «kr 15 OOO», og parseren stoppet på 15. TUSEN ganger for lite, i et
+# beløpsfelt. Funnet av regresjonskorpuset (skript/kjor_korpus.py).
+#
+# Hvorfor dette er trygt: O godtas BARE inne i en gruppe på nøyaktig tre
+# tegn som følger rett etter et tall og et skilletegn. «kr 15 OSLO»
+# treffer ikke (OSL er ikke tre O/sifre etterfulgt av gruppeslutt), og
+# løpende tekst kan ikke bli til et beløp. Gruppen normaliseres til
+# sifre før tallet tolkes.
+_BELOP_TALL = r"\d+(?:[ .][\dOo]{3})*(?:,\d{2}|,-)?"
+
+
+def _o_til_null(tall: str) -> str:
+    """Gjør OCR-ens bokstav-O om til sifferet 0 i et beløp som allerede
+    er gjenkjent som tall. Kalles aldri på fri tekst."""
+    return tall.replace("O", "0").replace("o", "0")
 
 
 def finn_belop(tekst: str):
@@ -417,7 +434,7 @@ def finn_belop(tekst: str):
     )
     if not treff:
         return None
-    raa = (treff.group(1) or treff.group(2)).strip()
+    raa = _o_til_null((treff.group(1) or treff.group(2)).strip())
     normalisert = raa.replace(" ", "").replace(".", "").replace(",-", "").replace(",", ".")
     try:
         return float(normalisert)
@@ -597,7 +614,8 @@ def finn_alle_belop(tekst: str, maks: int = 100) -> list:
         r"\b(\d{1,6},\d{2})\b",
         tekst, re.IGNORECASE,
     ):
-        raa = (treff.group(1) or treff.group(2) or treff.group(3)).strip()
+        raa = _o_til_null(
+            (treff.group(1) or treff.group(2) or treff.group(3)).strip())
         normalisert = (raa.replace(" ", "").replace(".", "")
                        .replace(",-", "").replace(",", "."))
         try:
