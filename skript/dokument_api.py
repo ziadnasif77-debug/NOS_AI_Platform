@@ -55,6 +55,8 @@ sys.path.insert(0, ROT)
 from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_belop, finn_alle_datoer,
                                finn_alle_eposter, finn_alle_fodselsnummer,
+                               finn_alle_kontonummer,
+                               finn_alle_organisasjonsnummer,
                                finn_alle_telefoner, finn_dato,
                                finn_koder_med_kontekst,
                                klassifiser_datoer, strukturert_uttrekk,
@@ -1541,6 +1543,27 @@ class Handler(BaseHTTPRequestHandler):
                               f"- {d['dato']} ({d.get('etikett') or d['type']}):"
                               f" «{d.get('kontekst', '')}»"
                               for d in dato_liste) + "\n")
+
+        # R57: identifikatorene manglet også. På en taxikvittering står
+        # både «TLF 07550» (kortnummer i toppteksten) og «TELEFON :
+        # 97335868»; modellen plukket det første, og kodevalideringen
+        # måtte tømme feltet. Den deterministiske parseren VET hvilket
+        # av tallene som er et gyldig norsk telefonnummer — den
+        # kunnskapen skal modellen få, ikke gjette seg til.
+        merket = []
+        for etikett, verdier in (
+            ("telefonnummer", finn_alle_telefoner(dok)),
+            ("organisasjonsnummer", finn_alle_organisasjonsnummer(dok)),
+            ("fødselsnummer", finn_alle_fodselsnummer(dok)),
+            ("kontonummer", finn_alle_kontonummer(dok)),
+            ("e-postadresse", finn_alle_eposter(dok)),
+        ):
+            for verdi in verdier[:5]:
+                merket.append(f"- {verdi} er et gyldig {etikett}")
+        if merket:
+            belop_del += ("\nIdentifikatorer som er KONTROLLERT av kode "
+                          "(sjekksum/format) — bruk disse i felter som ber om "
+                          "dem, og ingen andre tall:\n" + "\n".join(merket) + "\n")
 
         prompt = (
             "Fyll ut JSON-malen nederst KUN med opplysninger som står "
