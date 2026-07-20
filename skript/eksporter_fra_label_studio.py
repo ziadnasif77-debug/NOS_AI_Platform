@@ -15,6 +15,29 @@ from datetime import datetime
 LABEL_STUDIO_URL = os.environ.get("LABEL_STUDIO_URL", "http://localhost:8080")
 LABEL_STUDIO_API_KEY = os.environ.get("LABEL_STUDIO_API_KEY", "")
 FINJUSTERING_STI = os.environ.get("FINJUSTERING_STI", "./data/finjustering")
+# Bildene Label Studio viser ble kopiert hit av send_til_label_studio.py
+# (GJENNOMGANG_STI/bilder/<id>.png), og eksponert som URL-en
+# «/data/local-files/?d=bilder/<id>.png». Vi må oversette den URL-en
+# tilbake til den faktiske filstien, ellers får finjuster.py en URL den
+# ikke kan åpne → trente før på blanke bilder (R-fiks 2026-07-20).
+GJENNOMGANG_STI = os.environ.get("GJENNOMGANG_STI", "./data/gjennomgang")
+
+
+def _lokal_bildesti(bilde_url: str) -> str:
+    """Oversetter en Label Studio local-files-URL til en ekte filsti.
+    «/data/local-files/?d=bilder/x.png» → «<GJENNOMGANG_STI>/bilder/x.png».
+    Ukjente former returneres uendret (kan allerede være en filsti)."""
+    if not bilde_url:
+        return ""
+    if "?d=" in bilde_url:
+        rel = bilde_url.split("?d=", 1)[1].split("&", 1)[0]
+        try:
+            from urllib.parse import unquote
+            rel = unquote(rel)
+        except Exception:
+            pass
+        return str(Path(GJENNOMGANG_STI) / rel)
+    return bilde_url
 
 HEADERS = {
     "Authorization": f"Token {LABEL_STUDIO_API_KEY}",
@@ -72,7 +95,7 @@ def konverter_til_trocr_format(oppgave: dict) -> dict | None:
             korrekt_tekst = resultat.get("value", {}).get("text", [""])[0]
             bilde_url = oppgave.get("data", {}).get("bilde", "")
             return {
-                "fil_sti": bilde_url,
+                "fil_sti": _lokal_bildesti(bilde_url),
                 "tekst": korrekt_tekst,
                 "oppgave_id": oppgave.get("id"),
                 "annotert_av": annotering.get("completed_by"),

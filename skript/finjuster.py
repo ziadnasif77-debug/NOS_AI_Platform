@@ -33,10 +33,18 @@ class TrOCRDatasett(Dataset):
         oppf = self.oppforinger[idx]
         bilde_sti = oppf.get("fil_sti", "")
         tekst = oppf.get("tekst", "")
+        # R-fiks 2026-07-20: FEIL høylytt i stedet for å trene på et
+        # blankt hvitt bilde. Den gamle stille fallbacken gjorde at en
+        # ødelagt bildesti ga TrOCR-trening på tomme bilder — verre enn
+        # ingen trening, for den forgifter modellen uten et eneste spor.
         try:
             bilde = Image.open(bilde_sti).convert("RGB")
-        except Exception:
-            bilde = Image.new("RGB", (224, 224), color=255)
+        except Exception as feil:
+            raise RuntimeError(
+                f"Kan ikke åpne treningsbildet «{bilde_sti}» "
+                f"(oppføring {idx}): {feil}. Sjekk at eksporten oversatte "
+                "Label Studio-URL-en til en ekte filsti."
+            )
         piksel = self.prosessor(images=bilde, return_tensors="pt").pixel_values.squeeze(0)
         etiketter = self.prosessor.tokenizer(
             tekst, return_tensors="pt", padding="max_length",
@@ -62,6 +70,20 @@ def finjuster_norhand():
     if len(korreksjoner) < MIN_EKSEMPLER:
         print(f"For få korreksjoner ({len(korreksjoner)}) — minimum {MIN_EKSEMPLER} nødvendig.")
         return
+
+    # R-fiks 2026-07-20: sjekk at bildene FAKTISK finnes før vi starter
+    # en lang treningsjobb. Ellers oppdages en ødelagt bildesti først
+    # midt i treningen (eller, før fiksen, aldri — den trente på blanke).
+    mangler = [k.get("fil_sti", "") for k in korreksjoner
+               if not os.path.isfile(k.get("fil_sti", ""))]
+    if mangler:
+        raise FileNotFoundError(
+            f"{len(mangler)} av {len(korreksjoner)} treningsbilder finnes "
+            f"ikke på disk (f.eks. «{mangler[0]}»). Kjør "
+            "eksporter_fra_label_studio.py på nytt — den oversetter nå "
+            "Label Studio-URL-er til ekte filstier. Avbryter for å unngå "
+            "trening på blanke bilder."
+        )
 
     print(f"Finjusterer med {len(korreksjoner)} eksempler...")
 

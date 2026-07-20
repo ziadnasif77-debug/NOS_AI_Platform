@@ -76,14 +76,20 @@ def konverter_label_studio_til_layoutlmv3(label_studio_fil: str) -> list:
 def kjor():
     Path(FINJUSTERING_STI).mkdir(parents=True, exist_ok=True)
 
-    # Finn siste Label Studio eksport
-    ls_filer = list(Path(FINJUSTERING_STI).glob("*.json"))
-    # Filtrer ut allerede konverterte filer
-    ls_filer = [f for f in ls_filer if not f.name.startswith("layoutlmv3_")]
+    # Finn Label Studio-eksporten (den rå LS-JSON-en med annotasjoner).
+    # R-fiks 2026-07-20: ekskluder ALLE avledede filer, ikke bare
+    # layoutlmv3_. Eksporteren skriver også trocr_*.json og nb_bert_*.json
+    # til samme mappe — de mangler rektangel-annotasjonene og ga «0
+    # eksempler» i stillhet når de ble plukket opp her.
+    AVLEDEDE = ("layoutlmv3_", "trocr_", "nb_bert_")
+    ls_filer = [f for f in Path(FINJUSTERING_STI).glob("*.json")
+                if not f.name.startswith(AVLEDEDE)]
 
     if not ls_filer:
-        print(f"Ingen Label Studio JSON-filer funnet i {FINJUSTERING_STI}")
-        print("Eksporter fra Label Studio og legg JSON-filen i data/finjustering/")
+        print(f"Ingen rå Label Studio-eksport funnet i {FINJUSTERING_STI}")
+        print("Eksporter prosjektet fra Label Studio (JSON) og legg filen "
+              "i data/finjustering/ — IKKE trocr_/nb_bert_-filene fra "
+              "eksporter-scriptet, de er et annet format.")
         return
 
     alle_data = []
@@ -92,6 +98,17 @@ def kjor():
         data = konverter_label_studio_til_layoutlmv3(str(fil))
         alle_data.extend(data)
         print(f"  → {len(data)} eksempler")
+
+    # R-fiks 2026-07-20: si tydelig fra i stedet for å skrive en tom fil.
+    # 0 eksempler betyr nesten alltid at filene ikke var ekte LS-eksporter
+    # (feil format / manglende annotasjoner) — ikke skriv en «vellykket»
+    # tom treningsfil som senere gir en meningsløs treningskjøring.
+    if not alle_data:
+        print(f"\n0 eksempler etter konvertering av {len(ls_filer)} fil(er). "
+              "Fant ingen gyldige LayoutLMv3-annotasjoner (rektangler + "
+              "etiketter). Sjekk at filene er rå Label Studio-eksporter. "
+              "Skriver INGEN treningsfil.")
+        return
 
     tidsstempel = datetime.now().strftime("%Y%m%d_%H%M%S")
     utgang_fil = f"{FINJUSTERING_STI}/layoutlmv3_{tidsstempel}.json"
