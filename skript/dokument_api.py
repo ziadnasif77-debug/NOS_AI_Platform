@@ -36,6 +36,7 @@ import os
 import queue
 import re
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -82,6 +83,15 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # en brukers nettleser). Sett en kommaseparert liste av tillatte opphav,
 # eller «*» bevisst, hvis en nettleserklient trenger det.
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "").strip()
+# Auto-gjennomgang: leser vi et dokument dårlig (lav OCR-konfidens eller
+# håndskrift), sendes det automatisk til Label Studio for menneskelig
+# korreksjon — som igjen mater treningsløkken (finjuster). AV som
+# standard: aktiveres kun når både URL og API-nøkkel er satt, så
+# «lagrer ingenting»-oppførselen bevares for dem som ikke vil ha det.
+LABEL_STUDIO_URL = os.environ.get("LABEL_STUDIO_URL", "").strip()
+LABEL_STUDIO_API_KEY = os.environ.get("LABEL_STUDIO_API_KEY", "").strip()
+LS_KONFIDENS_TERSKEL = float(os.environ.get("LS_KONFIDENS_TERSKEL", "0.85"))
+AUTO_GJENNOMGANG = bool(LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY)
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
 API_VERSJON = "1.1.0"
@@ -275,6 +285,12 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     # R55: sidebildene tas vare på og returneres, så strekkodelesingen
     # kan bruke de samme i stedet for å rendre hele dokumentet på nytt.
     rendrede = []
+    # Samlet lesekonfidens: lengdevektet snitt av regionscorene. Gir et
+    # ærlig «hvor godt leste vi dette»-signal (fantes ikke lokalt før —
+    # det bodde i det distribuerte systemet). Brukes til å avgjøre om
+    # dokumentet bør til Label Studio for korreksjon.
+    konf_sum = 0.0
+    konf_vekt = 0.0
     for i, side in enumerate(doc):
         if i >= maks_sider:
             break
@@ -287,6 +303,9 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
         tekster.append(resultat["tekst"])
         for r in resultat["regioner"]:
             motorer[r["motor"]] = motorer.get(r["motor"], 0) + 1
+            vekt = max(len((r.get("tekst") or "").strip()), 1)
+            konf_sum += float(r.get("konfidens", 0.0)) * vekt
+            konf_vekt += vekt
             # Visuelt klassifisert som håndskrift (eller lest av norhand)
             if r.get("skrift") == "handskrift" and r["tekst"]:
                 handskrift.append(r["tekst"])
@@ -296,13 +315,74 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
                            for i, t in enumerate(tekster))
     else:
         samlet = "\n".join(tekster)
+    konfidens = round(konf_sum / konf_vekt, 4) if konf_vekt else 1.0
     return {"tekst": samlet, "motorer": motorer,
-            "handskrift": handskrift,
+            "handskrift": handskrift, "konfidens": konfidens,
             "sider_lest": min(sider_totalt, maks_sider),
             "sider_totalt": sider_totalt,
             # Understrek = internt felt, aldri med i et JSON-svar (samme
             # konvensjon som jobb["_data"]). Dette er numpy-arrayer.
             "_sidebilder": rendrede}
+
+
+# ------------------------------------------------------------------ #
+#  Auto-gjennomgang: dårlig lest dokument → Label Studio → trening    #
+# ------------------------------------------------------------------ #
+
+def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
+                                  ocr_res: dict, felter: dict) -> dict | None:
+    """Leste vi dokumentet dårlig, send det til Label Studio for
+    menneskelig korreksjon (som mater treningsløkken). Kjøres i en
+    bakgrunnstråd så svaret til klienten aldri forsinkes, og er
+    best-effort — feiler Label Studio, logges det og forespørselen går
+    videre. Returnerer {grunn, konfidens} hvis den utløste en sending,
+    ellers None.
+
+    AV med mindre LABEL_STUDIO_URL + _API_KEY er satt (AUTO_GJENNOMGANG).
+    """
+    if not AUTO_GJENNOMGANG or not ocr_res:
+        return None
+    konfidens = float(ocr_res.get("konfidens", 1.0))
+    handskrift = bool(ocr_res.get("handskrift"))
+    raa_tekst = ocr_res.get("tekst", "")
+    tomt = len(raa_tekst.strip()) < 20        # OCR fant nesten ingen tekst
+    lav_konfidens = konfidens < LS_KONFIDENS_TERSKEL
+    if not (tomt or lav_konfidens or handskrift):
+        return None                      # lest godt nok — ingen grunn
+    grunn = ("tomt_resultat" if tomt else
+             "lav_ocr_konfidens" if lav_konfidens else "handskrift")
+
+    def arbeider():
+        import fitz
+        # Stabil id fra innholdet: samme dokument → samme oppgave i
+        # Label Studio (unngår duplikater ved gjentatt opplasting).
+        fil_id = hashlib.sha256(innhold).hexdigest()[:16]
+        png_sti = os.path.join(tempfile.gettempdir(), f"gjennomgang_{fil_id}.png")
+        try:
+            doc = fitz.open(stream=innhold, filetype="pdf")
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72))
+            pix.save(png_sti)
+            doc.close()
+            from send_til_label_studio import send_til_gjennomgang
+            ok = send_til_gjennomgang(
+                fil_id=fil_id, bilde_sti=png_sti, raa_tekst=raa_tekst,
+                konfidens=konfidens,
+                metadata={k: felter.get(k, "") for k in
+                          ("navn", "dato", "ytelse", "fylke")})
+            print(f"  [gjennomgang] {filnavn} ({grunn}, konf={konfidens}) "
+                  f"→ Label Studio: {'sendt' if ok else 'feilet'}",
+                  file=sys.stderr)
+        except Exception as exc:
+            print(f"  [gjennomgang] hoppet over ({type(exc).__name__}: {exc})",
+                  file=sys.stderr)
+        finally:
+            try:
+                os.remove(png_sti)
+            except OSError:
+                pass
+
+    threading.Thread(target=arbeider, daemon=True).start()
+    return {"grunn": grunn, "konfidens": konfidens}
 
 
 # ------------------------------------------------------------------ #
@@ -496,6 +576,8 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
                        if strekkoder else
                        "Fant ingen lesbar tekst i dokumentet — selv med OCR. "
                        "(Rene bilder uten skrift gir ingen tekst.)")
+            # Klarte nesten ikke å lese noe → send til korreksjon
+            sendt = _kanskje_send_til_gjennomgang(filnavn, data, ocr_res, {})
             return {
                 "ok": True,
                 "filnavn": filnavn,
@@ -510,6 +592,8 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
                 "ocr_motorer": ocr_res["motorer"],
                 "ocr_sider_lest": ocr_res["sider_lest"],
                 "ocr_sider_totalt": ocr_res["sider_totalt"],
+                "ocr_konfidens": ocr_res.get("konfidens"),
+                "sendt_til_gjennomgang": sendt,
                 "advarsel": ocr_advarsel,
             }
         # Datoklassifisering + kryssjekk mot håndskrevne regioner
@@ -519,6 +603,9 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             if any(dd["raatekst"] in h for h in ocr_res["handskrift"]):
                 dd["skrevet_for_hand"] = True
                 dd["begrunnelse"] += "; står i en håndskrevet region"
+        felter_ut = utvid_entiteter(ocr_tekst, {})
+        # Leste vi dette dårlig? → automatisk til Label Studio (bakgrunn)
+        sendt = _kanskje_send_til_gjennomgang(filnavn, data, ocr_res, felter_ut)
         return {
             "ok": True,
             "filnavn": filnavn,
@@ -526,7 +613,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "trenger_ocr": False,
             "ocr_brukt": True,
             "kilde": "regionocr+deterministisk",
-            "felter": utvid_entiteter(ocr_tekst, {}),
+            "felter": felter_ut,
             "datoer": finn_alle_datoer(ocr_tekst),
             "datoer_detaljert": datoer_detaljert,
             "strekkoder": strekkoder,
@@ -536,6 +623,8 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "handskrift": ocr_res["handskrift"],
             "ocr_sider_lest": ocr_res["sider_lest"],
             "ocr_sider_totalt": ocr_res["sider_totalt"],
+            "ocr_konfidens": ocr_res.get("konfidens"),
+            "sendt_til_gjennomgang": sendt,
             "advarsel": ocr_advarsel,
         }
 

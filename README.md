@@ -92,16 +92,28 @@ python skript/last_ned_modeller.py     # last ned modellene (én gang)
 
 ## Treningsløkke (valgfri modellforbedring)
 
-Modellene forbedres av menneskelige korreksjoner — offline og manuelt.
-Dette er den eneste delen som bevarer data (midlertidig, til trening).
+Modellene forbedres av menneskelige korreksjoner. Hele løkken:
 
 ```
-dokument med lav OCR-kvalitet
-   → Label Studio (menneske retter)
+dårlig lest dokument (lav OCR-konfidens ELLER håndskrift ELLER tomt resultat)
+   → AUTOMATISK til Label Studio            (serveren, i bakgrunnen — se under)
+   → menneske retter teksten
    → skript/eksporter_fra_label_studio.py   (→ data/finjustering/)
    → skript/konverter_til_layoutlmv3.py      (LayoutLMv3-format)
    → skript/finjuster.py                      (trener TrOCR · NB-BERT · LayoutLMv3, backup før overskriving)
 ```
+
+**Auto-gjennomgang** (det første steget): leser serveren et dokument
+dårlig, sender den det selv til Label Studio for korreksjon — i en
+bakgrunnstråd, så svaret til klienten aldri forsinkes. Svaret merker det
+med `sendt_til_gjennomgang`. Utløses av lav OCR-konfidens (< 0.85),
+håndskrift, eller nesten tom lesing.
+
+Dette er **AV som standard** — det aktiveres kun når du setter både
+`LABEL_STUDIO_URL` og `LABEL_STUDIO_API_KEY`. Uten dem lagres og sendes
+ingenting; serveren bare leser, svarer og forkaster. Det er også den
+eneste delen som bevarer data (bildet + rå tekst i Label Studio,
+midlertidig, til korreksjonen er hentet inn i treningen).
 
 Modellene lastes ved oppstart, så en nytrent modell tas i bruk etter en
 omstart av serveren.
