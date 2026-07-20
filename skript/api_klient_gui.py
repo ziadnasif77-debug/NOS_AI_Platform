@@ -279,6 +279,13 @@ def bygg_advarselstekst(data: dict) -> str:
         )
     if data.get("svar_avkortet"):
         deler.append("⚠ Svaret ble avkortet av serveren (svar_avkortet) — det kan være ufullstendig.")
+    if data.get("korrigert_tekst"):
+        deler.append(
+            "⚠ Den korrigerte teksten er skrevet av modellen, ikke lest fra "
+            "dokumentet. Tallvakten gjelder bare den rå OCR-teksten — "
+            "kontroller beløp, datoer og identifikatorer mot originalen "
+            "lenger ned før du bruker dem."
+        )
     if data.get("advarsel"):
         deler.append(f"⚠ Advarsel fra serveren: {data['advarsel']}")
     if data.get("avvik"):
@@ -1147,7 +1154,24 @@ class DokumentKlientApp:
         self._fullfor_suksess(panel, data, brukt, statustekst, bygg_advarselstekst(data))
 
         svar = data.get("svar")
-        if svar:
+        korrigert = data.get("korrigert_tekst")
+        if korrigert:
+            # R59: serveren legger den modellrettede teksten i sitt eget
+            # felt og lar 'svar' være den rå OCR-lesningen. Klienten viste
+            # bare 'svar', så den som huket av «Korriger OCR-teksten»
+            # betalte for jobben uten å se resultatet.
+            #
+            # Begge vises, i denne rekkefølgen: du ba om den rettede, så
+            # den kommer først — men den rå står under, fordi den er
+            # fasiten. Rettingen er modellarbeid og kan ta feil.
+            panel.sett_svar(
+                "KORRIGERT AV MODELLEN (kontroller mot originalen under):\n"
+                + korrigert.strip()
+                + "\n\n" + "-" * 60 + "\n"
+                + "RÅ OCR-TEKST — det dokumentet faktisk ble lest som:\n"
+                + (svar or "").strip()
+            )
+        elif svar:
             panel.sett_svar(svar)
         elif data.get("melding"):
             panel.sett_svar(data["melding"])
