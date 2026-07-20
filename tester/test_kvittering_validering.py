@@ -147,6 +147,36 @@ def test_normalisert_dato_avvises_ikke_av_tallvakten(rens):
     assert avvik == []
 
 
+def test_nullore_regnes_som_samme_belop(rens):
+    """OCR leste «+FORHÅND NOK 23,00» som «#FORHAND NOK 23 Q» — ørene
+    ble til en Q. Beløpet 23,00 ER i dokumentet; at ørene er null gjør
+    det til samme tall som «23», og skal ikke felles av tallvakten."""
+    dok = "PRIS NOK 463 00\n#FORHAND NOK 23 Q\nTOTAL NOK 486 00\n"
+    renset, avvik = rens({"forhand": None}, {"forhand": "NOK 23,00"}, dok)
+
+    assert renset["forhand"] == "NOK 23,00"
+    assert avvik == []
+
+
+def test_ore_som_ikke_er_null_maa_staa_ordrett(rens):
+    """Unntaket gjelder bare nullører. Et endret ørebeløp skal fortsatt
+    fanges — ellers kunne modellen justere kronebeløp ustraffet."""
+    dok = "PRIS NOK 463 00\n#FORHAND NOK 23 Q\n"
+    renset, avvik = rens({"forhand": None}, {"forhand": "NOK 23,50"}, dok)
+
+    assert renset["forhand"] == ""
+    assert any("ikke står i dokumentet" in a for a in avvik)
+
+
+def test_helt_annet_belop_avvises_selv_med_nullore(rens):
+    """«2300,00» er ikke «23» — heltallsdelen må selv finnes i kilden."""
+    dok = "#FORHAND NOK 23 Q\n"
+    renset, avvik = rens({"forhand": None}, {"forhand": "2300,00"}, dok)
+
+    assert renset["forhand"] == ""
+    assert avvik != []
+
+
 def test_tallvakten_stopper_fortsatt_oppdiktede_tall(rens):
     """Unntaket for datoer skal ikke ha åpnet en dør: et beløp modellen
     har regnet seg fram til skal fortsatt fanges."""

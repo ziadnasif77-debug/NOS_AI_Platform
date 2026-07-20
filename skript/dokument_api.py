@@ -857,9 +857,22 @@ def uverifiserte_tall(svar: str, kilde: str, ekstra_tokens: set = None) -> list:
         kilde_tokens |= ekstra_tokens
     mangler = []
     for tall in re.findall(monster, svar):
-        kompakt = rens(tall)
-        if len(kompakt) >= 3 and kompakt not in kilde_tokens:
-            mangler.append(tall.strip())
+        raa = tall.strip()
+        kompakt = rens(raa)
+        if len(kompakt) < 3 or kompakt in kilde_tokens:
+            continue
+        # R56: «23,00» og «23» er nøyaktig samme beløp. På matriseskrift
+        # mister OCR ofte ørene — «+FORHÅND NOK 23,00» ble lest «#FORHAND
+        # NOK 23 Q» — og da falt en korrekt lest verdi på at kilden bare
+        # inneholdt heltallet. Vakten var dessuten inkonsekvent: «23»
+        # alene slipper uansett gjennom (under tresifergrensen), mens
+        # «23,00» ble avvist.
+        # Gjelder KUN når ørene er null. «23,50» må fortsatt stå ordrett
+        # i kilden — ellers ville et endret ørebeløp sluppet forbi.
+        uten_ore = re.sub(r"[,.](?:00|-)$", "", raa)
+        if uten_ore != raa and rens(uten_ore) in kilde_tokens:
+            continue
+        mangler.append(raa)
     return mangler
 
 
