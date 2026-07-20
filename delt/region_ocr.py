@@ -19,12 +19,30 @@ Trådsikker: én lås rundt motorkallene (GPU-en tar én jobb om gangen).
 """
 import os
 import threading
+import time
 
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NORHAND_STI = os.path.join(ROT, "modeller", "norhand")
 
-# Under denne EasyOCR-konfidensen prøves norhand i tillegg på regionen
+# Under denne EasyOCR-konfidensen kan norhand prøves på regionen
 TERSKEL_TRYKT = 0.60
+# Under DENNE har EasyOCR i praksis gitt opp. Da prøves norhand selv om
+# regionen ser trykt ut — den visuelle testen bygger på den utleste
+# teksten, og har vi ingen brukbar tekst, sier den ingenting.
+TERSKEL_OPPGITT = 0.25
+# R52: tak på hvor mye håndskriftmodellen får koste per side.
+#
+# Taket er BÅDE på antall kall og på tid, fordi ett kall koster 0,3 s på
+# GPU men 3,7 s på CPU — et rent antallstak ville gitt 4 s på GPU og 44 s
+# på CPU for samme side. Tidstaket holder svartiden forutsigbar uansett
+# hvor modellen havnet, og antallstaket hindrer at én treg region spiser
+# hele budsjettet. Målt uten tak: 50 usikre regioner = minutter.
+#
+# Håndskrift i NAV-skjemaer står i noen få felter, ikke over hele siden,
+# så et tak rammer i praksis bare degraderte sider der norhand uansett
+# ikke har noe å bidra med (den er trent på håndskrift, ikke på støy).
+MAKS_NORHAND_PER_SIDE = int(os.environ.get("MAKS_NORHAND_PER_SIDE", "12"))
+MAKS_NORHAND_SEKUNDER = float(os.environ.get("MAKS_NORHAND_SEKUNDER", "4.0"))
 
 # R51: EasyOCR trenger ledig VRAM til arbeidsbuffere PER SIDE, ikke bare
 # til vektene. Er kortet nesten fullt (typisk: Borealis har lagt beslag
@@ -38,6 +56,10 @@ TERSKEL_TRYKT = 0.60
 # unødige oppskaleringen ble fjernet (ocr_skala i dokument_api) er
 # sidebildene ~4× mindre, så 800 MiB gir god margin for en A4-side.
 MINSTE_LEDIG_GPU_MB = int(os.environ.get("OCR_MINSTE_LEDIG_GPU_MB", "800"))
+# norhand (TrOCR) er mindre enn EasyOCR: ~330 MiB i fp16. Eget, lavere
+# krav så den ikke havner på CPU bare fordi EasyOCR alt har tatt sin del.
+MINSTE_LEDIG_GPU_NORHAND_MB = int(
+    os.environ.get("OCR_MINSTE_LEDIG_GPU_NORHAND_MB", "450"))
 
 _las = threading.Lock()
 
@@ -179,9 +201,12 @@ def _hent_norhand():
         enhet = "cpu"
         try:
             import torch
-            # R51: samme minnekrav som EasyOCR — et fullt kort gjør
-            # norhand tregere enn CPU, ikke raskere
-            if torch.cuda.is_available() and ledig_gpu_mb() >= MINSTE_LEDIG_GPU_MB:
+            # R52: norhand er en LITEN modell (~330 MiB i fp16) og
+            # trenger derfor mindre plass enn EasyOCR. Med EasyOCRs krav
+            # (800 MiB) ble den urettmessig dyttet til CPU etter at
+            # EasyOCR alt hadde tatt sin del — og på CPU koster den 3,7 s
+            # per region mot 0,3 s på GPU.
+            if torch.cuda.is_available() and ledig_gpu_mb() >= MINSTE_LEDIG_GPU_NORHAND_MB:
                 modell = modell.half().to("cuda")
                 enhet = "cuda"
         except Exception:
@@ -379,6 +404,10 @@ def _ocr_side_intern(bilde_np) -> dict:
 
     h, b = bilde_np.shape[0], bilde_np.shape[1]
     regioner = []
+    # R52: hardt tak på hvor mange ganger håndskriftmodellen kan kalles
+    # for én side. Uten taket vokser tiden ubegrenset med antall usikre
+    # regioner — en dårlig skannet side kunne alene koste minutter.
+    budsjett = {"igjen": MAKS_NORHAND_PER_SIDE, "brukt_s": 0.0}
     for punkter, tekst, konf in funn:
         xs = [p[0] for p in punkter]
         ys = [p[1] for p in punkter]
@@ -396,25 +425,42 @@ def _ocr_side_intern(bilde_np) -> dict:
             "norhand_konfidens": None,
         }
 
-        # Lav konfidens → sannsynlig håndskrift/degradert → prøv norhand
-        if konf < TERSKEL_TRYKT and (x1 - x0) >= 8 and (y1 - y0) >= 8:
+        utsnitt = bilde_np[y0:y1, x0:x1]
+        stor_nok = (x1 - x0) >= 8 and (y1 - y0) >= 8
+
+        # R52: klassifiser skriftslaget FØR vi eventuelt kaller norhand.
+        # Den visuelle testen koster millisekunder, mens norhand koster
+        # 0,3 s på GPU og 3,7 s på CPU — å bruke en håndskriftspesialist
+        # på trykt tekst er ren sløsing, og på en side med mange usikre
+        # regioner ble det titalls sekunder (målt: 53 s på ett bilde).
+        region["skrift"] = _skriftslag(utsnitt, region["tekst"]) if stor_nok else "trykt"
+
+        # norhand prøves når EasyOCR er usikker OG regionen enten ser
+        # håndskrevet ut, eller EasyOCR har gitt helt opp (da sier ikke
+        # den visuelle testen noe meningsfylt, for den bruker teksten).
+        verdt_norhand = (region["skrift"] == "handskrift"
+                         or konf < TERSKEL_OPPGITT)
+        if (konf < TERSKEL_TRYKT and stor_nok and verdt_norhand
+                and budsjett["igjen"] > 0
+                and budsjett["brukt_s"] < MAKS_NORHAND_SEKUNDER):
+            budsjett["igjen"] -= 1
+            _t0 = time.perf_counter()
             try:
-                nh_tekst, nh_konf = _norhand_les(bilde_np[y0:y1, x0:x1])
+                nh_tekst, nh_konf = _norhand_les(utsnitt)
                 region["norhand_tekst"] = nh_tekst
                 region["norhand_konfidens"] = round(nh_konf, 3)
                 if velg_motor(tekst.strip(), float(konf), nh_tekst, nh_konf) == "norhand":
                     region["tekst"] = nh_tekst
                     region["motor"] = "norhand"
                     region["konfidens"] = nh_konf
+                    # Ny tekst → klassifiseringen over gjaldt den gamle
+                    region["skrift"] = "handskrift"
             except Exception:
                 pass   # norhand utilgjengelig → behold EasyOCR-lesningen
+            finally:
+                budsjett["brukt_s"] += time.perf_counter() - _t0
 
         region["konfidens"] = round(float(region["konfidens"]), 3)
-        # Visuell klassifisering: håndskrift eller trykt — uavhengig
-        # av hvilken motor som leste regionen
-        region["skrift"] = _skriftslag(bilde_np[y0:y1, x0:x1], region["tekst"])
-        if region["motor"] == "norhand":
-            region["skrift"] = "handskrift"
         regioner.append(region)
 
     return {"tekst": flett_regioner(regioner), "regioner": regioner}
