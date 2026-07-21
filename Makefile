@@ -2,7 +2,7 @@
 # Ingen Docker: serveren kjører direkte med Python.
 
 .PHONY: start klient test korpus modeller \
-        trening eksporter-korreksjoner finjuster \
+        trening eksporter-korreksjoner finjuster valider rull-tilbake \
         pakk-offline installer-offline sjekk-miljo lovtekst
 
 # ─── Server og klient ────────────────────────────────────────────────
@@ -23,8 +23,14 @@ trening:                     ## Hele løkken (eksporter → finjuster) med MLflo
 eksporter-korreksjoner:      ## Bare hent korreksjoner fra Label Studio → data/finjustering
 	python skript/eksporter_fra_label_studio.py
 
-finjuster:                   ## Bare finjuster norhand (TrOCR) på korreksjonene
+finjuster:                   ## Bare tren en kandidat-modell (ikke live)
 	python skript/finjuster.py
+
+valider:                     ## Kvalitetsport: mål kandidat mot live (CER)
+	python skript/valider_modell.py
+
+rull-tilbake:                ## Gå tilbake til forrige norhand-modell
+	python skript/valider_modell.py --rull-tilbake
 
 # ─── Test ────────────────────────────────────────────────────────────
 test:                        ## Kjør enhetstestene (stopp serveren først — GPU deles)

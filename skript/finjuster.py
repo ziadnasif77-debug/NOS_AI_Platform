@@ -20,7 +20,6 @@ import json
 import shutil
 import torch
 from pathlib import Path
-from datetime import datetime
 from PIL import Image
 from torch.utils.data import Dataset
 
@@ -66,7 +65,8 @@ class TrOCRDatasett(Dataset):
 
 
 def finjuster_norhand() -> int | None:
-    """Finjusterer TrOCR-NorHand på trocr_*.json-korreksjonene.
+    """Finjusterer TrOCR-NorHand på trocr_*.json-korreksjonene og lagrer
+    resultatet som KANDIDAT (modeller/norhand-kandidat) — ikke live.
     Returnerer antall eksempler den trente på, eller None hvis hoppet
     over (for få korreksjoner)."""
     from transformers import (
@@ -128,18 +128,23 @@ def finjuster_norhand() -> int | None:
         args=treningsarg,
         train_dataset=datasett,
     )
-    # Backup før overskrivning
-    backup_sti = f"{MODELLER_STI}/norhand-backup-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    if Path(f"{MODELLER_STI}/norhand").exists():
-        shutil.copytree(f"{MODELLER_STI}/norhand", backup_sti)
-        print(f"Backup lagret: {backup_sti}")
-
     trener.train()
-    trener.save_model(f"{MODELLER_STI}/norhand")
+
+    # Lagre som KANDIDAT — ikke live. Kvalitetsporten (valider_modell.py)
+    # avgjør om den er god nok til å promoteres. Slik kan en dårlig
+    # korreksjonsbatch aldri stille forringe produksjonsmodellen.
+    kandidat = f"{MODELLER_STI}/norhand-kandidat"
+    if Path(kandidat).exists():
+        shutil.rmtree(kandidat)
+    trener.save_model(kandidat)
+    prosessor.save_pretrained(kandidat)   # så kandidaten kan lastes selvstendig
     print(f"TrOCR-NorHand finjustering fullført — {len(korreksjoner)} eksempler.")
+    print(f"Kandidat lagret: {kandidat} (IKKE live ennå — porten avgjør).")
     return len(korreksjoner)
 
 
 if __name__ == "__main__":
     finjuster_norhand()
-    print("Modellen er oppdatert. Start serveren på nytt for å ta den i bruk.")
+    print("Kandidat klar. Kjør 'python skript/valider_modell.py' for å "
+          "sjekke den mot live før promotering (eller 'make trening' som "
+          "gjør alt i ett).")

@@ -106,16 +106,28 @@ dårlig lest dokument (lav OCR-konfidens ELLER håndskrift ELLER tomt resultat)
    → menneske retter teksten
    → skript/kjor_treningslop.py:
         1. eksporter_fra_label_studio.py     (→ data/finjustering/trocr_*.json)
-        2. finjuster.py                       (trener norhand/TrOCR, backup før overskriving)
-   → server-omstart tar den nytrente modellen i bruk
+        2. finjuster.py                       (trener norhand/TrOCR → KANDIDAT, ikke live)
+        3. valider_modell.py                  (kvalitetsport: CER kandidat vs live)
+   → godkjent → promotert → server-omstart tar modellen i bruk
+   → avvist  → live står urørt (rull-tilbake tilgjengelig)
 ```
+
+**Kvalitetsport før produksjon** (steg 3): trening lager en *kandidat*,
+ikke en live modell. Porten måler tegnfeilrate (CER) for kandidat mot live
+på et **fast valideringssett** ([data/validering/](data/validering/README.md))
+og promoterer bare hvis kandidaten er minst like god (`CER_MARGIN`). En
+dårlig korreksjonsbatch stoppes dermed i porten, ikke i produksjon. Forrige
+live tas vare på i `modeller/norhand-forrige` for umiddelbar rull-tilbake
+(`python skript/valider_modell.py --rull-tilbake`). Uten valideringssett
+promoteres ingenting automatisk.
 
 Orkestratoren sporer hvert løp i **MLflow** (åpen kildekode, kjører
 lokalt — `mlflow ui --backend-store-uri ./data/mlflow`): antall
-korreksjoner, treningstap, varighet. MLflow er valgfritt (`krav_trening.txt`);
-uten det kjører løkken likevel, bare uten sporing. Dette er den lette
-erstatningen for en Kubeflow-pipeline — samme DAG og sporing, uten
-Kubernetes. Planlegg tilbakevendende kjøring med Windows Task Scheduler.
+korreksjoner, treningstap, CER (live/kandidat), port-utfall, varighet.
+MLflow er valgfritt (`krav_trening.txt`); uten det kjører løkken likevel,
+bare uten sporing. Dette er den lette erstatningen for en Kubeflow-pipeline
+— samme DAG og sporing, uten Kubernetes. Planlegg tilbakevendende kjøring
+med Windows Task Scheduler.
 
 **Auto-gjennomgang** (det første steget): leser serveren et dokument
 dårlig, sender den det selv til Label Studio for korreksjon — i en

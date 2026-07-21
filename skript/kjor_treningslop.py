@@ -2,8 +2,10 @@
 Kjører HELE treningsløkken som ett sporbart løp:
 
   1) eksporter korreksjoner fra Label Studio  ->  data/finjustering/trocr_*.json
-  2) finjuster norhand (TrOCR) på korreksjonene
-  (deretter starter du serveren på nytt for å ta modellen i bruk)
+  2) finjuster norhand (TrOCR)                 ->  KANDIDAT (ikke live)
+  3) kvalitetsport: evaluer kandidat vs live (CER) og promoter BARE hvis
+     den er minst like god — ellers står live urørt (valider_modell.py)
+  (deretter starter du serveren på nytt for å ta en promotert modell i bruk)
 
 Dette er den LETTE erstatningen for en Kubeflow-pipeline: samme DAG
 (eksporter -> tren) og samme sporing (MLflow — åpen kildekode, Apache 2.0,
@@ -72,21 +74,52 @@ def kjor() -> None:
             _metrikk("varighet_sek", round(time.time() - start, 1))
             return
 
-        # 2) Finjuster norhand (TrOCR)
-        print("\n=== 2/2  Finjusterer norhand (TrOCR) ===")
+        # 2) Finjuster norhand (TrOCR) → KANDIDAT (ikke live)
+        print("\n=== 2/3  Finjusterer norhand (TrOCR) → kandidat ===")
         import finjuster
         antall_trent = finjuster.finjuster_norhand()
         _metrikk("trente_eksempler", antall_trent or 0)
-        _param("resultat", "trent" if antall_trent else "for_faa")
+        if not antall_trent:
+            _param("resultat", "for_faa")
+            _metrikk("varighet_sek", round(time.time() - start, 1))
+            print("For få korreksjoner — ingen kandidat trent.")
+            return
 
-        modell_sti = Path(finjuster.MODELLER_STI) / "norhand"
-        if antall_trent and modell_sti.exists():
-            _param("modell_sti", str(modell_sti.resolve()))
+        # 3) Kvalitetsport: kandidat vs live på et fast valideringssett.
+        # Promoter BARE hvis kandidaten er minst like god (lavere/lik CER).
+        # Slik når en dårlig batch aldri produksjon — den stoppes i porten.
+        print("\n=== 3/3  Kvalitetsport: kandidat vs live (CER) ===")
+        import valider_modell as vm
+        v = vm.vurder()
+        _param("cer_live", v["cer_live"])
+        _param("cer_kandidat", v["cer_kandidat"])
+        _param("validering_antall", v["antall"])
+        if v["cer_live"] is not None:
+            _metrikk("cer_live", v["cer_live"])
+        if v["cer_kandidat"] is not None:
+            _metrikk("cer_kandidat", v["cer_kandidat"])
+
+        if v["godkjent"]:
+            vm.promuster()
+            _param("resultat", "promotert")
+            print(f"GODKJENT (CER {v['cer_kandidat']} ≤ {v['cer_live']}). "
+                  "Server-omstart tar den nye modellen i bruk.")
+        elif v["grunn"] == "mangler_valideringssett":
+            _param("resultat", "ingen_valideringssett")
+            print("INGEN valideringssett — kandidaten er IKKE promotert "
+                  "(porten kan ikke bekrefte at den er trygg). Lag "
+                  f"{vm.VALIDERING_STI} for å aktivere automatisk promotering, "
+                  "eller promoter manuelt: python skript/valider_modell.py --promuster")
+        else:
+            _param("resultat", "avvist_daarligere")
+            print(f"AVVIST (CER {v['cer_kandidat']} > {v['cer_live']}). "
+                  "Live står urørt; kandidaten ligger i modeller/norhand-kandidat "
+                  "for inspeksjon. Rull tilbake ved behov: "
+                  "python skript/valider_modell.py --rull-tilbake")
 
         _metrikk("varighet_sek", round(time.time() - start, 1))
 
-    print("\nFerdig. Start serveren på nytt for å ta den nytrente modellen "
-          "i bruk (modeller lastes ved oppstart).")
+    print("\nFerdig.")
 
 
 if __name__ == "__main__":

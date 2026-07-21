@@ -112,8 +112,8 @@
         stroke-width:1;stroke-dasharray:3 4}
   .bandlbl{fill:var(--loop);font:600 10.5px var(--mono);letter-spacing:.1em}
 
-  .panels{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:26px}
-  @media (max-width:860px){.panels{grid-template-columns:1fr}}
+  .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;margin-top:26px}
+  @media (max-width:680px){.panels{grid-template-columns:1fr}}
   .info{padding:20px}
   .info h3{margin:0 0 4px;font-size:16px;display:flex;align-items:center;gap:8px}
   .info h3 .tag{font-family:var(--mono);font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:6px;
@@ -154,32 +154,33 @@
     <p class="lede">Velg en dokumenttype og klikk deg gjennom stegene — <b>én boks om gangen</b>.
       Diagrammet lyser opp der filen er akkurat nå; pilene viser bare veien videre, de er ikke egne
       steg. Dårlige lesinger forlater hovedløypa og går inn i treningsløkka, der <b>MLflow</b> sporer
-      hver forbedring. Systemet lagrer aldri dokumentet.</p>
+      hvert løp og en <b>kvalitetsport</b> slipper bare bedre modeller til produksjon. Systemet
+      lagrer aldri dokumentet.</p>
   </header>
 
   <div class="scenarier" id="scenarier" role="tablist"></div>
 
   <div class="stage">
     <div class="card diagram" aria-hidden="true">
-      <svg viewBox="0 0 660 910" xmlns="http://www.w3.org/2000/svg">
+      <svg viewBox="0 0 660 985" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="var(--line)"/>
           </marker>
         </defs>
 
-        <rect class="band" x="48" y="600" width="564" height="300" rx="14"></rect>
+        <rect class="band" x="48" y="600" width="564" height="366" rx="14"></rect>
         <text class="bandlbl" x="66" y="620">TRENINGSLØKKE · ved dårlig lesing</text>
 
-        <path class="link spine" d="M230,74 V836" marker-end="url(#ar)"></path>
+        <path class="link spine" d="M230,74 V908" marker-end="url(#ar)"></path>
 
         <path id="lbypass" class="link bypass" d="M390,191 H444 V407 H392" marker-end="url(#ar)"></path>
         <text class="glabel" x="450" y="230" transform="rotate(90 450 230)">har tekstlag → hopp over OCR</text>
 
-        <path id="lfeedback" class="link feedback" d="M70,863 H30 V263 H68" marker-end="url(#ar)"></path>
+        <path id="lfeedback" class="link feedback" d="M70,931 H30 V263 H68" marker-end="url(#ar)"></path>
         <text class="glabel" x="20" y="560" transform="rotate(-90 20 560)">forbedret modell live</text>
 
-        <path id="lml" class="link" d="M390,791 H408"></path>
+        <path id="lml" class="link" d="M390,807 H408"></path>
 
         <g class="node" id="n1"><rect x="70" y="20" width="320" height="54" rx="11"></rect>
           <text class="t" x="86" y="44">1 · Klient sender fil</text>
@@ -214,12 +215,17 @@
           <text class="s" x="86" y="750">menneske retter teksten</text></g>
         <g class="node loop" id="t3"><rect x="70" y="780" width="320" height="54" rx="11"></rect>
           <text class="t" x="86" y="804">C · kjor_treningslop</text>
-          <text class="s" x="86" y="822">eksporter → finjuster norhand</text></g>
+          <text class="s" x="86" y="822">eksporter → finjuster → kandidat</text></g>
         <g class="node loop" id="t4"><rect x="410" y="780" width="200" height="54" rx="11"></rect>
           <text class="t" x="426" y="804">MLflow</text>
           <text class="s" x="426" y="822">sporing av løpet</text></g>
-        <g class="node loop" id="t5"><rect x="70" y="852" width="320" height="46" rx="11"></rect>
-          <text class="t" x="86" y="880">D · Server-omstart → ny modell live</text></g>
+        <g class="node loop" id="tg"><rect x="70" y="844" width="320" height="54" rx="11"></rect>
+          <text class="t" x="86" y="868">Kvalitetsport (CER)</text>
+          <text class="s" x="86" y="886">kandidat vs live · bedre → promoter</text></g>
+        <text class="glabel" x="404" y="876">dårligere →</text>
+        <text class="glabel" x="404" y="890">avvist, live urørt</text>
+        <g class="node loop" id="t5"><rect x="70" y="908" width="320" height="46" rx="11"></rect>
+          <text class="t" x="86" y="936">D · Server-omstart → ny modell live</text></g>
       </svg>
       <div class="legend">
         <span><i style="border-color:var(--good)"></i> tekstlag-snarvei</span>
@@ -255,18 +261,32 @@ mlflow ui --backend-store-uri ./data/mlflow
       <div class="mock">
         <div class="mockbar"><span class="d"></span><span class="d"></span><span class="d"></span>
           <span class="url">localhost:5000 — Experiment: nav-trening</span></div>
-        <div class="mockexp">3 løp · sorter på dato</div>
+        <div class="mockexp">3 løp · kvalitetsport-utfall</div>
         <table class="runs">
-          <thead><tr><th>Løp</th><th>korreksjoner</th><th>treningstap</th><th>varighet</th><th>dato</th></tr></thead>
+          <thead><tr><th>Løp</th><th>CER kand.</th><th>CER live</th><th>port</th></tr></thead>
           <tbody>
-            <tr><td class="run">trening-20260719</td><td>42</td><td class="metric">0.184</td><td>6m 12s</td><td>19.07</td></tr>
-            <tr><td class="run">trening-20260712</td><td>31</td><td class="metric">0.212</td><td>4m 48s</td><td>12.07</td></tr>
-            <tr><td class="run">trening-20260705</td><td>28</td><td class="metric">0.240</td><td>4m 30s</td><td>05.07</td></tr>
+            <tr><td class="run">trening-20260719</td><td class="metric">0.104</td><td>0.121</td><td class="metric">✓ promotert</td></tr>
+            <tr><td class="run">trening-20260712</td><td>0.126</td><td>0.121</td><td style="color:var(--warn)">✗ avvist</td></tr>
+            <tr><td class="run">trening-20260705</td><td class="metric">0.121</td><td>0.140</td><td class="metric">✓ promotert</td></tr>
           </tbody>
         </table>
       </div>
       <p style="margin-top:12px">Klikk et løp i den ekte UI-en for å se treningstap-kurven og
         parametrene. Uten MLflow installert kjører løkka likevel — bare uten denne sporingen.</p>
+    </div>
+
+    <div class="card info">
+      <h3><span class="tag">Port</span> Kvalitetsport før produksjon</h3>
+      <p>Trening lager en <b>kandidat</b>, ikke en live modell. Porten måler tegnfeilrate (CER)
+        for kandidat vs live på et <b>fast valideringssett</b> og promoterer bare hvis kandidaten
+        er minst like god. En dårlig korreksjonsbatch stoppes i porten — ikke i produksjon.</p>
+      <span class="cmd"><span class="c"># mål kandidat mot live:</span>
+python skript/valider_modell.py
+<span class="c"># angre siste promotering umiddelbart:</span>
+python skript/valider_modell.py --rull-tilbake</span>
+      <p>Forrige live tas vare på i <code>modeller/norhand-forrige</code> for rull-tilbake.
+        Valideringssettet ligger i <code>data/validering/norhand.json</code> — et lite, stabilt
+        sett holdt atskilt fra treningsdataene.</p>
     </div>
 
     <div class="card info">
@@ -363,15 +383,18 @@ const SCEN = [
       {node:"t2",pill:"treningsløkke",cls:"",tit:"Sendt til Label Studio",
        where:"send_til_label_studio.py",
        body:"Bildet + den rå OCR-teksten havner i Label Studio. Et menneske retter teksten der den ble lest feil. Dette er det <b>eneste</b> stedet systemet bevarer data — midlertidig, til korreksjonen er hentet inn i treningen."},
-      {node:"t3",pill:"treningsløkke",cls:"",tit:"kjor_treningslop finjusterer norhand",
+      {node:"t3",pill:"treningsløkke",cls:"",tit:"kjor_treningslop trener en kandidat",
        where:"make trening",
-       body:"Orkestratoren henter korreksjonene (<code>eksporter_fra_label_studio.py</code>) og finjusterer <b>norhand</b> på dem (<code>finjuster.py</code>, med backup før overskriving)."},
+       body:"Orkestratoren henter korreksjonene (<code>eksporter_fra_label_studio.py</code>) og finjusterer <b>norhand</b> på dem (<code>finjuster.py</code>). Resultatet lagres som en <b>kandidat</b> — live-modellen røres ikke ennå."},
       {node:"t4",pill:"treningsløkke",cls:"",tit:"MLflow sporer løpet",
        where:"data/mlflow · experiment nav-trening",
-       body:"Samme løp logges i <b>MLflow</b>: antall korreksjoner, treningstap og varighet. Du ser det i nettleseren med <code>mlflow ui</code> (se panelet nederst)."},
-      {node:"t5",arc:"feedback",pill:"treningsløkke",cls:"",tit:"Server-omstart → forbedret modell live",
+       body:"Samme løp logges i <b>MLflow</b>: antall korreksjoner, treningstap, CER og varighet. Du ser det i nettleseren med <code>mlflow ui</code> (se panelet nederst)."},
+      {node:"tg",pill:"kvalitetsport",cls:"",tit:"Kvalitetsport: kandidat vs live",
+       where:"CER på fast valideringssett",
+       body:"Før noe går live måler porten tegnfeilraten (CER) til <b>kandidaten</b> mot den <b>live</b> modellen på et fast valideringssett. Minst like god → promoteres (forrige live tas vare på for rull-tilbake). Dårligere → <b>avvises</b>, live står urørt. Slik når en dårlig korreksjonsbatch <b>aldri</b> produksjon.<div class='note'>Uten valideringssett promoteres ingenting automatisk — porten kan ikke bekrefte at modellen er trygg.</div>"},
+      {node:"t5",arc:"feedback",pill:"treningsløkke",cls:"",tit:"Godkjent → server-omstart → live",
        where:"feedback → OCR",
-       body:"Modeller lastes ved oppstart, så en omstart tar den nytrente norhand i bruk. Neste håndskrevne søknad leses litt bedre — <b>løkka er lukket</b> (den stiplede pila tilbake til OCR)."},
+       body:"Ble kandidaten godkjent, promoteres den og en omstart tar den i bruk. Neste håndskrevne søknad leses litt bedre — <b>løkka er lukket</b> (den stiplede pila tilbake til OCR)."},
     ]},
   { id:"D", ic:"🧾", navn:"Utydelig kvittering", fil:"kvittering.pdf · /uttrekk",
     steps:[
@@ -402,15 +425,18 @@ const SCEN = [
       {node:"t2",pill:"treningsløkke",cls:"",tit:"Sendt til Label Studio",
        where:"send_til_label_studio.py",
        body:"Et menneske retter den blekt-leste teksten i Label Studio."},
-      {node:"t3",pill:"treningsløkke",cls:"",tit:"kjor_treningslop finjusterer norhand",
+      {node:"t3",pill:"treningsløkke",cls:"",tit:"kjor_treningslop trener en kandidat",
        where:"make trening",
-       body:"Ved neste treningsløp finjusteres norhand på rettelsen, med backup før overskriving."},
+       body:"Ved neste treningsløp finjusteres norhand på rettelsen og lagres som <b>kandidat</b> — live røres ikke ennå."},
       {node:"t4",pill:"treningsløkke",cls:"",tit:"MLflow sporer løpet",
        where:"data/mlflow · experiment nav-trening",
-       body:"Løpet logges i MLflow: korreksjoner, treningstap, varighet."},
-      {node:"t5",arc:"feedback",pill:"treningsløkke",cls:"",tit:"Omstart → bedre på blekt trykk",
+       body:"Løpet logges i MLflow: korreksjoner, treningstap, CER, varighet."},
+      {node:"tg",pill:"kvalitetsport",cls:"",tit:"Kvalitetsport: kandidat vs live",
+       where:"CER på fast valideringssett",
+       body:"Porten måler CER for kandidat mot live. Bare hvis kandidaten er minst like god, promoteres den. Er den dårligere → <b>avvist</b>, live står urørt, og du kan rulle tilbake med <code>valider_modell.py --rull-tilbake</code>."},
+      {node:"t5",arc:"feedback",pill:"treningsløkke",cls:"",tit:"Godkjent → omstart → bedre på blekt trykk",
        where:"feedback → OCR",
-       body:"Etter omstart leser modellen slike utydelige kvitteringer litt bedre. Systemet blir målbart bedre der det pleide å feile."},
+       body:"Ble kandidaten godkjent, leser modellen etter omstart slike utydelige kvitteringer litt bedre. Systemet blir målbart bedre — uten risiko for å slippe en regresjon til produksjon."},
     ]},
   { id:"E", ic:"💬", navn:"Spørsmål uten fil", fil:"kun tekst · /spor",
     steps:[
