@@ -444,9 +444,11 @@ function render(){
   // nodes
   const active=new Set(st.nodes);
   svgNodes.forEach(n=>{
-    n.classList.toggle('on', active.has(n.id));
+    const on=active.has(n.id);
+    n.classList.toggle('on', on);
     n.classList.remove('warn','hand');
-    if(active.has(n.id) && st.cls) n.classList.add(st.cls==='good'?'':st.cls);
+    // Bare warn/hand gir egen node-farge; 'good' bruker standard aksent.
+    if(on && (st.cls==='warn'||st.cls==='hand')) n.classList.add(st.cls);
   });
   // arcs
   bypass.classList.toggle('on', active.has('n3')&&active.has('n6'));
