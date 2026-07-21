@@ -3,7 +3,7 @@
 
 .PHONY: start klient test korpus modeller \
         trening eksporter-korreksjoner finjuster valider rull-tilbake \
-        pakk-offline installer-offline sjekk-miljo lovtekst
+        rydd pakk-offline installer-offline sjekk-miljo lovtekst
 
 # ─── Server og klient ────────────────────────────────────────────────
 start:                       ## Start dokument-API-et på :8600
@@ -31,6 +31,10 @@ valider:                     ## Kvalitetsport: mål kandidat mot live (CER)
 
 rull-tilbake:                ## Gå tilbake til forrige norhand-modell
 	python skript/valider_modell.py --rull-tilbake
+
+# ─── Oppbevaring (GDPR) ──────────────────────────────────────────────
+rydd:                        ## Tørrkjør rydding av gamle gjennomgangsbilder (legg til ARGS=--slett)
+	python skript/rydd_gjennomgang.py $(ARGS)
 
 # ─── Test ────────────────────────────────────────────────────────────
 test:                        ## Kjør enhetstestene (stopp serveren først — GPU deles)

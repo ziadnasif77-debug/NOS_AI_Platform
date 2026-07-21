@@ -66,8 +66,15 @@ data bevares, og bare midlertidig, til finjusteringen har kjørt.
   dato-etiketter) leses umiddelbart — nye dokumenttyper krever aldri
   kodefiks.
 - **Sikkerhet:** valgfri `X-API-Key` (`API_NOKKEL`), CORS av som standard
-  (`CORS_ORIGINS`), generiske feilmeldinger (detaljer kun i serverloggen),
-  versjonsstempling i alle svar.
+  (`CORS_ORIGINS`), rate-limiting per klient (`RATE_LIMIT_PER_MIN`, standard
+  120/min), generiske feilmeldinger (detaljer kun i serverloggen).
+- **Sporbarhet (§4):** hvert svar stemples med full proveniens — API-,
+  prompt-, norhand-, uttrekk-regel- og terskelversjon (og LLM-modell når
+  `/spor` brukte den) — så et result kan spores til nøyaktig det som
+  produserte det.
+- **Oppbevaring (GDPR):** [skript/rydd_gjennomgang.py](skript/rydd_gjennomgang.py)
+  (`make rydd`) rydder gamle gjennomgangsbilder etter `OPPBEVARING_DAGER`
+  — tørrkjøring som standard, `--slett` for å faktisk slette.
 - **Generelt verktøy for lovtekster:**
   [skript/hent_lovtekst.py](skript/hent_lovtekst.py) henter enhver lov fra
   Lovdata.
