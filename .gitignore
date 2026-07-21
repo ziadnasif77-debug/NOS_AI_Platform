@@ -52,3 +52,7 @@ cloudflared.exe
 data/jobber/
 offline_pakke/
 .venv-prefect/
+# Python-pakker flyttet hit fra C (junction), + omdirigert cache (setx)
+.python/
+.cache/
+.prefect/
