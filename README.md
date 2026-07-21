@@ -131,6 +131,9 @@ Miljøvariabler (alle valgfrie): `API_NOKKEL` (krev X-API-Key),
 `CORS_ORIGINS`, `DOKUMENT_API_PORT` (standard 8600), `BOREALIS_KONTEKST`,
 `OCR_MOTOR` (auto/easy/rapid). Se [.env.example](.env.example).
 
+**Kjør som tjeneste** (starter ved oppstart, restarter ved krasj — uten
+Docker): [skript/tjeneste/LES_MEG.md](skript/tjeneste/LES_MEG.md).
+
 ### Offline-distribusjon (isolert server uten internett)
 
 ```bash
