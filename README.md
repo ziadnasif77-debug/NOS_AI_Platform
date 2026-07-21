@@ -80,28 +80,42 @@ Alle modeller kjører **100 % offline** etter første nedlasting.
 
 | Nøkkel | Modell | Bruk |
 |--------|--------|------|
-| `norhand` | `Sprakbanken/TrOCR-norhand-v3` | Håndskrift-OCR |
+| `norhand` | `Sprakbanken/TrOCR-norhand-v3` | Håndskrift-OCR — den ENESTE trente modellen som finjusteres i løkken |
 | `borealis` | `NbAiLab/borealis-4b-instruct-preview` (GGUF Q8) | Norsk LLM — svar/utfylling |
-| `nb-bert` · `layoutlmv3` | NbAiLab / microsoft | Finjusteres i treningsløkken |
+
+Trykt tekst leses av EasyOCR/RapidOCR (henter egne vekter automatisk). Kun
+disse to modellene brukes i leseløypa. Tidligere lastet prosjektet også
+`nb-bert`, `nb-bert-ner`, `qwen3-embed`, `layoutlmv3` og Marker — for
+klassifisering, NER, vektorsøk og layout — men de funksjonene er fjernet,
+og modellene med dem (2026-07-21).
 
 ```bash
-python skript/last_ned_modeller.py     # last ned modellene (én gang)
+python skript/last_ned_modeller.py     # last ned de to modellene (én gang)
 ```
 
 ---
 
 ## Treningsløkke (valgfri modellforbedring)
 
-Modellene forbedres av menneskelige korreksjoner. Hele løkken:
+Modellen (norhand/TrOCR) forbedres av menneskelige korreksjoner. Hele
+løkken kjøres av én orkestrator, `make trening`:
 
 ```
 dårlig lest dokument (lav OCR-konfidens ELLER håndskrift ELLER tomt resultat)
    → AUTOMATISK til Label Studio            (serveren, i bakgrunnen — se under)
    → menneske retter teksten
-   → skript/eksporter_fra_label_studio.py   (→ data/finjustering/)
-   → skript/konverter_til_layoutlmv3.py      (LayoutLMv3-format)
-   → skript/finjuster.py                      (trener TrOCR · NB-BERT · LayoutLMv3, backup før overskriving)
+   → skript/kjor_treningslop.py:
+        1. eksporter_fra_label_studio.py     (→ data/finjustering/trocr_*.json)
+        2. finjuster.py                       (trener norhand/TrOCR, backup før overskriving)
+   → server-omstart tar den nytrente modellen i bruk
 ```
+
+Orkestratoren sporer hvert løp i **MLflow** (åpen kildekode, kjører
+lokalt — `mlflow ui --backend-store-uri ./data/mlflow`): antall
+korreksjoner, treningstap, varighet. MLflow er valgfritt (`krav_trening.txt`);
+uten det kjører løkken likevel, bare uten sporing. Dette er den lette
+erstatningen for en Kubeflow-pipeline — samme DAG og sporing, uten
+Kubernetes. Planlegg tilbakevendende kjøring med Windows Task Scheduler.
 
 **Auto-gjennomgang** (det første steget): leser serveren et dokument
 dårlig, sender den det selv til Label Studio for korreksjon — i en

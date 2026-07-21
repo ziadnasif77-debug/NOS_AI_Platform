@@ -2,7 +2,7 @@
 # Ingen Docker: serveren kjører direkte med Python.
 
 .PHONY: start klient test korpus modeller \
-        finjuster eksporter-korreksjoner lag-datasett konverter-annotasjoner \
+        trening eksporter-korreksjoner finjuster \
         pakk-offline installer-offline sjekk-miljo lovtekst
 
 # ─── Server og klient ────────────────────────────────────────────────
@@ -17,16 +17,13 @@ modeller:                    ## Last ned AI-modellene (én gang)
 	python skript/last_ned_modeller.py
 
 # ─── Treningsløkke (manuell modellforbedring) ────────────────────────
-eksporter-korreksjoner:      ## Hent korreksjoner fra Label Studio → data/finjustering
+trening:                     ## Hele løkken (eksporter → finjuster) med MLflow-sporing
+	python skript/kjor_treningslop.py
+
+eksporter-korreksjoner:      ## Bare hent korreksjoner fra Label Studio → data/finjustering
 	python skript/eksporter_fra_label_studio.py
 
-lag-datasett:                ## Lag LayoutLMv3-datasett fra PDF-er
-	python skript/lag_layoutlmv3_datasett.py
-
-konverter-annotasjoner:      ## Konverter Label Studio-eksport → LayoutLMv3-format
-	python skript/konverter_til_layoutlmv3.py
-
-finjuster:                   ## Finjuster TrOCR + NB-BERT + LayoutLMv3
+finjuster:                   ## Bare finjuster norhand (TrOCR) på korreksjonene
 	python skript/finjuster.py
 
 # ─── Test ────────────────────────────────────────────────────────────

@@ -1,11 +1,19 @@
 """
-Finjustering av OCR- og NLP-modeller (TrOCR, NB-BERT, LayoutLMv3).
+Finjustering av håndskriftmodellen (TrOCR-NorHand) på menneskelige
+korreksjoner fra Label Studio.
 
-Kjøres MANUELT: `make finjuster` (eller via KFP-treningspipelinen).
-Det finnes INGEN automatisk utløser på korreksjonsantall eller tid i
-koden — den tidligere påstanden om «automatisk etter 500 korreksjoner
-eller 90 dager» var aldri implementert (verifisert 2026-07-20). Ønskes
-det, må en cron/recurring-run settes opp eksplisitt.
+Kjøres MANUELT (`make finjuster`) eller via orkestratoren
+`kjor_treningslop.py` (som også sporer løpet i MLflow). Det finnes INGEN
+automatisk utløser på korreksjonsantall eller tid i koden — ønskes det,
+planlegg kjøringen med Windows Task Scheduler.
+
+Bare norhand trenes her, fordi det er den eneste trente modellen serveren
+faktisk bruker. Tidligere trente denne fila også NB-BERT (dokumenttype)
+og LayoutLMv3 (layout) — modeller ingenting i leseløypa kalte. De er
+fjernet (2026-07-21).
+
+Miljøvariabel TRENING_RAPPORT styrer Hugging Face-loggingen:
+  "none" (standard) eller "mlflow" (settes av kjor_treningslop.py).
 """
 import os
 import json
@@ -14,11 +22,14 @@ import torch
 from pathlib import Path
 from datetime import datetime
 from PIL import Image
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
 FINJUSTERING_STI = os.environ.get("FINJUSTERING_STI", "./data/finjustering")
 MODELLER_STI = os.environ.get("MODELLER_STI", "./modeller")
 MIN_EKSEMPLER = 10
+# "none" | "mlflow" — Hugging Face-trenerens rapportering. Orkestratoren
+# setter "mlflow" så treningstap havner i samme MLflow-løp.
+TRENING_RAPPORT = os.environ.get("TRENING_RAPPORT", "none")
 
 
 class TrOCRDatasett(Dataset):
@@ -54,7 +65,10 @@ class TrOCRDatasett(Dataset):
         return {"pixel_values": piksel, "labels": etiketter}
 
 
-def finjuster_norhand():
+def finjuster_norhand() -> int | None:
+    """Finjusterer TrOCR-NorHand på trocr_*.json-korreksjonene.
+    Returnerer antall eksempler den trente på, eller None hvis hoppet
+    over (for få korreksjoner)."""
     from transformers import (
         TrOCRProcessor, VisionEncoderDecoderModel,
         Seq2SeqTrainer, Seq2SeqTrainingArguments
@@ -69,7 +83,7 @@ def finjuster_norhand():
 
     if len(korreksjoner) < MIN_EKSEMPLER:
         print(f"For få korreksjoner ({len(korreksjoner)}) — minimum {MIN_EKSEMPLER} nødvendig.")
-        return
+        return None
 
     # R-fiks 2026-07-20: sjekk at bildene FAKTISK finnes før vi starter
     # en lang treningsjobb. Ellers oppdages en ødelagt bildesti først
@@ -106,7 +120,7 @@ def finjuster_norhand():
         predict_with_generate=True,
         fp16=torch.cuda.is_available(),
         logging_steps=10,
-        report_to="none",
+        report_to=TRENING_RAPPORT,
     )
 
     trener = Seq2SeqTrainer(
@@ -123,159 +137,9 @@ def finjuster_norhand():
     trener.train()
     trener.save_model(f"{MODELLER_STI}/norhand")
     print(f"TrOCR-NorHand finjustering fullført — {len(korreksjoner)} eksempler.")
-
-
-def finjuster_nb_bert():
-    from transformers import (
-        AutoTokenizer, AutoModelForSequenceClassification,
-        Trainer, TrainingArguments
-    )
-
-    print("Starter finjustering av NB-BERT...")
-
-    korreksjoner = []
-    for fil in Path(FINJUSTERING_STI).glob("nb_bert_*.json"):
-        with open(fil, encoding="utf-8") as f:
-            korreksjoner.extend(json.load(f))
-
-    if len(korreksjoner) < MIN_EKSEMPLER:
-        print(f"For få NB-BERT-korreksjoner ({len(korreksjoner)}) — hopper over.")
-        return
-
-    etiketter = sorted(set(k["etikett"] for k in korreksjoner))
-    etikett_til_id = {e: i for i, e in enumerate(etiketter)}
-
-    modell_sti = f"{MODELLER_STI}/nb-bert"
-    tokenizer = AutoTokenizer.from_pretrained(modell_sti)
-    modell = AutoModelForSequenceClassification.from_pretrained(
-        modell_sti, num_labels=len(etiketter)
-    )
-
-    class NbBertDatasett(Dataset):
-        def __init__(self, data):
-            self.data = data
-
-        def __len__(self):
-            return len(self.data)
-
-        def __getitem__(self, idx):
-            oppf = self.data[idx]
-            tokens = tokenizer(
-                oppf["tekst"][:512], truncation=True,
-                padding="max_length", max_length=512, return_tensors="pt"
-            )
-            return {
-                "input_ids": tokens["input_ids"].squeeze(0),
-                "attention_mask": tokens["attention_mask"].squeeze(0),
-                "labels": torch.tensor(etikett_til_id[oppf["etikett"]], dtype=torch.long),
-            }
-
-    datasett = NbBertDatasett(korreksjoner)
-    treningsarg = TrainingArguments(
-        output_dir=f"{MODELLER_STI}/nb-bert-finjustert",
-        num_train_epochs=3,
-        per_device_train_batch_size=8,
-        learning_rate=2e-5,
-        save_strategy="epoch",
-        fp16=torch.cuda.is_available(),
-        logging_steps=10,
-        report_to="none",
-    )
-    # Backup før overskrivning
-    backup_sti = f"{MODELLER_STI}/nb-bert-backup-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    if Path(f"{MODELLER_STI}/nb-bert").exists():
-        shutil.copytree(f"{MODELLER_STI}/nb-bert", backup_sti)
-        print(f"Backup lagret: {backup_sti}")
-
-    trener = Trainer(model=modell, args=treningsarg, train_dataset=datasett)
-    trener.train()
-    trener.save_model(f"{MODELLER_STI}/nb-bert")
-    print(f"NB-BERT finjustering fullført — {len(korreksjoner)} eksempler.")
-
-
-def finjuster_layoutlmv3():
-    from transformers import (
-        LayoutLMv3Processor, LayoutLMv3ForTokenClassification,
-        Trainer, TrainingArguments
-    )
-
-    print("Starter finjustering av LayoutLMv3...")
-
-    treningsfiler = list(Path(FINJUSTERING_STI).glob("layoutlmv3_*.json"))
-    alle_data = []
-    for fil in treningsfiler:
-        with open(fil, encoding="utf-8") as f:
-            alle_data.extend(json.load(f))
-
-    if len(alle_data) < MIN_EKSEMPLER:
-        print(f"For få LayoutLMv3-eksempler ({len(alle_data)}) — minimum {MIN_EKSEMPLER} nødvendig.")
-        print("Kjør 'make lag-datasett' og annotter i Label Studio, deretter 'make konverter-annotasjoner'.")
-        return
-
-    print(f"Finjusterer LayoutLMv3 med {len(alle_data)} eksempler...")
-
-    # 6 flate etiketter — samme som konverter_til_layoutlmv3.py og nlp/hoved.py
-    ANTALL_ETIKETTER = 6
-
-    modell_sti = f"{MODELLER_STI}/layoutlmv3"
-    prosessor = LayoutLMv3Processor.from_pretrained(modell_sti, apply_ocr=False)
-    modell = LayoutLMv3ForTokenClassification.from_pretrained(
-        modell_sti, num_labels=ANTALL_ETIKETTER, ignore_mismatched_sizes=True
-    )
-
-    class LayoutLMDatasett(Dataset):
-        def __init__(self, data):
-            self.data = data
-
-        def __len__(self):
-            return len(self.data)
-
-        def __getitem__(self, idx):
-            oppf = self.data[idx]
-            try:
-                bilde = Image.open(oppf["bilde_sti"]).convert("RGB")
-            except Exception:
-                bilde = Image.new("RGB", (224, 224), color=255)
-
-            koding = prosessor(
-                bilde,
-                text=oppf["tokens"],
-                boxes=oppf["bokser"],
-                word_labels=oppf["etiketter"],
-                return_tensors="pt",
-                truncation=True,
-                padding="max_length",
-                max_length=512,
-            )
-            return {k: v.squeeze(0) for k, v in koding.items()}
-
-    datasett = LayoutLMDatasett(alle_data)
-
-    treningsarg = TrainingArguments(
-        output_dir=f"{MODELLER_STI}/layoutlmv3-finjustert",
-        num_train_epochs=5,
-        per_device_train_batch_size=2,
-        learning_rate=5e-5,
-        warmup_steps=50,
-        save_strategy="epoch",
-        fp16=torch.cuda.is_available(),
-        logging_steps=10,
-        report_to="none",
-    )
-
-    backup_sti = f"{MODELLER_STI}/layoutlmv3-backup-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    if Path(modell_sti).exists():
-        shutil.copytree(modell_sti, backup_sti)
-        print(f"Backup lagret: {backup_sti}")
-
-    trener = Trainer(model=modell, args=treningsarg, train_dataset=datasett)
-    trener.train()
-    trener.save_model(modell_sti)
-    print(f"LayoutLMv3 finjustering fullført — {len(alle_data)} eksempler.")
+    return len(korreksjoner)
 
 
 if __name__ == "__main__":
     finjuster_norhand()
-    finjuster_nb_bert()
-    finjuster_layoutlmv3()
-    print("Alle modeller oppdatert.")
+    print("Modellen er oppdatert. Start serveren på nytt for å ta den i bruk.")

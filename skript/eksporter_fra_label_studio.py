@@ -1,10 +1,14 @@
 """
-Eksporterer korreksjoner fra Label Studio og konverterer
-til treningsformat for finjustering av TrOCR-NorHand og NB-BERT.
+Eksporterer korreksjoner fra Label Studio og konverterer til
+treningsformat for finjustering av TrOCR-NorHand (håndskrift).
 
-Kjøres MANUELT: `make eksporter-korreksjoner`. Det finnes ingen
-automatisk «etter 500 korreksjoner»-utløser i koden (den påstanden var
-aldri implementert — verifisert 2026-07-20).
+Bare tekstkorreksjonene (textarea) hentes ut — det er den eneste modellen
+serveren faktisk bruker. Tidligere ble også dokumenttype-valg (choices)
+eksportert til NB-BERT, men den modellen er fjernet (2026-07-21).
+
+Kjøres MANUELT: `make eksporter-korreksjoner`, eller via
+`kjor_treningslop.py`. Det finnes ingen automatisk «etter N
+korreksjoner»-utløser i koden (den påstanden var aldri implementert).
 """
 import os
 import json
@@ -104,34 +108,6 @@ def konverter_til_trocr_format(oppgave: dict) -> dict | None:
     return None
 
 
-def konverter_til_nb_bert_format(oppgave: dict) -> dict | None:
-    """
-    Konverterer en Label Studio-oppgave til NB-BERT-treningsformat.
-    NB-BERT forventer:
-    {
-        "tekst": "dokumenttekst",
-        "etikett": "soknad" | "vedtak" | "korrespondanse"
-    }
-    """
-    annoteringer = oppgave.get("annotations", [])
-    if not annoteringer:
-        return None
-    annotering = annoteringer[0]
-    resultater = annotering.get("result", [])
-    for resultat in resultater:
-        if resultat.get("type") == "choices":
-            etikett = resultat.get("value", {}).get("choices", [None])[0]
-            tekst = oppgave.get("data", {}).get("tekst", "")
-            if etikett and tekst:
-                return {
-                    "tekst": tekst,
-                    "etikett": etikett,
-                    "oppgave_id": oppgave.get("id"),
-                    "tidsstempel": datetime.now().isoformat(),
-                }
-    return None
-
-
 def eksporter():
     """Hovedfunksjon — eksporterer alle korreksjoner."""
     Path(FINJUSTERING_STI).mkdir(parents=True, exist_ok=True)
@@ -140,7 +116,6 @@ def eksporter():
     print(f"Fant {len(prosjekter)} prosjekt(er) i Label Studio")
 
     trocr_data = []
-    nb_bert_data = []
 
     for prosjekt in prosjekter:
         prosjekt_id = prosjekt["id"]
@@ -155,10 +130,6 @@ def eksporter():
             if trocr:
                 trocr_data.append(trocr)
 
-            nb_bert = konverter_til_nb_bert_format(oppgave)
-            if nb_bert:
-                nb_bert_data.append(nb_bert)
-
     tidsstempel = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if trocr_data:
@@ -167,38 +138,13 @@ def eksporter():
             json.dump(trocr_data, f, ensure_ascii=False, indent=2)
         print(f"\nTrOCR-treningsdata: {len(trocr_data)} eksempler -> {trocr_fil}")
 
-    if nb_bert_data:
-        nb_bert_fil = f"{FINJUSTERING_STI}/nb_bert_{tidsstempel}.json"
-        with open(nb_bert_fil, "w", encoding="utf-8") as f:
-            json.dump(nb_bert_data, f, ensure_ascii=False, indent=2)
-        print(f"NB-BERT-treningsdata: {len(nb_bert_data)} eksempler -> {nb_bert_fil}")
-
-    totalt = len(trocr_data) + len(nb_bert_data)
-    print(f"\nTotalt eksportert: {totalt} korreksjoner")
+    print(f"\nTotalt eksportert: {len(trocr_data)} korreksjoner")
     print("Kjor 'make finjuster' for a starte modelltrening.")
-    return totalt
-
-
-def etter_finjustering():
-    """
-    Kalles etter at finjuster.py er ferdig.
-    Ber OCR-tjenesten laste inn oppdaterte modeller.
-    Tilsvarer feedback-pilen i arkitektur__1_.svg som peker
-    tilbake til lag 4 OCR — ikke til NLP.
-    """
-    ocr_url = os.environ.get("OCR_URL", "http://localhost:8001")
-    try:
-        svar = requests.post(
-            f"{ocr_url}/last-inn-modeller-pa-nytt",
-            timeout=60
-        )
-        svar.raise_for_status()
-        print("OCR-tjeneste har lastet inn oppdaterte modeller")
-    except requests.RequestException as feil:
-        print(f"Kunne ikke varsle OCR-tjeneste: {feil}")
+    return len(trocr_data)
 
 
 if __name__ == "__main__":
     totalt = eksporter()
     if totalt > 0:
-        etter_finjustering()
+        print("\nEtter finjustering: start serveren på nytt for å ta den "
+              "nytrente modellen i bruk (modeller lastes ved oppstart).")

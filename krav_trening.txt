@@ -1,0 +1,13 @@
+# ================================================================
+#  Krav for TRENINGSLØKKEN (kjor_treningslop.py + finjuster.py).
+#  Kjøres på en trenings-/utviklingsmaskin — IKKE nødvendig på den
+#  isolerte serveren, som bare LESER dokumenter.
+#
+#  torch/transformers m.m. er allerede i krav_lokal.txt. Her ligger
+#  bare det ekstra treningen trenger.
+# ================================================================
+
+# Åpen kildekode (Apache 2.0), Linux Foundation. Kjører 100 % lokalt:
+#   mlflow ui --backend-store-uri ./data/mlflow
+# Valgfritt — kjor_treningslop.py kjører også uten MLflow (uten sporing).
+mlflow==2.19.0

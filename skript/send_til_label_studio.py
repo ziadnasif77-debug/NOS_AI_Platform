@@ -1,16 +1,11 @@
 """
-Sender dokumenter med lav konfidens til Label Studio for korreksjon.
+Sender et dårlig lest dokument til Label Studio for menneskelig
+korreksjon — det første steget i treningsløkken.
 
-MERK (verifisert 2026-07-20): denne modulens `send_til_gjennomgang`
-kalles KUN fra den legacy HTTP-OCR-tjenesten (tjenester/ocr/hoved.py),
-som er profil-deaktivert og ikke starter i standard-deploy. Utløseren
-der er dessuten ruterens beslutning (fire grunner: bildekvalitet,
-OCR<85%, NLP<80%, valideringsfeil), ikke en bokstavelig 85%-sjekk her.
-
-Den KJØRENDE worker-pipelinen bruker IKKE denne modulen — den har sin
-egen Label Studio-sending i tjenester/workers/base_worker.py
-(send_til_label_studio) med 85%-porten i lag1_ocr. Denne fila er derfor
-i praksis død kode i standard-arkitekturen.
+Kalles av serverens auto-gjennomgang (dokument_api.py:
+_kanskje_send_til_gjennomgang) i en bakgrunnstråd når en lesing er tom,
+har lav OCR-konfidens, eller inneholder håndskrift. Best-effort: feiler
+sendingen, forsinkes aldri svaret til klienten.
 """
 import os
 import shutil
@@ -20,8 +15,9 @@ from pathlib import Path
 LABEL_STUDIO_URL = os.environ.get("LABEL_STUDIO_URL", "http://localhost:8080")
 LABEL_STUDIO_API_KEY = os.environ.get("LABEL_STUDIO_API_KEY", "")
 OCR_PROSJEKT_ID = os.environ.get("LABEL_STUDIO_OCR_PROSJEKT_ID", "1")
-# Delt volum mellom OCR-container og Label Studio — satt i docker-compose
-GJENNOMGANG_STI = os.environ.get("GJENNOMGANG_STI", "/data/gjennomgang")
+# Mappe der bildet legges så Label Studio kan vise det. Samme sti som
+# eksporter_fra_label_studio.py leser fra (GJENNOMGANG_STI/bilder/<id>.png).
+GJENNOMGANG_STI = os.environ.get("GJENNOMGANG_STI", "./data/gjennomgang")
 
 HEADERS = {
     "Authorization": f"Token {LABEL_STUDIO_API_KEY}",
