@@ -24,7 +24,9 @@ from prefect.logging import get_run_logger
 
 ROT = Path(__file__).resolve().parent.parent
 # Python i miljøet som har torch/transformers (IKKE Prefect-venv-et).
-HOVED_PYTHON = os.environ.get("HOVED_PYTHON", "python")
+# Prosjektets egen python ligger i nav (.pyruntime); fall tilbake til PATH.
+_std_py = ROT / ".pyruntime" / "python.exe"
+HOVED_PYTHON = os.environ.get("HOVED_PYTHON", str(_std_py) if _std_py.exists() else "python")
 
 
 def _kjor(navn: str, args: list) -> str:

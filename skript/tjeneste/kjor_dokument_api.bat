@@ -19,13 +19,15 @@ set "HF_HOME=%CD%\.cache\huggingface"
 set "PIP_CACHE_DIR=%CD%\.cache\pip"
 set "PREFECT_HOME=%CD%\.prefect"
 
+REM Prosjektets egen Python i nav (.pyruntime), ikke system-Python paa C.
+set "PY=%CD%\.pyruntime\python.exe"
+
 REM Sorg for at loggmappa finnes.
 if not exist "data\logger" mkdir "data\logger"
 
-REM Krev at Python finnes paa PATH.
-where python >nul 2>&1
-if errorlevel 1 (
-    >>"data\logger\dokument_api.feil.log" echo [%date% %time%] [FEIL] Python ikke funnet paa PATH. Tjenesten kan ikke starte.
+REM Krev at prosjekt-Python finnes.
+if not exist "%PY%" (
+    >>"data\logger\dokument_api.feil.log" echo [%date% %time%] [FEIL] Fant ikke %PY%. Tjenesten kan ikke starte.
     exit /b 1
 )
 
@@ -37,7 +39,7 @@ if "%DOKUMENT_API_PORT%"=="" set DOKUMENT_API_PORT=8600
 REM Kjor serveren i forgrunn. Naar prosessen avslutter, tar Scheduler over:
 REM  - krasj (kode <> 0)  -> Scheduler restarter (RestartCount/RestartInterval)
 REM  - manuell stopp (/end) -> Scheduler restarter IKKE
-python -u "skript\dokument_api.py" 1>>"data\logger\dokument_api.ut.log" 2>>"data\logger\dokument_api.feil.log"
+"%PY%" -u "skript\dokument_api.py" 1>>"data\logger\dokument_api.ut.log" 2>>"data\logger\dokument_api.feil.log"
 set KODE=%errorlevel%
 
 >>"data\logger\dokument_api.feil.log" echo [%date% %time%] dokument_api avsluttet med kode %KODE%.

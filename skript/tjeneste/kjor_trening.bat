@@ -15,11 +15,12 @@ REM Alt paa D:\nav (ikke C) — gjelder ogsaa SYSTEM-kontoen.
 set "EASYOCR_MODULE_PATH=%CD%\.EasyOCR"
 set "HF_HOME=%CD%\.cache\huggingface"
 set "PIP_CACHE_DIR=%CD%\.cache\pip"
+REM Prosjektets egen Python i nav (.pyruntime), ikke system-Python paa C.
+set "PY=%CD%\.pyruntime\python.exe"
 if not exist "data\logger" mkdir "data\logger"
 
-where python >nul 2>&1
-if errorlevel 1 (
-    >>"data\logger\trening.feil.log" echo [%date% %time%] [FEIL] Python ikke funnet paa PATH.
+if not exist "%PY%" (
+    >>"data\logger\trening.feil.log" echo [%date% %time%] [FEIL] Fant ikke %PY%.
     exit /b 1
 )
 
@@ -28,7 +29,7 @@ schtasks /end /tn "NAV-Dokument-API" >nul 2>&1
 
 REM 2) Kjor treningslopet.
 >>"data\logger\trening.ut.log" echo [%date% %time%] Starter treningslop ...
-python -u "skript\kjor_treningslop.py" 1>>"data\logger\trening.ut.log" 2>>"data\logger\trening.feil.log"
+"%PY%" -u "skript\kjor_treningslop.py" 1>>"data\logger\trening.ut.log" 2>>"data\logger\trening.feil.log"
 set KODE=%errorlevel%
 >>"data\logger\trening.ut.log" echo [%date% %time%] Treningslop avsluttet med kode %KODE%.
 

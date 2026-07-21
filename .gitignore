@@ -56,3 +56,4 @@ offline_pakke/
 .python/
 .cache/
 .prefect/
+.pyruntime/
