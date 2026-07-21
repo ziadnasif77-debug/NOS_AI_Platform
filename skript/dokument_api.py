@@ -83,6 +83,31 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # en brukers nettleser). Sett en kommaseparert liste av tillatte opphav,
 # eller «*» bevisst, hvis en nettleserklient trenger det.
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "").strip()
+# Rate-limiting: maks forespørsler per klient per minutt (dybdeforsvar mot
+# skraping/misbruk på et eksponert endepunkt). 0 = av. Bak en tunnel/gateway
+# er socket-IP-en localhost, så den videresendte klient-IP-en brukes.
+RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
+_rate_lock = threading.Lock()
+_rate_teller = {}   # klient-ip -> [vindu_minutt, antall]
+
+
+def _rate_tillatt(ip: str) -> bool:
+    """Kjerne-rate-limit (teller per klient per minutt). Modulnivå så den
+    kan enhetstestes uten en HTTP-handler. True = innenfor grensen."""
+    if RATE_LIMIT_PER_MIN <= 0:
+        return True
+    vindu = int(time.time() // 60)
+    with _rate_lock:
+        rad = _rate_teller.get(ip)
+        if rad is None or rad[0] != vindu:
+            if len(_rate_teller) > 10000:   # unngå ubegrenset vekst
+                _rate_teller.clear()
+            _rate_teller[ip] = [vindu, 1]
+            return True
+        rad[1] += 1
+        return rad[1] <= RATE_LIMIT_PER_MIN
+
+
 # Auto-gjennomgang: leser vi et dokument dårlig (lav OCR-konfidens eller
 # håndskrift), sendes det automatisk til Label Studio for menneskelig
 # korreksjon — som igjen mater treningsløkken (finjuster). AV som
@@ -1510,6 +1535,30 @@ class Handler(BaseHTTPRequestHandler):
         import hmac as _hmac
         return _hmac.compare_digest(self.headers.get("X-API-Key", ""), API_NOKKEL)
 
+    def _klient_ip(self) -> str:
+        """Klient-IP for rate-limiting. Bak en tunnel/gateway er socket-IP-en
+        localhost, så vi foretrekker den videresendte IP-en (kun til
+        rate-limit, ALDRI som sikkerhetsgrense — den kan forfalskes)."""
+        for h in ("CF-Connecting-IP", "X-Forwarded-For"):
+            v = self.headers.get(h, "").split(",")[0].strip()
+            if v:
+                return v
+        try:
+            return self.client_address[0]
+        except Exception:
+            return "?"
+
+    def _rate_ok(self) -> bool:
+        """True hvis innenfor grensen. Skriver 429 og returnerer False hvis
+        ikke."""
+        if _rate_tillatt(self._klient_ip()):
+            return True
+        self._svar(429, {"ok": False,
+                         "feil": f"For mange forespørsler (grense "
+                                 f"{RATE_LIMIT_PER_MIN}/min per klient). "
+                                 "Vent litt og prøv igjen."})
+        return False
+
     def _cors_origin(self):
         """Hvilket Access-Control-Allow-Origin skal svaret ha? None =
         ingen header (restriktivt). Ekko av forespørselens Origin kun når
@@ -1588,6 +1637,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_get_intern(self):
         sti = self._sti()
+        if sti not in ("", "/hjelp") and not self._rate_ok():
+            return
         if sti == "/openapi.json":
             return self._svar(200, _openapi())
         if sti in ("/dokumentasjon", "/docs"):
@@ -1791,6 +1842,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_post_intern(self):
         sti = self._sti()
+        if not self._rate_ok():          # før auth: beskytt selve nøkkelsjekken
+            return
         if not self._autorisert():
             return self._svar(401, {"ok": False, "feil": "Ugyldig eller manglende X-API-Key"})
 
