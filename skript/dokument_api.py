@@ -37,6 +37,7 @@ import queue
 import re
 import sys
 import tempfile
+import logging
 import threading
 import time
 import uuid
@@ -112,13 +113,40 @@ def _rate_tillatt(ip: str) -> bool:
 # (som kan inneholde PII). Tom sti = av. Svarer §3.3-kravet om at
 # revisjonssporet viser hvem/hva som traff hvert endepunkt.
 TILGANGSLOGG_STI = os.environ.get("TILGANGSLOGG", "data/logger/tilgang.log").strip()
-_tilgang_lock = threading.Lock()
+_tilgang_logger = None
+_tilgang_init_lock = threading.Lock()
+
+
+def _tilgangslogger():
+    """Lazy, tråd-trygg logger med ÉN vedvarende filhåndtak — unngår å
+    åpne fila + ta en global lås under I/O på HVER forespørsel (som ville
+    serialisere alle tråder ved høy last). Opprettes én gang."""
+    global _tilgang_logger
+    if _tilgang_logger is not None:
+        return _tilgang_logger
+    with _tilgang_init_lock:
+        if _tilgang_logger is None:
+            lg = logging.getLogger("nav.tilgang")
+            lg.setLevel(logging.INFO)
+            lg.propagate = False
+            if not lg.handlers:
+                try:
+                    mappe = os.path.dirname(TILGANGSLOGG_STI)
+                    if mappe:
+                        os.makedirs(mappe, exist_ok=True)
+                    h = logging.FileHandler(TILGANGSLOGG_STI, encoding="utf-8")
+                    h.setFormatter(logging.Formatter("%(message)s"))
+                    lg.addHandler(h)
+                except Exception:
+                    lg.addHandler(logging.NullHandler())
+            _tilgang_logger = lg
+    return _tilgang_logger
 
 
 def _skriv_tilgang(handler, code) -> None:
-    """Append én JSON-linje til tilgangsloggen. Best-effort, aldri fatal.
-    Logger kun ip, metode, sti (uten query), status, om X-API-Key var med,
-    og responstid — ALDRI forespørselskroppen."""
+    """Én JSON-linje til tilgangsloggen. Best-effort, aldri fatal. Logger
+    kun ip, metode, sti (uten query), status, om X-API-Key var med, og
+    responstid — ALDRI forespørselskroppen (kan inneholde PII)."""
     if not TILGANGSLOGG_STI:
         return
     try:
@@ -132,12 +160,7 @@ def _skriv_tilgang(handler, code) -> None:
             "nokkel": bool(handler.headers.get("X-API-Key")),
             "ms": ms,
         }, ensure_ascii=False)
-        with _tilgang_lock:
-            mappe = os.path.dirname(TILGANGSLOGG_STI)
-            if mappe:
-                os.makedirs(mappe, exist_ok=True)
-            with open(TILGANGSLOGG_STI, "a", encoding="utf-8") as f:
-                f.write(rad + "\n")
+        _tilgangslogger().info(rad)
     except Exception:
         pass
 
