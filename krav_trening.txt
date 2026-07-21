@@ -23,3 +23,9 @@
 #   .venv-mlflow\Scripts\pip install "mlflow==2.19.0"
 # og pek det mot samme filstore for å se løpene:
 #   .venv-mlflow\Scripts\mlflow ui --backend-store-uri ./data/mlflow
+#
+# SATT OPP: når .venv-mlflow finnes, logger kjor_treningslop.py automatisk
+# hvert løp dit via mlflow_bro.py (subprocess til venv-et) — treningsscriptene
+# importerer ikke mlflow selv, så ingen konflikt i hovedmiljøet. Mangler
+# venv-et, kjører løkken videre uten sporing. Sett MLFLOW_VENV_PYTHON hvis
+# venv-et ligger et annet sted.
