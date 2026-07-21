@@ -11,6 +11,14 @@ REM ====================================================================
 REM Gaa til prosjektroten (to nivaaer opp fra denne .bat-fila).
 cd /d "%~dp0..\.."
 
+REM ALT skal ligge paa D:\nav (ikke C): pek EasyOCR/HF/cache hit, saa selv
+REM SYSTEM-kontoen (som ikke arver bruker-setx) bruker D. Python-pakkene
+REM finnes uansett via junction paa standard user-site-stien.
+set "EASYOCR_MODULE_PATH=%CD%\.EasyOCR"
+set "HF_HOME=%CD%\.cache\huggingface"
+set "PIP_CACHE_DIR=%CD%\.cache\pip"
+set "PREFECT_HOME=%CD%\.prefect"
+
 REM Sorg for at loggmappa finnes.
 if not exist "data\logger" mkdir "data\logger"
 
