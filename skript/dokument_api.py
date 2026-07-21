@@ -108,6 +108,40 @@ def _rate_tillatt(ip: str) -> bool:
         return rad[1] <= RATE_LIMIT_PER_MIN
 
 
+# Tilgangslogg: én JSON-linje per forespørsel med METADATA — aldri kroppen
+# (som kan inneholde PII). Tom sti = av. Svarer §3.3-kravet om at
+# revisjonssporet viser hvem/hva som traff hvert endepunkt.
+TILGANGSLOGG_STI = os.environ.get("TILGANGSLOGG", "data/logger/tilgang.log").strip()
+_tilgang_lock = threading.Lock()
+
+
+def _skriv_tilgang(handler, code) -> None:
+    """Append én JSON-linje til tilgangsloggen. Best-effort, aldri fatal.
+    Logger kun ip, metode, sti (uten query), status, om X-API-Key var med,
+    og responstid — ALDRI forespørselskroppen."""
+    if not TILGANGSLOGG_STI:
+        return
+    try:
+        ms = round((time.time() - getattr(handler, "_t0_req", time.time())) * 1000)
+        rad = json.dumps({
+            "t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "ip": handler._klient_ip(),
+            "metode": getattr(handler, "command", "?"),
+            "sti": handler.path.split("?", 1)[0],
+            "kode": code.value if hasattr(code, "value") else code,
+            "nokkel": bool(handler.headers.get("X-API-Key")),
+            "ms": ms,
+        }, ensure_ascii=False)
+        with _tilgang_lock:
+            mappe = os.path.dirname(TILGANGSLOGG_STI)
+            if mappe:
+                os.makedirs(mappe, exist_ok=True)
+            with open(TILGANGSLOGG_STI, "a", encoding="utf-8") as f:
+                f.write(rad + "\n")
+    except Exception:
+        pass
+
+
 # Auto-gjennomgang: leser vi et dokument dårlig (lav OCR-konfidens eller
 # håndskrift), sendes det automatisk til Label Studio for menneskelig
 # korreksjon — som igjen mater treningsløkken (finjuster). AV som
@@ -1612,6 +1646,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_OPTIONS(self):
+        self._t0_req = time.time()
         # CORS-preflight for nettleserklienter — svarer kun med tillatelse
         # når opphavet er på whitelisten (se _cors_origin / CORS_ORIGINS).
         self.send_response(204)
@@ -1628,6 +1663,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.path.split("?", 1)[0].rstrip("/")
 
     def do_GET(self):
+        self._t0_req = time.time()
         # Samme sikkerhetsnett som do_POST: uventet feil → ærlig JSON-500,
         # aldri en taus lukket forbindelse (som blir 502 i en tunnel)
         try:
@@ -1833,6 +1869,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._svar(200, svar)
 
     def do_POST(self):
+        self._t0_req = time.time()
         # Sikkerhetsnett: en uventet feil skal gi et ærlig JSON-svar
         # (500), aldri en taus lukket forbindelse som blir 502 i tunnelen
         try:
@@ -2295,6 +2332,11 @@ class Handler(BaseHTTPRequestHandler):
             "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
                         "modell": _borealis["modellfil"] or _borealis["motor"]},
         })
+
+    def log_request(self, code='-', size='-'):
+        # Strukturert tilgangslogg + behold den ryddige stdout-linjen.
+        _skriv_tilgang(self, code)
+        super().log_request(code, size)
 
     def log_message(self, fmt, *args):
         # Én ryddig linje per forespørsel så du ser at UiPath treffer
