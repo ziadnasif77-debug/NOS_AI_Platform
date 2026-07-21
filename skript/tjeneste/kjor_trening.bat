@@ -5,16 +5,19 @@ REM  NAV - ukentlig treningsjobb (kjores av Task Scheduler).
 REM  GPU-en (8 GB) har ikke plass til bade serveren OG trening samtidig,
 REM  sa vi:
 REM    1) stopper serveren  -> frigjor GPU
-REM    2) kjorer treningslopet (eksporter -> finjuster, sporet i MLflow)
+REM    2) kjorer treningslopet (eksporter -> finjuster -> kvalitetsport)
 REM    3) starter serveren igjen -> omstarten laster den nytrente modellen
 REM  Steg 1 og 3 er best-effort: kjorer ikke serveren som tjeneste, gjor
 REM  de ingenting (og du bor stoppe en manuelt startet server selv forst).
 REM ====================================================================
 cd /d "%~dp0..\.."
-REM Alt paa D:\nav (ikke C) — gjelder ogsaa SYSTEM-kontoen.
+REM Alt i nav-mappa (ikke C) — gjelder ogsaa SYSTEM-kontoen.
 set "EASYOCR_MODULE_PATH=%CD%\.EasyOCR"
 set "HF_HOME=%CD%\.cache\huggingface"
 set "PIP_CACHE_DIR=%CD%\.cache\pip"
+REM Kun nav-lokale pakker: ignorer %APPDATA%\Python -> ingen C-binding. UTF-8-trygg.
+set "PYTHONNOUSERSITE=1"
+set "PYTHONUTF8=1"
 REM Prosjektets egen Python i nav (.pyruntime), ikke system-Python paa C.
 set "PY=%CD%\.pyruntime\python.exe"
 if not exist "data\logger" mkdir "data\logger"

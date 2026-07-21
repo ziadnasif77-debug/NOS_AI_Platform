@@ -11,13 +11,16 @@ REM ====================================================================
 REM Gaa til prosjektroten (to nivaaer opp fra denne .bat-fila).
 cd /d "%~dp0..\.."
 
-REM ALT skal ligge paa D:\nav (ikke C): pek EasyOCR/HF/cache hit, saa selv
-REM SYSTEM-kontoen (som ikke arver bruker-setx) bruker D. Python-pakkene
-REM finnes uansett via junction paa standard user-site-stien.
+REM ALT skal ligge i nav-mappa (ikke C): pek EasyOCR/HF/cache hit, saa selv
+REM SYSTEM-kontoen (som ikke arver bruker-setx) bruker nav. Python-pakkene
+REM finnes nav-lokalt via .pyruntime\Lib\site-packages\nav_pakker.pth.
 set "EASYOCR_MODULE_PATH=%CD%\.EasyOCR"
 set "HF_HOME=%CD%\.cache\huggingface"
 set "PIP_CACHE_DIR=%CD%\.cache\pip"
 set "PREFECT_HOME=%CD%\.prefect"
+REM Kun nav-lokale pakker: ignorer %APPDATA%\Python -> ingen C-binding. UTF-8-trygg.
+set "PYTHONNOUSERSITE=1"
+set "PYTHONUTF8=1"
 
 REM Prosjektets egen Python i nav (.pyruntime), ikke system-Python paa C.
 set "PY=%CD%\.pyruntime\python.exe"
