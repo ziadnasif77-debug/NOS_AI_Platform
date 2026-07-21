@@ -17,6 +17,7 @@ en engineering-brief om å skalere NAV Dokument-API. Ingen kode er endret.
 | [ADR-001-gjenbruk-vs-nybygg.md](ADR-001-gjenbruk-vs-nybygg.md) | Hvilke slettede komponenter gjenbrukes vs. bygges på nytt |
 | [ADR-002-ko-abstraksjon.md](ADR-002-ko-abstraksjon.md) | Køabstraksjon som dekker både container-prod og luftgap |
 | [revisjon-gjenbrukskode.md](revisjon-gjenbrukskode.md) | Fil-nivå revisjon av gjenbrukskandidatene (før restaurering) |
+| [audit-skjema.md](audit-skjema.md) | Audit-record-skjema (§7.4): versjonssporing, immutabilitet, oppbevaring |
 
 ## Fase 0 — antakelser (åpne forretningsbeslutninger uthevet)
 
