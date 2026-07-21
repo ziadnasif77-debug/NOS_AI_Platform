@@ -61,7 +61,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_telefoner, finn_dato,
                                finn_koder_med_kontekst,
                                klassifiser_datoer, strukturert_uttrekk,
-                               utvid_entiteter)
+                               utvid_entiteter, UTTREKK_REGEL_VERSJON)
 
 PORT = int(os.environ.get("DOKUMENT_API_PORT",
                           os.environ.get("UIPATH_API_PORT", "8600")))
@@ -96,6 +96,37 @@ AUTO_GJENNOMGANG = bool(LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY)
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
 API_VERSJON = "1.1.0"
 PROMPT_VERSJON = "p10"
+
+_NORHAND_VERSJON = None
+
+
+def _norhand_versjon() -> str:
+    """Versjonsstempel for den aktive norhand-modellen, skrevet av
+    kvalitetsporten ved promotering (modeller/norhand/nav_versjon.txt).
+    Cachet fordi den kjørende modellen ikke byttes uten omstart. «ukjent»
+    hvis modellen aldri er promotert gjennom porten."""
+    global _NORHAND_VERSJON
+    if _NORHAND_VERSJON is None:
+        try:
+            sti = os.path.join(os.environ.get("MODELLER_STI", "./modeller"),
+                               "norhand", "nav_versjon.txt")
+            with open(sti, encoding="utf-8") as f:
+                _NORHAND_VERSJON = f.read().strip() or "ukjent"
+        except Exception:
+            _NORHAND_VERSJON = "ukjent"
+    return _NORHAND_VERSJON
+
+
+def _versjon_stempel() -> dict:
+    """R39/§4: full proveniens per svar — modell-, regel- og terskelversjon
+    så hvert result kan spores til nøyaktig det som produserte det."""
+    return {
+        "api": API_VERSJON,
+        "prompt": PROMPT_VERSJON,
+        "uttrekk_regler": UTTREKK_REGEL_VERSJON,
+        "ocr_konfidens_terskel": LS_KONFIDENS_TERSKEL,
+        "norhand": _norhand_versjon(),
+    }
 # Maks lengde på generert svar. Taket er en RESSURSGRENSE, ikke en
 # stilregel: korte svar stopper naturlig ved EOS uansett. Treffer et
 # svar taket, flagges det ALLTID eksplisitt (svar_avkortet + advarsel).
@@ -1508,6 +1539,11 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _svar(self, kode, data):
+        # R39/§4: berik versjon-blokken med full proveniens (modell/regel/
+        # terskel) i ÉTT punkt. Additivt — eksisterende nøkler (api, prompt,
+        # modell) beholdes, så ingen klient brytes.
+        if isinstance(data, dict) and isinstance(data.get("versjon"), dict):
+            data["versjon"] = {**_versjon_stempel(), **data["versjon"]}
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(kode)
         self.send_header("Content-Type", "application/json; charset=utf-8")

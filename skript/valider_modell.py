@@ -27,6 +27,7 @@ import os
 import sys
 import json
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 MODELLER_STI = os.environ.get("MODELLER_STI", "./modeller")
@@ -120,6 +121,13 @@ def promuster() -> bool:
     if LIVE.exists():
         _flytt(LIVE, FORRIGE)          # ta vare på nåværende for rollback
     _flytt(KANDIDAT, LIVE)
+    # Versjonsstempel for sporbarhet (§4): API-et leser dette og legger det
+    # på hvert svar, så et result kan spores til nøyaktig norhand-modellen.
+    try:
+        (LIVE / "nav_versjon.txt").write_text(
+            f"norhand-{datetime.now():%Y%m%d-%H%M%S}", encoding="utf-8")
+    except Exception:
+        pass
     print(f"Promotert: kandidat → live (forrige lagret i {FORRIGE.name} "
           "for rull-tilbake).")
     return True

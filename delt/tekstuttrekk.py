@@ -15,6 +15,10 @@ from datetime import datetime
 
 from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 
+# Versjon av det deterministiske regelverket. Bumpes når mønstre/vakter
+# endres, så hvert svar kan spores til reglene som produserte det (§4).
+UTTREKK_REGEL_VERSJON = "u1"
+
 # ------------------------------------------------------------------ #
 #  Sjekksummer (mod11)                                                 #
 # ------------------------------------------------------------------ #
