@@ -133,6 +133,18 @@ Orkestratoren (`kjor_treningslop.py`) skriver et sammendrag av hvert løp
 og `data/logger`. Planlegg tilbakevendende kjøring med Windows Task
 Scheduler.
 
+**Kontroll + observabilitet med Prefect** (valgfritt, Apache 2.0): kjør
+løkka fra et web-UI og se NØYAKTIG hvilket steg som evt. feilet, med logg
+og traceback. Prefect ligger i et eget venv (`.venv-prefect`); flyten
+([skript/prefect_flyt.py](skript/prefect_flyt.py)) kaller treningsskriptene
+i hovedmiljøet via subprocess, så det ikke kolliderer med torch.
+
+```bash
+python -m venv .venv-prefect && .venv-prefect/Scripts/pip install prefect
+make prefect-server   # UI på http://127.0.0.1:4200
+make prefect-kjor     # kjør løkka som flyt
+```
+
 **Auto-gjennomgang** (det første steget): leser serveren et dokument
 dårlig, sender den det selv til Label Studio for korreksjon — i en
 bakgrunnstråd, så svaret til klienten aldri forsinkes. Svaret merker det

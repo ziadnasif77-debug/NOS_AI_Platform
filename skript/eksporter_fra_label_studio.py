@@ -16,6 +16,14 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
+# UTF-8-trygg utskrift (se finjuster.py): norsk skal ikke krasje som subprocess.
+import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 LABEL_STUDIO_URL = os.environ.get("LABEL_STUDIO_URL", "http://localhost:8080")
 LABEL_STUDIO_API_KEY = os.environ.get("LABEL_STUDIO_API_KEY", "")
 FINJUSTERING_STI = os.environ.get("FINJUSTERING_STI", "./data/finjustering")

@@ -20,6 +20,16 @@ from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
 
+# UTF-8-trygg utskrift: norsk (æøå) skal ikke krasje når stdout er en pipe/
+# fil med ikke-UTF-8-kodesett (cp1256), slik som ved kjøring som subprocess
+# (Prefect) eller omdirigert til loggfil.
+import sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 FINJUSTERING_STI = os.environ.get("FINJUSTERING_STI", "./data/finjustering")
 MODELLER_STI = os.environ.get("MODELLER_STI", "./modeller")
 MIN_EKSEMPLER = 10

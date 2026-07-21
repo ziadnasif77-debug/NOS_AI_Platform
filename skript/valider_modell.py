@@ -30,6 +30,13 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+# UTF-8-trygg utskrift (se finjuster.py): norsk skal ikke krasje som subprocess.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 MODELLER_STI = os.environ.get("MODELLER_STI", "./modeller")
 VALIDERING_STI = os.environ.get("VALIDERING_STI", "./data/validering/norhand.json")
 LIVE = Path(MODELLER_STI) / "norhand"
@@ -168,6 +175,18 @@ if __name__ == "__main__":
         sys.exit(0 if rull_tilbake() else 1)
     if "--promuster" in sys.argv:
         sys.exit(0 if promuster() else 1)
+    if "--port" in sys.argv:
+        # Kvalitetsport for automatikk (Prefect): valider OG promoter kun hvis
+        # kandidaten er minst like god. Avvist/manglende sett er IKKE en feil
+        # (porten gjorde jobben) — exit 0; ekte feil (modell-lasting o.l.)
+        # propagerer som unntak → non-zero → synlig som rødt i Prefect.
+        v = vurder()
+        print(json.dumps(v, ensure_ascii=False))
+        if v["godkjent"]:
+            promuster()
+        else:
+            print(f"Ikke promotert ({v['grunn']}).")
+        sys.exit(0)
 
     v = vurder()
     print(json.dumps(v, ensure_ascii=False, indent=2))

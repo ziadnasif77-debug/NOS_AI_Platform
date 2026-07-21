@@ -3,7 +3,8 @@
 
 .PHONY: start klient test korpus modeller \
         trening eksporter-korreksjoner finjuster valider rull-tilbake \
-        rydd pakk-offline installer-offline sjekk-miljo lovtekst
+        rydd prefect-server prefect-kjor \
+        pakk-offline installer-offline sjekk-miljo lovtekst
 
 # ─── Server og klient ────────────────────────────────────────────────
 start:                       ## Start dokument-API-et på :8600
@@ -35,6 +36,13 @@ rull-tilbake:                ## Gå tilbake til forrige norhand-modell
 # ─── Oppbevaring (GDPR) ──────────────────────────────────────────────
 rydd:                        ## Tørrkjør rydding av gamle gjennomgangsbilder (legg til ARGS=--slett)
 	python skript/rydd_gjennomgang.py $(ARGS)
+
+# ─── Prefect (kontroll + observabilitet av treningsløkka) ────────────
+prefect-server:              ## Start Prefect-UI-et på http://127.0.0.1:4200
+	.venv-prefect/Scripts/prefect server start
+
+prefect-kjor:                ## Kjør treningsløkka som Prefect-flyt (ser hvor det evt. feiler)
+	.venv-prefect/Scripts/python skript/prefect_flyt.py
 
 # ─── Test ────────────────────────────────────────────────────────────
 test:                        ## Kjør enhetstestene (stopp serveren først — GPU deles)
