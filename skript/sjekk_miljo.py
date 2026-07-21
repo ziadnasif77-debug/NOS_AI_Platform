@@ -3,9 +3,10 @@ MILJØSJEKK — verifiserer at ALT det lokale dokument-API-et trenger er
 på plass. Kjøres på serveren etter installasjon (og når som helst).
 
 Sjekker, i rekkefølge: Python-versjon, alle kritiske importer, GPU/CUDA,
-system-DLL-er (pyzbar/zbar), EasyOCR-modeller, Borealis-modellfiler, og
-til slutt en LITEN ekte kjøring (uttrekk fra en tekst). Skriver en klar
-OK/FEIL-rapport — ingenting antas, alt bekreftes.
+system-DLL-er (pyzbar/zbar), EasyOCR-modeller, Borealis-modellfiler, en
+LITEN ekte kjøring (uttrekk fra en tekst), og til slutt PORTABILITET
+(nav-lokal tolk, buntet msvcp140.dll, ingen sti-lekkasje til C). Skriver en
+klar OK/FEIL-rapport — ingenting antas, alt bekreftes.
 
 Bruk (fra prosjektroten):
     python skript/sjekk_miljo.py
@@ -140,6 +141,52 @@ def sjekk_ekte_kjoring():
         feil(f"deterministisk uttrekk feilet: {exc}")
 
 
+def sjekk_portabilitet():
+    """Bekrefter at KOPIEN kjører fra seg selv (nav-lokal), ikke lener seg på
+    C:/gammel maskin. Fanger de vanligste flytte-feilene på en fersk server."""
+    print("\n[8] Portabilitet (nav-lokal, ingen C-binding)")
+    # a) kjører vi prosjektets EGEN .pyruntime-tolk?
+    forventet = ROT / ".pyruntime" / "python.exe"
+    faktisk = Path(sys.executable)
+    if forventet.exists():
+        rett = faktisk.resolve() == forventet.resolve()
+        (ok if rett else adv)(
+            f"tolk: {faktisk}"
+            + ("" if rett else f" — forventet {forventet} (start via START_ALT.bat)"))
+    else:
+        feil(f"fant ikke prosjekt-tolken: {forventet} (kopierte du HELE mappa?)")
+    # b) ingen sys.path utenfor nav (C:, %APPDATA%, gammel maskin)
+    rot_l = str(ROT).lower()
+    lekk = [p for p in sys.path
+            if p and not p.lower().startswith(rot_l) and not p.lower().endswith(".zip")]
+    (ok if not lekk else adv)(
+        "sys.path er ren nav-lokal" if not lekk
+        else f"sys.path peker UTENFOR nav: {lekk} — sett PYTHONNOUSERSITE=1")
+    # c) msvcp140.dll lastet fra .pyruntime (buntet), ikke System32/VC++-redist
+    try:
+        import ctypes
+        import torch  # noqa: drar inn msvcp140.dll
+        from ctypes import c_void_p, c_wchar_p, c_uint32
+        k = ctypes.windll.kernel32
+        k.GetModuleHandleW.restype = c_void_p
+        k.GetModuleHandleW.argtypes = [c_wchar_p]
+        k.GetModuleFileNameW.restype = c_uint32
+        k.GetModuleFileNameW.argtypes = [c_void_p, c_wchar_p, c_uint32]
+        h = k.GetModuleHandleW("msvcp140.dll")
+        if h:
+            buf = ctypes.create_unicode_buffer(300)
+            k.GetModuleFileNameW(h, buf, 300)
+            fra_nav = rot_l in buf.value.lower()
+            (ok if fra_nav else adv)(
+                f"msvcp140.dll fra: {buf.value}"
+                + ("" if fra_nav else " — IKKE fra nav; bunt DLL-ene i .pyruntime "
+                   "eller installer VC++ 2015-2022 x64-redist på serveren"))
+        else:
+            adv("msvcp140.dll ikke lastet ennå (torch importert?)")
+    except Exception as exc:
+        adv(f"msvcp140-sjekk hoppet over: {exc}")
+
+
 def main():
     print("=" * 60)
     print("  MILJØSJEKK — NAV lokalt dokument-API")
@@ -151,6 +198,7 @@ def main():
     sjekk_easyocr_modeller()
     sjekk_borealis()
     sjekk_ekte_kjoring()
+    sjekk_portabilitet()
     print("\n" + "=" * 60)
     if _feil:
         print(f"  RESULTAT: {len(_feil)} FEIL, {len(_advarsel)} advarsler")
