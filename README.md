@@ -128,13 +128,10 @@ live tas vare på i `modeller/norhand-forrige` for umiddelbar rull-tilbake
 (`python skript/valider_modell.py --rull-tilbake`). Uten valideringssett
 promoteres ingenting automatisk.
 
-Orkestratoren sporer hvert løp i **MLflow** (åpen kildekode, kjører
-lokalt — `mlflow ui --backend-store-uri ./data/mlflow`): antall
-korreksjoner, treningstap, CER (live/kandidat), port-utfall, varighet.
-MLflow er valgfritt (`krav_trening.txt`); uten det kjører løkken likevel,
-bare uten sporing. Dette er den lette erstatningen for en Kubeflow-pipeline
-— samme DAG og sporing, uten Kubernetes. Planlegg tilbakevendende kjøring
-med Windows Task Scheduler.
+Orkestratoren (`kjor_treningslop.py`) skriver et sammendrag av hvert løp
+(antall korreksjoner, CER live/kandidat, port-utfall, varighet) til stdout
+og `data/logger`. Planlegg tilbakevendende kjøring med Windows Task
+Scheduler.
 
 **Auto-gjennomgang** (det første steget): leser serveren et dokument
 dårlig, sender den det selv til Label Studio for korreksjon — i en

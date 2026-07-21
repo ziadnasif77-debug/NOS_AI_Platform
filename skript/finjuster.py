@@ -3,17 +3,14 @@ Finjustering av håndskriftmodellen (TrOCR-NorHand) på menneskelige
 korreksjoner fra Label Studio.
 
 Kjøres MANUELT (`make finjuster`) eller via orkestratoren
-`kjor_treningslop.py` (som også sporer løpet i MLflow). Det finnes INGEN
-automatisk utløser på korreksjonsantall eller tid i koden — ønskes det,
-planlegg kjøringen med Windows Task Scheduler.
+`kjor_treningslop.py`. Det finnes INGEN automatisk utløser på
+korreksjonsantall eller tid i koden — ønskes det, planlegg kjøringen med
+Windows Task Scheduler.
 
 Bare norhand trenes her, fordi det er den eneste trente modellen serveren
 faktisk bruker. Tidligere trente denne fila også NB-BERT (dokumenttype)
 og LayoutLMv3 (layout) — modeller ingenting i leseløypa kalte. De er
 fjernet (2026-07-21).
-
-Miljøvariabel TRENING_RAPPORT styrer Hugging Face-loggingen:
-  "none" (standard) eller "mlflow" (settes av kjor_treningslop.py).
 """
 import os
 import json
@@ -26,9 +23,6 @@ from torch.utils.data import Dataset
 FINJUSTERING_STI = os.environ.get("FINJUSTERING_STI", "./data/finjustering")
 MODELLER_STI = os.environ.get("MODELLER_STI", "./modeller")
 MIN_EKSEMPLER = 10
-# "none" | "mlflow" — Hugging Face-trenerens rapportering. Orkestratoren
-# setter "mlflow" så treningstap havner i samme MLflow-løp.
-TRENING_RAPPORT = os.environ.get("TRENING_RAPPORT", "none")
 
 
 class TrOCRDatasett(Dataset):
@@ -120,7 +114,7 @@ def finjuster_norhand() -> int | None:
         predict_with_generate=True,
         fp16=torch.cuda.is_available(),
         logging_steps=10,
-        report_to=TRENING_RAPPORT,
+        report_to="none",
     )
 
     trener = Seq2SeqTrainer(

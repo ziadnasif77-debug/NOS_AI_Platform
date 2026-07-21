@@ -17,7 +17,7 @@ modeller:                    ## Last ned AI-modellene (én gang)
 	python skript/last_ned_modeller.py
 
 # ─── Treningsløkke (manuell modellforbedring) ────────────────────────
-trening:                     ## Hele løkken (eksporter → finjuster) med MLflow-sporing
+trening:                     ## Hele løkken: eksporter → finjuster → kvalitetsport
 	python skript/kjor_treningslop.py
 
 eksporter-korreksjoner:      ## Bare hent korreksjoner fra Label Studio → data/finjustering

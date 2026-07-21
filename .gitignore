@@ -51,4 +51,3 @@ dump.rdb
 cloudflared.exe
 data/jobber/
 offline_pakke/
-.venv-mlflow/
