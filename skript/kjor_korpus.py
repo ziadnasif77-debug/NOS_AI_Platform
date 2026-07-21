@@ -27,6 +27,14 @@ import os
 import sys
 import time
 
+# UTF-8-trygg utskrift (se finjuster.py): norsk (æøå) skal ikke krasje når
+# stdout er en pipe/fil med cp1256 (f.eks. i CI eller omdirigert til logg).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
 

@@ -64,6 +64,16 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                klassifiser_datoer, strukturert_uttrekk,
                                utvid_entiteter, UTTREKK_REGEL_VERSJON)
 
+# UTF-8-trygg utskrift: norsk (æøå) skal ikke krasje når stdout er en fil/
+# pipe med ikke-UTF-8-kodesett (cp1256) — f.eks. når tjeneste-wrapperen
+# omdirigerer til data/logger/dokument_api.ut.log.
+import sys as _sys
+try:
+    _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    _sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 PORT = int(os.environ.get("DOKUMENT_API_PORT",
                           os.environ.get("UIPATH_API_PORT", "8600")))
 MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
@@ -772,7 +782,11 @@ BOREALIS_GGUF_MAPPE = os.path.join(ROT, "modeller", "borealis-gguf")
 # per side). 8192 frigjør ~1 GiB uten å koste noe: dokumentteksten som
 # faktisk sendes inn er uansett kappet på MAKS_LLM_TEGN (12000 tegn ≈
 # 4000 tokens), så budsjettet er mer enn dobbelt så stort som behovet.
-BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "8192"))
+# 8192 KREVER for mye VRAM sammen med OCR på et 8 GB-kort: llama.cpp
+# segfaulter under KV-cache-allokering (full-size SWA-cache). 4096 er
+# verifisert trygt her (og romslig — LLM-input er uansett kappet på
+# MAKS_LLM_TEGN). Øk bare hvis du frigjør GPU (færre GPU-lag / mindre OCR).
+BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "4096"))
 
 
 def _finn_gguf() -> str:
