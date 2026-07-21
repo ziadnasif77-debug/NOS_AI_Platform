@@ -92,7 +92,8 @@ def sjekk_dll():
 
 def sjekk_easyocr_modeller():
     print("\n[5] EasyOCR-modeller")
-    mappe = Path.home() / ".EasyOCR" / "model"
+    _eo = os.environ.get("EASYOCR_MODULE_PATH")
+    mappe = (Path(_eo) if _eo else Path.home() / ".EasyOCR") / "model"
     pth = list(mappe.glob("*.pth")) if mappe.is_dir() else []
     if pth:
         ok(f"{len(pth)} modeller i {mappe} "

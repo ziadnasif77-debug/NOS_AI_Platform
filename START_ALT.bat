@@ -16,6 +16,8 @@ REM Kun nav-lokale pakker: ignorer %APPDATA%\Python (user-site) -> ingen C-bindi
 set "PYTHONNOUSERSITE=1"
 REM UTF-8-trygg utskrift (norske tegn i pipe/redirect).
 set "PYTHONUTF8=1"
+REM Trygg Borealis-kontekst paa 8 GB-kort (8192 segfaulter i llama.cpp KV-cache).
+if "%BOREALIS_KONTEKST%"=="" set "BOREALIS_KONTEKST=4096"
 
 if not exist "%PY%" (
     echo [FEIL] Fant ikke prosjekt-Python: %PY%
