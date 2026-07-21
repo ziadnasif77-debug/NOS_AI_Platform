@@ -64,6 +64,32 @@ Oppgaveplanleggeren restarter serveren automatisk (opptil 999 ganger, ett
 minutt mellom hvert forsøk). Stopper du den selv med `/end`, restartes den
 **ikke** — det regnes som en villet stopp.
 
+## Ukentlig trening (valgfritt)
+
+Vil du at modellen skal forbedres av seg selv på menneskelige
+korreksjoner, planlegg treningsløkken ukentlig:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer_trening.ps1
+# eller velg dag/tid:
+powershell -ExecutionPolicy Bypass -File installer_trening.ps1 -Dag Saturday -Klokke 02:00
+```
+
+Jobben (`NAV-Trening-ukentlig`) er smart med GPU-en (8 GB rekker ikke til
+server + trening samtidig): den **stopper serveren**, kjører
+`kjor_treningslop.py` (eksporter → finjuster, sporet i MLflow), og
+**starter serveren igjen** — omstarten laster den nytrente modellen.
+
+| Handling | Kommando |
+|---|---|
+| Test nå | `schtasks /run   /tn "NAV-Trening-ukentlig"` |
+| Status  | `schtasks /query /tn "NAV-Trening-ukentlig" /v /fo LIST` |
+| Logg    | `data\logger\trening.ut.log` (+ `.feil.log`) |
+| Sporing | `mlflow ui --backend-store-uri .\data\mlflow` |
+
+Kjører serveren som SYSTEM ikke ser GPU-en, gjør ikke treningsjobben det
+heller — kjør da `make trening` manuelt i din egen sesjon.
+
 ## Alternativ: NSSM (ekte Windows-tjeneste)
 
 Vil du ha `net start/stop`, oppføring i `services.msc` og loggrotasjon,
