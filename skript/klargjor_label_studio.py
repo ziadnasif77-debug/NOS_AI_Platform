@@ -31,23 +31,54 @@ LS_URL = os.environ.get("LABEL_STUDIO_URL", "http://localhost:8080")
 LS_NOKKEL = os.environ.get("LABEL_STUDIO_API_KEY", "")
 PROSJEKT_TITTEL = "OCR-korreksjon (norsk)"
 
+# Profesjonelt oppsett etter Label Studios offisielle OCR-mal: STORT bilde
+# (Image har maxWidth=750px som standard — derfor så bildet lite ut!) med
+# zoom/lysstyrke/kontrast, valgfrie regionmarkeringer (Labels+Rectangle,
+# som i malen bedrifter bruker), og en klistret høyrekolonne med det
+# forhåndsutfylte korreksjonsfeltet. NB: kun ÉN TextArea — eksporten
+# (eksporter_fra_label_studio) leser første result av type «textarea»,
+# så regionverktøyene er bevisst uten perRegion-transkripsjon.
 ETIKETT_KONFIG = """<View>
-  <Header value="Rett maskinens lesing så den stemmer med dokumentbildet"/>
-  <View style="display: flex; gap: 16px; align-items: flex-start;">
-    <View style="flex: 1; min-width: 45%;">
-      <Image name="bilde" value="$bilde" zoom="true" zoomControl="true" rotateControl="true"/>
+  <Header value="Rett maskinens lesing så den stemmer med dokumentbildet — Ctrl+Enter sender inn"/>
+  <View style="display: flex; gap: 20px; align-items: flex-start;">
+    <View style="flex: 62%; min-width: 55%;">
+      <Image name="bilde" value="$bilde" width="100%" maxWidth="100%"
+             zoom="true" zoomControl="true" defaultZoom="fit"
+             rotateControl="true" brightnessControl="true" contrastControl="true"/>
+      <Header value="Marker gjerne områder (valgfritt)" size="4"/>
+      <Labels name="omraade_type" toName="bilde">
+        <Label value="Håndskrift" background="#ec4899"/>
+        <Label value="Trykt tekst" background="#22c55e"/>
+        <Label value="Uleselig" background="#ef4444"/>
+        <Label value="Stempel/signatur" background="#f59e0b"/>
+      </Labels>
+      <Rectangle name="omraade" toName="bilde" strokeWidth="3"/>
     </View>
-    <View style="flex: 1;">
-      <Header value="Maskinens lesing (konfidens: $konfidens %)"/>
-      <Text name="tekst" value="$tekst"/>
-      <Header value="Maskinen fant disse feltene"/>
-      <Text name="funn" value="Navn: $navn — Dato: $dato — Ytelse: $ytelse — Fylke: $fylke"/>
+    <View style="flex: 38%; position: sticky; top: 12px;">
+      <Header value="Maskinens lesing — konfidens: $konfidens %"/>
+      <Collapse>
+        <Panel value="Felter maskinen fant">
+          <Text name="funn" value="Navn: $navn — Dato: $dato — Ytelse: $ytelse — Fylke: $fylke"/>
+        </Panel>
+        <Panel value="Rå maskinlesing (original)">
+          <Text name="tekst" value="$tekst"/>
+        </Panel>
+      </Collapse>
       <Header value="Korrigert tekst — forhåndsutfylt, rett bare feilene"/>
       <TextArea name="transkripsjon" toName="bilde" value="$tekst"
-                rows="12" editable="true" maxSubmissions="1"/>
+                rows="16" editable="true" maxSubmissions="1"/>
     </View>
   </View>
 </View>"""
+
+# Reserve uten Collapse-taggen (i tilfelle LS-versjonen avviser den).
+ETIKETT_KONFIG_ENKEL = ETIKETT_KONFIG.replace(
+    "<Collapse>", "").replace("</Collapse>", "").replace(
+    '<Panel value="Felter maskinen fant">',
+    '<Header value="Felter maskinen fant" size="4"/>').replace(
+    '<Panel value="Rå maskinlesing (original)">',
+    '<Header value="Rå maskinlesing (original)" size="4"/>').replace(
+    "</Panel>", "")
 
 
 def _hoder() -> dict:
@@ -70,8 +101,13 @@ def finn_eller_opprett_prosjekt() -> int:
     for p in svar.json().get("results", []):
         if p.get("title") == PROSJEKT_TITTEL:
             print(f"[OK] Prosjektet finnes allerede (id {p['id']}) — oppdaterer grensesnittet")
-            requests.patch(f"{LS_URL}/api/projects/{p['id']}/", headers=_hoder(),
-                           json={"label_config": ETIKETT_KONFIG}, timeout=15).raise_for_status()
+            patch = requests.patch(f"{LS_URL}/api/projects/{p['id']}/", headers=_hoder(),
+                                   json={"label_config": ETIKETT_KONFIG}, timeout=15)
+            if not patch.ok:
+                print(f"[ADV] Full konfig avvist ({patch.status_code}) — prøver uten Collapse")
+                requests.patch(f"{LS_URL}/api/projects/{p['id']}/", headers=_hoder(),
+                               json={"label_config": ETIKETT_KONFIG_ENKEL},
+                               timeout=15).raise_for_status()
             return p["id"]
     svar = requests.post(
         f"{LS_URL}/api/projects/", headers=_hoder(), timeout=30,
