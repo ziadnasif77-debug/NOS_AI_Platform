@@ -5,6 +5,7 @@ miljø selv (`PYTHONNOUSERSITE=1` → ingen C-binding).
 
 | Fil | Hva den gjør | Adresse |
 |-----|--------------|---------|
+| **start_kontrollpanel.bat** | Åpner GUI-et med **kontrollpanelet**: start/stopp av hver tjeneste (grønn/rød/gul), Start alt/Stopp alt, live-grafer for GPU/VRAM/CPU/RAM + dokumentklienten | — |
 | **start_alt.bat** | Starter ALT **skjult i bakgrunnen** (ingen vinduer å lukke ved uhell). Utskrift → `..\data\logger\oppstart_*.log` | — |
 | **sjekk_status.bat** | Viser om tjenestene kjører (200 = oppe) | — |
 | **stopp_alt.bat** | Stopper alle tjenestene (8600/4200/8080 + tunnel) | — |

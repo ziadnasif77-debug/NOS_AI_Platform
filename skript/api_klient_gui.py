@@ -1,6 +1,12 @@
 """
 Skrivebordsklient (GUI) for NAV dokument-API-et (Borealis).
 
+Inneholder også et KONTROLLPANEL (første fane): start/stopp av tjenestene
+på denne maskinen (dokument-API, Prefect, Label Studio, tunnel) med
+grønn/rød/gul statusindikator, «Start alt»/«Stopp alt», og live-grafer
+for GPU, VRAM, CPU og RAM. Tjenester startes skjult via oppstart\-mappen
+(samme mekanisme som start_alt.bat) — ingen vinduer å lukke ved uhell.
+
 Dekker alle endepunktene i serveren (skript/dokument_api.py) — feltnavn,
 statusverdier og feilkoder er VERIFISERT mot serverkoden, ikke gjettet:
 
@@ -123,8 +129,12 @@ except RuntimeError as exc:
     print(str(exc))
     sys.exit(1)
 
+import collections
+import ctypes
 import json
 import os
+import re
+import shutil
 import tempfile
 import threading
 import time
@@ -197,8 +207,21 @@ FREMDRIFT_KLOSS = "#22c55e"
 ADVARSEL_BG = "#3a2a06"
 ADVARSEL_FG = "#fbbf24"
 
+# --- kontrollpanelets fargepalett (statuser + tjenester + grafer) ----------
+GRONN = "#22c55e"          # kjører / start-knapper
+GRONN_AKTIV = "#16a34a"
+ROD = "#ef4444"            # stoppet / stopp-knapper
+ROD_AKTIV = "#dc2626"
+GUL = "#f59e0b"            # starter / modell laster
+CYAN = "#06b6d4"           # dokument-API
+BLAA = "#3b82f6"           # Prefect + CPU-graf
+ROSA = "#ec4899"           # Label Studio
+ORANSJE = "#fb923c"        # tunnel + VRAM-graf
+LILLA = "#a855f7"          # RAM-graf
+
 # Fanene i appen, i rekkefølge: (intern nøkkel, knappetekst)
 FANER = [
+    ("kontroll", "Kontrollpanel"),
     ("spor", "Spør"),
     ("fyll_skjema", "Fyll skjema"),
     ("analyser", "Analyser"),
@@ -791,6 +814,674 @@ class SvarPanel:
         self.status_var.set("Kopiert til utklippstavlen")
 
 
+# ==========================================================================
+# Kontrollpanel — start/stopp av tjenestene på DENNE maskinen + live
+# ressursgrafer (GPU / VRAM / CPU / RAM). Gjenbruker oppstart\-mappens
+# skjulte startere (_skjult.vbs), så tjenester startet her oppfører seg
+# identisk med start_alt.bat: ingen vinduer, logg i data\logger\.
+# ==========================================================================
+PROSJEKT_ROT = Path(__file__).resolve().parent.parent
+OPPSTART_MAPPE = PROSJEKT_ROT / "oppstart"
+LOGG_MAPPE = PROSJEKT_ROT / "data" / "logger"
+SKJULT_VBS = OPPSTART_MAPPE / "_skjult.vbs"
+
+# Vindusløse barneprosesser (netstat/taskkill/nvidia-smi/wscript) — uten
+# dette blinker et svart konsollvindu for hvert kall.
+_UTEN_VINDU = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+KONTROLL_STATUS_S = 3.0    # sekunder mellom tjenestesjekker
+RESSURS_PULS_S = 1.0       # sekunder mellom ressursmålinger
+
+KONTROLL_TJENESTER = [
+    {
+        "key": "api", "navn": "Dokument-API", "farge": CYAN, "port": 8600,
+        "sjekk_url": "http://127.0.0.1:8600/hjelp",
+        "aapne_url": "http://127.0.0.1:8600/dokumentasjon",
+        "bat": "start_api.bat", "logg": "oppstart_api.log",
+        "beskrivelse": "OCR + Borealis  ·  :8600",
+        "starter_frist": 240,   # Borealis-lasting tar tid
+    },
+    {
+        "key": "prefect", "navn": "Prefect", "farge": BLAA, "port": 4200,
+        "sjekk_url": "http://127.0.0.1:4200/api/health",
+        "aapne_url": "http://127.0.0.1:4200",
+        "bat": "start_prefect.bat", "logg": "oppstart_prefect.log",
+        "beskrivelse": "Treningsflyt  ·  :4200",
+        "starter_frist": 240,   # kan bygge venv på nytt første gang
+    },
+    {
+        "key": "label_studio", "navn": "Label Studio", "farge": ROSA, "port": 8080,
+        "sjekk_url": "http://127.0.0.1:8080/",
+        "aapne_url": "http://127.0.0.1:8080",
+        "bat": "start_label_studio.bat", "logg": "oppstart_label_studio.log",
+        "beskrivelse": "Korrektur/annotering  ·  :8080",
+        "starter_frist": 120,
+    },
+    {
+        "key": "tunnel", "navn": "Tunnel", "farge": ORANSJE, "port": None,
+        "sjekk_url": None, "aapne_url": None,
+        "bat": "start_tunnel.bat", "logg": "oppstart_tunnel.log",
+        "beskrivelse": "Offentlig lenke (cloudflared)",
+        "starter_frist": 60,
+    },
+]
+
+_TUNNEL_LENKE_MONSTER = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+
+def _bland(farge: str, mot: str, andel: float) -> str:
+    """Blander `farge` mot `mot` (0=ren farge, 1=helt `mot`) — gir mørke
+    fyllvarianter til grafene uten alfakanal (tk.Canvas mangler den)."""
+    f = [int(farge[i:i + 2], 16) for i in (1, 3, 5)]
+    m = [int(mot[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(
+        round(fv + (mv - fv) * andel) for fv, mv in zip(f, m))
+
+
+# --- ressursmåling (uten nye avhengigheter) --------------------------------
+# psutil brukes hvis den finnes; ellers Windows-API direkte via ctypes.
+try:
+    import psutil  # type: ignore
+except ImportError:
+    psutil = None
+
+
+class _FILETIME(ctypes.Structure):
+    _fields_ = [("lav", ctypes.c_uint32), ("hoy", ctypes.c_uint32)]
+
+
+class _MEMORYSTATUSEX(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+        ("ullTotalPhys", ctypes.c_uint64), ("ullAvailPhys", ctypes.c_uint64),
+        ("ullTotalPageFile", ctypes.c_uint64), ("ullAvailPageFile", ctypes.c_uint64),
+        ("ullTotalVirtual", ctypes.c_uint64), ("ullAvailVirtual", ctypes.c_uint64),
+        ("ullAvailExtendedVirtual", ctypes.c_uint64),
+    ]
+
+
+def _filetime_tall(ft: _FILETIME) -> int:
+    return (ft.hoy << 32) | ft.lav
+
+
+class RessursMaaler:
+    """Leser CPU-, RAM-, GPU- og VRAM-bruk. GPU/VRAM via nvidia-smi (følger
+    NVIDIA-driveren); CPU/RAM via psutil eller Windows-API. Alle kall er
+    trygge å kjøre i bakgrunnstråd og returnerer None når kilden mangler."""
+
+    def __init__(self):
+        self._forrige_cpu = None  # (idle, kernel+user) fra GetSystemTimes
+        self.nvidia_ok = shutil.which("nvidia-smi") is not None
+        if psutil is not None:
+            try:
+                psutil.cpu_percent(interval=None)  # prim: første kall gir alltid 0.0
+            except Exception:
+                pass
+
+    def cpu_prosent(self):
+        if psutil is not None:
+            try:
+                return psutil.cpu_percent(interval=None)
+            except Exception:
+                return None
+        try:
+            idle, kjerne, bruker = _FILETIME(), _FILETIME(), _FILETIME()
+            if not ctypes.windll.kernel32.GetSystemTimes(
+                    ctypes.byref(idle), ctypes.byref(kjerne), ctypes.byref(bruker)):
+                return None
+            i, t = _filetime_tall(idle), _filetime_tall(kjerne) + _filetime_tall(bruker)
+            if self._forrige_cpu is None:
+                self._forrige_cpu = (i, t)
+                return None  # første måling har ingen delta ennå
+            di, dt = i - self._forrige_cpu[0], t - self._forrige_cpu[1]
+            self._forrige_cpu = (i, t)
+            if dt <= 0:
+                return None
+            return max(0.0, min(100.0, 100.0 * (1.0 - di / dt)))
+        except Exception:
+            return None
+
+    def ram(self):
+        """→ (prosent, brukt_gb, totalt_gb) eller None."""
+        if psutil is not None:
+            try:
+                m = psutil.virtual_memory()
+                return (m.percent, (m.total - m.available) / 1024 ** 3,
+                        m.total / 1024 ** 3)
+            except Exception:
+                return None
+        try:
+            status = _MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return None
+            return (float(status.dwMemoryLoad),
+                    (status.ullTotalPhys - status.ullAvailPhys) / 1024 ** 3,
+                    status.ullTotalPhys / 1024 ** 3)
+        except Exception:
+            return None
+
+    def gpu(self):
+        """→ (gpu_prosent, vram_brukt_mb, vram_totalt_mb) eller None."""
+        if not self.nvidia_ok:
+            return None
+        try:
+            resultat = subprocess.run(
+                ["nvidia-smi",
+                 "--query-gpu=utilization.gpu,memory.used,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=4,
+                creationflags=_UTEN_VINDU,
+            )
+            if resultat.returncode != 0:
+                return None
+            deler = resultat.stdout.strip().splitlines()[0].split(",")
+            return (float(deler[0]), float(deler[1]), float(deler[2]))
+        except Exception:
+            return None
+
+
+class MiniGraf:
+    """Liten rullende kurve (siste ~2 min) tegnet rett på en tk.Canvas —
+    ingen tunge plotteavhengigheter. Nyeste verdi ytterst til høyre."""
+
+    HOYDE = 72
+
+    def __init__(self, forelder, tittel, farge):
+        self.farge = farge
+        self.fyll = _bland(farge, BG_INNDATA, 0.80)
+        self.verdier = collections.deque(maxlen=120)
+
+        self.ramme = tk.Frame(
+            forelder, bg=BG_PANEL, highlightthickness=1,
+            highlightbackground=KANTLINJE,
+        )
+        hode = tk.Frame(self.ramme, bg=BG_PANEL)
+        hode.pack(fill="x", padx=8, pady=(6, 0))
+        tk.Label(hode, text=tittel, bg=BG_PANEL, fg=FG_DEMPET,
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.verdi_var = tk.StringVar(value="—")
+        tk.Label(hode, textvariable=self.verdi_var, bg=BG_PANEL, fg=farge,
+                 font=("Segoe UI", 11, "bold")).pack(side="right")
+
+        self.canvas = tk.Canvas(self.ramme, height=self.HOYDE, bg=BG_INNDATA,
+                                highlightthickness=0)
+        self.canvas.pack(fill="x", padx=8, pady=(2, 8))
+        self.canvas.bind("<Configure>", lambda _e: self._tegn())
+
+    def grid(self, **valg):
+        self.ramme.grid(**valg)
+
+    def legg_til(self, prosent: float, tekst: str):
+        self.verdier.append(max(0.0, min(100.0, prosent)))
+        self.verdi_var.set(tekst)
+        self._tegn()
+
+    def sett_utilgjengelig(self, tekst: str):
+        self.verdi_var.set(tekst)
+
+    def _tegn(self):
+        c = self.canvas
+        c.delete("all")
+        bredde, hoyde = c.winfo_width(), c.winfo_height()
+        if bredde <= 1 or not self.verdier:
+            return
+        for prosent in (25, 50, 75):
+            y = hoyde - (prosent / 100.0) * hoyde
+            c.create_line(0, y, bredde, y, fill=KANTLINJE, dash=(2, 4))
+        steg = bredde / (self.verdier.maxlen - 1)
+        antall = len(self.verdier)
+        punkter = []
+        for i, verdi in enumerate(self.verdier):
+            x = bredde - (antall - 1 - i) * steg
+            y = hoyde - (verdi / 100.0) * (hoyde - 4) - 2
+            punkter.append((x, y))
+        if len(punkter) >= 2:
+            flate = [(punkter[0][0], hoyde)] + punkter + [(punkter[-1][0], hoyde)]
+            c.create_polygon([k for p in flate for k in p],
+                             fill=self.fyll, outline="")
+            c.create_line([k for p in punkter for k in p],
+                          fill=self.farge, width=2)
+        else:
+            x, y = punkter[0]
+            c.create_oval(x - 2, y - 2, x + 2, y + 2, fill=self.farge, outline="")
+
+
+class KontrollPanel:
+    """Fanen som styrer alt: start/stopp per tjeneste (grønn = kjører,
+    rød = stoppet, gul = starter/laster), «Start alt»/«Stopp alt», og
+    live-grafer for GPU, VRAM, CPU og RAM. Tjenestesjekk og målinger går
+    i bakgrunnstråder; all widget-oppdatering skjer på hovedtråden via
+    rot.after (tk-regelen)."""
+
+    STATUSTEKST = {
+        "kjorer": ("●", GRONN, "Kjører"),
+        "laster": ("●", GUL, "Kjører — laster"),
+        "starter": ("●", GUL, "Starter ..."),
+        "stopper": ("●", GUL, "Stopper ..."),
+        "stoppet": ("●", ROD, "Stoppet"),
+    }
+    STOPPER_FRIST_S = 30  # så lenge overstyrer «Stopper ...» et utdatert «Kjører»
+
+    def __init__(self, forelder, rot):
+        self.rot = rot
+        self._lukket = False
+        self._vekk = threading.Event()      # settes for øyeblikkelig re-sjekk
+        self._start_tid: dict[str, float] = {}
+        self._stopp_tid: dict[str, float] = {}
+        self._status: dict[str, str] = {t["key"]: "stoppet" for t in KONTROLL_TJENESTER}
+        self._tunnel_lenke = ""
+        self._tunnel_ok_lenke = ""          # siste lenke bekreftet nåbar
+        self._tunnel_siste_forsok = 0.0
+        self._maaler = RessursMaaler()
+        self._kort: dict[str, dict] = {}
+
+        self._bygg(forelder)
+        threading.Thread(target=self._status_lokke, daemon=True).start()
+        threading.Thread(target=self._ressurs_lokke, daemon=True).start()
+
+    # ---------- oppbygging ----------
+    def _bygg(self, forelder):
+        pad = {"padx": 12, "pady": 6}
+
+        # -- Start alt / Stopp alt --
+        masterrad = tk.Frame(forelder, bg=BG_HOVED)
+        masterrad.pack(fill="x", **pad)
+        self.start_alt_knapp = tk.Button(
+            masterrad, text="▶  START ALT", command=self._start_alt,
+            bg=GRONN, fg="white", activebackground=GRONN_AKTIV,
+            activeforeground="white", font=("Segoe UI", 12, "bold"),
+            relief="flat", highlightthickness=0, pady=10,
+        )
+        self.start_alt_knapp.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.stopp_alt_knapp = tk.Button(
+            masterrad, text="■  STOPP ALT", command=self._stopp_alt,
+            bg=ROD, fg="white", activebackground=ROD_AKTIV,
+            activeforeground="white", font=("Segoe UI", 12, "bold"),
+            relief="flat", highlightthickness=0, pady=10,
+        )
+        self.stopp_alt_knapp.pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        # -- tjenestekort --
+        tjenesteramme = tema_rammefelt(forelder, "Tjenester på denne maskinen")
+        tjenesteramme.pack(fill="x", **pad)
+        for tjeneste in KONTROLL_TJENESTER:
+            self._bygg_kort(tjenesteramme, tjeneste)
+
+        # -- ressursgrafer --
+        ressursramme = tema_rammefelt(forelder, "Ressursbruk (live, siste ~2 minutter)")
+        ressursramme.pack(fill="both", expand=True, **pad)
+        rutenett = tk.Frame(ressursramme, bg=BG_PANEL)
+        rutenett.pack(fill="both", expand=True, padx=8, pady=8)
+        rutenett.columnconfigure(0, weight=1, uniform="graf")
+        rutenett.columnconfigure(1, weight=1, uniform="graf")
+
+        self.graf_gpu = MiniGraf(rutenett, "GPU (skjermkort)", GRONN)
+        self.graf_gpu.grid(row=0, column=0, sticky="nsew", padx=(0, 4), pady=(0, 4))
+        self.graf_vram = MiniGraf(rutenett, "GPU-minne (VRAM)", ORANSJE)
+        self.graf_vram.grid(row=0, column=1, sticky="nsew", padx=(4, 0), pady=(0, 4))
+        self.graf_cpu = MiniGraf(rutenett, "Prosessor (CPU)", BLAA)
+        self.graf_cpu.grid(row=1, column=0, sticky="nsew", padx=(0, 4), pady=(4, 0))
+        self.graf_ram = MiniGraf(rutenett, "Minne (RAM)", LILLA)
+        self.graf_ram.grid(row=1, column=1, sticky="nsew", padx=(4, 0), pady=(4, 0))
+
+        # -- bunnlinje: disk + forklaring --
+        self.bunn_var = tk.StringVar(value="")
+        tk.Label(forelder, textvariable=self.bunn_var, fg=FG_DEMPET,
+                 bg=BG_HOVED, anchor="w").pack(fill="x", padx=12, pady=(0, 8))
+
+    def _bygg_kort(self, forelder, tjeneste):
+        rad = tk.Frame(forelder, bg=BG_PANEL)
+        rad.pack(fill="x", padx=8, pady=3)
+
+        stripe = tk.Frame(rad, bg=tjeneste["farge"], width=5)
+        stripe.pack(side="left", fill="y")
+
+        dot = tk.Label(rad, text="●", font=("Segoe UI", 14), fg=ROD, bg=BG_PANEL)
+        dot.pack(side="left", padx=(8, 4))
+
+        tekstboks = tk.Frame(rad, bg=BG_PANEL)
+        tekstboks.pack(side="left", fill="x", expand=True)
+        tk.Label(tekstboks, text=tjeneste["navn"], font=("Segoe UI", 11, "bold"),
+                 fg=tjeneste["farge"], bg=BG_PANEL, anchor="w").pack(fill="x")
+        status_var = tk.StringVar(value="Stoppet — " + tjeneste["beskrivelse"])
+        tk.Label(tekstboks, textvariable=status_var, fg=FG_DEMPET, bg=BG_PANEL,
+                 anchor="w", font=("Segoe UI", 9)).pack(fill="x")
+
+        knapper = tk.Frame(rad, bg=BG_PANEL)
+        knapper.pack(side="right", padx=(4, 6), pady=4)
+        start_knapp = tk.Button(
+            knapper, text="Start", command=lambda t=tjeneste: self._start_tjeneste(t),
+            bg=GRONN, fg="white", activebackground=GRONN_AKTIV,
+            activeforeground="white", relief="flat", highlightthickness=0,
+            padx=12, pady=3, font=("Segoe UI", 9, "bold"),
+            disabledforeground=_bland("#ffffff", BG_PANEL, 0.6),
+        )
+        start_knapp.pack(side="left", padx=(0, 4))
+        stopp_knapp = tk.Button(
+            knapper, text="Stopp", command=lambda t=tjeneste: self._stopp_tjeneste(t),
+            bg=ROD, fg="white", activebackground=ROD_AKTIV,
+            activeforeground="white", relief="flat", highlightthickness=0,
+            padx=12, pady=3, font=("Segoe UI", 9, "bold"),
+            disabledforeground=_bland("#ffffff", BG_PANEL, 0.6),
+        )
+        stopp_knapp.pack(side="left", padx=(0, 4))
+        aapne_knapp = tema_knapp(
+            knapper, "Åpne", lambda t=tjeneste: self._aapne_tjeneste(t))
+        aapne_knapp.pack(side="left", padx=(0, 4))
+        logg_knapp = tema_knapp(
+            knapper, "Logg", lambda t=tjeneste: self._aapne_logg(t))
+        logg_knapp.pack(side="left")
+
+        self._kort[tjeneste["key"]] = {
+            "dot": dot, "status_var": status_var,
+            "start": start_knapp, "stopp": stopp_knapp, "aapne": aapne_knapp,
+        }
+
+    # ---------- handlinger ----------
+    def _start_tjeneste(self, tjeneste):
+        bat = OPPSTART_MAPPE / tjeneste["bat"]
+        if not bat.is_file() or not SKJULT_VBS.is_file():
+            messagebox.showwarning(
+                "Kun på servermaskinen",
+                "Fant ikke oppstart-mappen — start/stopp virker bare på "
+                "maskinen der nav-mappa (tjenestene) faktisk ligger.",
+            )
+            return
+        LOGG_MAPPE.mkdir(parents=True, exist_ok=True)
+        logg = LOGG_MAPPE / tjeneste["logg"]
+        miljo = {**os.environ, "NAV_SKJULT": "1"}
+        try:
+            subprocess.Popen(
+                ["wscript", "//nologo", str(SKJULT_VBS), str(bat), str(logg)],
+                cwd=str(PROSJEKT_ROT), env=miljo, creationflags=_UTEN_VINDU,
+            )
+        except OSError as exc:
+            messagebox.showerror("Feil", f"Klarte ikke å starte {tjeneste['navn']}: {exc}")
+            return
+        self._start_tid[tjeneste["key"]] = time.monotonic()
+        self._stopp_tid.pop(tjeneste["key"], None)
+        self._status[tjeneste["key"]] = "starter"
+        self._vis_kort(tjeneste["key"], "starter", tjeneste["beskrivelse"])
+        self._vekk.set()
+
+    def _stopp_tjeneste(self, tjeneste, stille: bool = False):
+        # Samme vakt som start: på en ren KLIENTMASKIN (uten oppstart\)
+        # kan port 8080/4200 tilhøre en helt urelatert app — da skal vi
+        # aldri taskkill-e den.
+        if not SKJULT_VBS.is_file():
+            if not stille:
+                messagebox.showwarning(
+                    "Kun på servermaskinen",
+                    "Fant ikke oppstart-mappen — start/stopp virker bare på "
+                    "maskinen der nav-mappa (tjenestene) faktisk ligger.",
+                )
+            return
+        self._start_tid.pop(tjeneste["key"], None)
+        self._stopp_tid[tjeneste["key"]] = time.monotonic()
+        self._vis_kort(tjeneste["key"], "stopper", "")
+
+        def arbeider():
+            pids = set()
+            if tjeneste["port"]:
+                pids |= self._pids_paa_port(tjeneste["port"])
+            # Fanger også «Starter ...»-fasen, der porten ikke er bundet
+            # ennå: drep den skjulte cmd-en som kjører tjenestens .bat.
+            pids |= self._pids_for_bat(tjeneste["bat"])
+            for pid in pids:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                               capture_output=True, creationflags=_UTEN_VINDU)
+            if tjeneste["key"] == "tunnel":
+                subprocess.run(["taskkill", "/F", "/IM", "cloudflared.exe"],
+                               capture_output=True, creationflags=_UTEN_VINDU)
+            self._vekk.set()
+
+        threading.Thread(target=arbeider, daemon=True).start()
+
+    def _start_alt(self):
+        if not SKJULT_VBS.is_file():
+            messagebox.showwarning(
+                "Kun på servermaskinen",
+                "Fant ikke oppstart-mappen — start/stopp virker bare på "
+                "maskinen der nav-mappa (tjenestene) faktisk ligger.")
+            return
+        for tjeneste in KONTROLL_TJENESTER:
+            if tjeneste["key"] == "tunnel":
+                continue  # offentlig eksponering skal være et bevisst valg
+            if self._status.get(tjeneste["key"]) == "stoppet":
+                self._start_tjeneste(tjeneste)
+
+    def _stopp_alt(self):
+        if not SKJULT_VBS.is_file():
+            messagebox.showwarning(
+                "Kun på servermaskinen",
+                "Fant ikke oppstart-mappen — start/stopp virker bare på "
+                "maskinen der nav-mappa (tjenestene) faktisk ligger.")
+            return
+        for tjeneste in KONTROLL_TJENESTER:
+            if self._status.get(tjeneste["key"]) != "stoppet":
+                self._stopp_tjeneste(tjeneste, stille=True)
+
+    def _aapne_tjeneste(self, tjeneste):
+        if tjeneste["key"] == "tunnel":
+            if self._tunnel_lenke:
+                webbrowser.open(self._tunnel_lenke)
+            return
+        webbrowser.open(tjeneste["aapne_url"])
+
+    def _aapne_logg(self, tjeneste):
+        logg = LOGG_MAPPE / tjeneste["logg"]
+        if logg.is_file():
+            os.startfile(str(logg))  # noqa: S606 — åpner i standard tekstprogram
+        else:
+            messagebox.showinfo("Ingen logg ennå",
+                                f"Loggfilen finnes ikke ennå:\n{logg}")
+
+    @staticmethod
+    def _pids_paa_port(port: int) -> set[int]:
+        """PID-ene som LYTTER på porten — samme logikk som stopp_alt.bat."""
+        try:
+            resultat = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True,
+                timeout=10, creationflags=_UTEN_VINDU,
+            )
+        except Exception:
+            return set()
+        pids = set()
+        for linje in resultat.stdout.splitlines():
+            if f":{port} " in linje and "LISTENING" in linje:
+                deler = linje.split()
+                if deler and deler[-1].isdigit():
+                    pids.add(int(deler[-1]))
+        return pids
+
+    @staticmethod
+    def _pids_for_bat(bat_navn: str) -> set[int]:
+        """cmd-prosessene som kjører tjenestens .bat (den skjulte verten).
+        Trengs for å stoppe en tjeneste i «Starter ...»-fasen, der porten
+        ikke er bundet ennå og _pids_paa_port derfor finner ingenting."""
+        try:
+            resultat = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process -Filter "
+                 f"\"Name='cmd.exe' AND CommandLine LIKE '%{bat_navn}%'\" "
+                 "| Select-Object -ExpandProperty ProcessId"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=_UTEN_VINDU,
+            )
+            return {int(del_) for del_ in resultat.stdout.split()
+                    if del_.strip().isdigit()}
+        except Exception:
+            return set()
+
+    # ---------- statuspolling (bakgrunnstråd) ----------
+    def _status_lokke(self):
+        while not self._lukket:
+            resultater = {}
+            for tjeneste in KONTROLL_TJENESTER:
+                resultater[tjeneste["key"]] = self._sjekk_tjeneste(tjeneste)
+            self._trygg_after(self._vis_alle, resultater)
+            self._vekk.wait(timeout=KONTROLL_STATUS_S)
+            self._vekk.clear()
+
+    def _sjekk_tjeneste(self, tjeneste):
+        """→ (status, detalj) målt utenfra: 'kjorer'/'laster'/'stoppet'."""
+        if tjeneste["key"] == "tunnel":
+            if self._prosess_finnes("cloudflared.exe"):
+                lenke = self._finn_tunnel_lenke()
+                # Loggen kan inneholde en UTDATERT lenke fra en tidligere
+                # kjøring — vis den først når den er bekreftet nåbar.
+                if lenke and lenke != self._tunnel_ok_lenke:
+                    naa = time.monotonic()
+                    if naa - self._tunnel_siste_forsok > 15:
+                        self._tunnel_siste_forsok = naa
+                        try:
+                            svar = requests.get(lenke + "/hjelp", timeout=4)
+                            if svar.status_code < 500:  # 530 = død tunnel
+                                self._tunnel_ok_lenke = lenke
+                        except requests.exceptions.RequestException:
+                            pass
+                aktiv = lenke if lenke and lenke == self._tunnel_ok_lenke else ""
+                self._tunnel_lenke = aktiv
+                return ("kjorer", aktiv or "venter på offentlig lenke ...")
+            self._tunnel_lenke = ""
+            return ("stoppet", tjeneste["beskrivelse"])
+        try:
+            respons = requests.get(tjeneste["sjekk_url"], timeout=1.5)
+            if tjeneste["key"] == "api":
+                try:
+                    borealis = respons.json().get("borealis", "")
+                except ValueError:
+                    borealis = ""
+                if borealis == "laster":
+                    return ("laster", "Borealis: laster ...")
+                if borealis == "feil":
+                    # Terminal tilstand (ingen retry i serveren) — ikke lov
+                    # en lasting som aldri kommer: /analyser virker, /spor ikke.
+                    return ("kjorer",
+                            "Borealis FEILET (se logg) — /spor er nede, /analyser virker")
+                return ("kjorer", tjeneste["beskrivelse"])
+            return ("kjorer", tjeneste["beskrivelse"])
+        except requests.exceptions.RequestException:
+            return ("stoppet", tjeneste["beskrivelse"])
+
+    @staticmethod
+    def _prosess_finnes(navn: str) -> bool:
+        try:
+            resultat = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {navn}", "/NH"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=_UTEN_VINDU,
+            )
+            return navn.lower() in resultat.stdout.lower()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _finn_tunnel_lenke() -> str:
+        logg = LOGG_MAPPE / "oppstart_tunnel.log"
+        try:
+            treff = _TUNNEL_LENKE_MONSTER.findall(
+                logg.read_text(encoding="utf-8", errors="replace"))
+            return treff[-1] if treff else ""
+        except OSError:
+            return ""
+
+    def _vis_alle(self, resultater: dict):
+        if self._lukket:
+            return
+        for tjeneste in KONTROLL_TJENESTER:
+            nokkel = tjeneste["key"]
+            status, detalj = resultater[nokkel]
+            # nystartet men porten svarer ikke ennå → vis gult «Starter ...»
+            if status == "stoppet" and nokkel in self._start_tid:
+                if time.monotonic() - self._start_tid[nokkel] < tjeneste["starter_frist"]:
+                    status = "starter"
+                    detalj = f"se loggen ved behov: data\\logger\\{tjeneste['logg']}"
+                else:
+                    del self._start_tid[nokkel]  # ga opp — vis ærlig rødt
+            elif status in ("kjorer", "laster"):
+                self._start_tid.pop(nokkel, None)
+            # nystoppet men et (mulig utdatert) svar sier fortsatt «kjører»
+            # → hold gult «Stopper ...» til porten faktisk er død
+            if status == "stoppet":
+                self._stopp_tid.pop(nokkel, None)
+            elif status in ("kjorer", "laster") and nokkel in self._stopp_tid:
+                if time.monotonic() - self._stopp_tid[nokkel] < self.STOPPER_FRIST_S:
+                    status, detalj = "stopper", ""
+                else:
+                    del self._stopp_tid[nokkel]  # ga ikke etter — vis ærlig grønt
+            self._status[nokkel] = status
+            self._vis_kort(nokkel, status, detalj)
+
+    def _vis_kort(self, nokkel: str, status: str, detalj: str):
+        try:
+            kort = self._kort[nokkel]
+            _tegn, farge, tekst = self.STATUSTEKST[status]
+            kort["dot"].config(fg=farge)
+            kort["status_var"].set(f"{tekst} — {detalj}" if detalj else tekst)
+            kort["start"].config(state="disabled" if status != "stoppet" else "normal")
+            kort["stopp"].config(
+                state="normal" if status in ("kjorer", "laster", "starter") else "disabled")
+            kan_aapne = status in ("kjorer", "laster")
+            if nokkel == "tunnel":
+                kan_aapne = kan_aapne and bool(self._tunnel_lenke)
+            kort["aapne"].config(state="normal" if kan_aapne else "disabled")
+        except tk.TclError:
+            pass  # vinduet er i ferd med å lukkes
+
+    # ---------- ressursgrafer (bakgrunnstråd) ----------
+    def _ressurs_lokke(self):
+        while not self._lukket:
+            cpu = self._maaler.cpu_prosent()
+            ram = self._maaler.ram()
+            gpu = self._maaler.gpu()
+            try:
+                disk = shutil.disk_usage(PROSJEKT_ROT)
+            except OSError:
+                disk = None
+            self._trygg_after(self._vis_ressurser, cpu, ram, gpu, disk)
+            time.sleep(RESSURS_PULS_S)
+
+    def _vis_ressurser(self, cpu, ram, gpu, disk):
+        if self._lukket:
+            return
+        try:
+            if cpu is not None:
+                self.graf_cpu.legg_til(cpu, f"{cpu:.0f} %")
+            if ram is not None:
+                prosent, brukt_gb, totalt_gb = ram
+                self.graf_ram.legg_til(
+                    prosent, f"{prosent:.0f} %  ({brukt_gb:.1f}/{totalt_gb:.0f} GB)")
+            if gpu is not None:
+                gpu_prosent, vram_brukt, vram_totalt = gpu
+                self.graf_gpu.legg_til(gpu_prosent, f"{gpu_prosent:.0f} %")
+                if vram_totalt > 0:
+                    self.graf_vram.legg_til(
+                        100.0 * vram_brukt / vram_totalt,
+                        f"{vram_brukt / 1024:.1f}/{vram_totalt / 1024:.1f} GB")
+            elif not self._maaler.nvidia_ok:
+                self.graf_gpu.sett_utilgjengelig("ingen NVIDIA")
+                self.graf_vram.sett_utilgjengelig("ingen NVIDIA")
+            deler = []
+            if disk is not None:
+                deler.append(f"Disk {PROSJEKT_ROT.drive} {disk.free / 1024**3:.0f} GB ledig")
+            deler.append("Kontrollpanelet styrer tjenestene på denne maskinen")
+            self.bunn_var.set("   ·   ".join(deler))
+        except tk.TclError:
+            pass  # vinduet er i ferd med å lukkes
+
+    def _trygg_after(self, fn, *argumenter):
+        try:
+            self.rot.after(0, fn, *argumenter)
+        except (tk.TclError, RuntimeError):
+            pass  # vinduet er lukket — trådene avslutter via self._lukket
+
+    def lukk(self):
+        self._lukket = True
+        self._vekk.set()
+
+
 class DokumentKlientApp:
     def __init__(self, rot: tk.Tk):
         self.rot = rot
@@ -812,6 +1503,8 @@ class DokumentKlientApp:
         self.rot.protocol("WM_DELETE_WINDOW", self._ved_lukking)
 
     def _ved_lukking(self):
+        if hasattr(self, "kontroll"):
+            self.kontroll.lukk()  # stopper bakgrunnstrådene rent
         lagre_konfig(self.url_var.get().strip(), self.nokkel_var.get().strip())
         self.rot.destroy()
 
@@ -869,6 +1562,7 @@ class DokumentKlientApp:
         for nokkel, _tekst in FANER:
             self._fane_rammer[nokkel] = tk.Frame(fanebeholder, bg=BG_HOVED)
 
+        self.kontroll = KontrollPanel(self._fane_rammer["kontroll"], self.rot)
         self._bygg_spor_fane(self._fane_rammer["spor"])
         self._bygg_fyll_skjema_fane(self._fane_rammer["fyll_skjema"])
         self._bygg_analyser_fane(self._fane_rammer["analyser"])
@@ -876,7 +1570,7 @@ class DokumentKlientApp:
         self._bygg_jobb_fane(self._fane_rammer["jobb"])
         self._bygg_info_fane(self._fane_rammer["info"])
 
-        self._vis_fane("spor")
+        self._vis_fane("kontroll")
 
     def _bygg_fanelinje(self):
         linje = tk.Frame(self.rot, bg=BG_HOVED)

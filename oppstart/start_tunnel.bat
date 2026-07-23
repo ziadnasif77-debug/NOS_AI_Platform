@@ -6,9 +6,9 @@ REM ====================================================================
 title cloudflared tunnel
 cd /d "%~dp0.."
 
-if not exist "cloudflared.exe" (
+if not exist "%~dp0..\cloudflared.exe" (
     echo [FEIL] Fant ikke cloudflared.exe i nav-mappa.
-    pause
+    if not defined NAV_SKJULT pause
     exit /b 1
 )
 
@@ -18,5 +18,7 @@ echo.
 echo Starter tunnel mot http://localhost:8600 ...
 echo Den offentlige lenken ^(https://....trycloudflare.com^) vises under:
 echo.
-cloudflared.exe tunnel --url http://localhost:8600
-pause
+REM Full sti (ikke bare navnet): i skjult modus nekter cmd aa soke i
+REM gjeldende mappe ("is not recognized"-feilen).
+"%~dp0..\cloudflared.exe" tunnel --url http://localhost:8600
+if not defined NAV_SKJULT pause
