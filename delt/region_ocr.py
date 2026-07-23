@@ -271,15 +271,24 @@ def _norhand_les_batch(utsnitt_liste: list) -> list:
     slutt = getattr(tok_er, "eos_token_id", None)
     fyll = getattr(tok_er, "pad_token_id", slutt)
 
+    # R-fiks 2026-07-23: modellen genererer med num_beams=4 (generation_
+    # config). Da har ut.scores formen (batch × beams, vokab) — å indeksere
+    # score[i] plukket feil STRÅLE, så token-sannsynlighetene gjaldt en
+    # annen hypotese enn den valgte sekvensen → konfidens kollapset mot 0
+    # for lengre tekster (og skjevvred all motor-arbitrering).
+    # compute_transition_scores håndterer stråleindeksene korrekt.
+    overgang = modell.compute_transition_scores(
+        ut.sequences, ut.scores, getattr(ut, "beam_indices", None),
+        normalize_logits=True)
     resultat = []
     for i, tekst in enumerate(tekster):
         sannsynligheter = []
-        for steg, score in enumerate(ut.scores):
+        for steg in range(overgang.shape[1]):
             tok = ut.sequences[i, steg + 1].item()
             if tok in (slutt, fyll):
                 break        # resten er padding — skal ikke telle med
-            p = torch.softmax(score[i].float(), dim=-1)[tok].item()
-            sannsynligheter.append(max(p, 1e-9))
+            p = float(overgang[i, steg].float().exp().item())
+            sannsynligheter.append(min(max(p, 1e-9), 1.0))
         konf = (float(np.exp(np.mean(np.log(sannsynligheter))))
                 if sannsynligheter else 0.0)
         resultat.append((tekst.strip(), konf))
@@ -487,7 +496,119 @@ def _ocr_side_intern(bilde_np) -> dict:
         regioner.append(region)
 
     _les_med_norhand(regioner, kandidater)
-    return {"tekst": flett_regioner(regioner), "regioner": regioner}
+    resultat = {"tekst": flett_regioner(regioner), "regioner": regioner}
+    return _kanskje_ufcn_andrepass(bilde_np, resultat)
+
+
+# ------------------------------------------------------------------ #
+#  Andrepass med Doc-UFCN-linjesegmentering (NorHand)                 #
+# ------------------------------------------------------------------ #
+# EasyOCR segmenterer løkkeskrift dårlig (trent på trykt/scene-tekst),
+# og TrOCR-norhand er en LINJE-modell. På håndskriftstunge/lavkonfidens-
+# sider kjøres derfor et andrepass: Teklia/doc-ufcn-norhand-v1-line
+# (CPU, null GPU-minne) finner tekstlinjene, norhand leser dem, og det
+# beste av de to passene vinner — målt, ikke antatt.
+
+UFCN_KONF_TERSKEL = float(os.environ.get("UFCN_KONF_TERSKEL", "0.55"))
+UFCN_HANDSKRIFT_ANDEL = float(os.environ.get("UFCN_HANDSKRIFT_ANDEL", "0.4"))
+UFCN_MARGIN = float(os.environ.get("UFCN_MARGIN", "0.05"))
+
+
+def _vektet_konfidens(regioner: list) -> float:
+    """Lengdevektet snittkonfidens — samme mål som serverens samlede."""
+    sum_, vekt = 0.0, 0.0
+    for r in regioner:
+        v = max(len((r.get("tekst") or "").strip()), 1)
+        sum_ += float(r.get("konfidens", 0.0)) * v
+        vekt += v
+    return sum_ / vekt if vekt else 0.0
+
+
+def _slaa_sammen_linjebokser(linjer: list) -> list:
+    """Doc-UFCN kan dele én skrevet linje i flere biter (særlig på lav
+    oppløsning). Bokser med overlappende vertikalt midtpunkt slås sammen
+    til hele linjestrimler, venstre→høyre, topp→bunn."""
+    bokser = [l["boks"] for l in linjer if l.get("retning") == "horisontal"]
+    if not bokser:
+        return []
+    hoyder = sorted(b[3] - b[1] for b in bokser)
+    terskel = max(hoyder[len(hoyder) // 2] * 0.6, 4.0)
+    bokser.sort(key=lambda b: ((b[1] + b[3]) / 2, b[0]))
+    rader = []   # [{"midt": float, "boks": [x0,y0,x1,y1]}]
+    for b in bokser:
+        midt = (b[1] + b[3]) / 2
+        for rad in rader:
+            if abs(midt - rad["midt"]) <= terskel:
+                rb = rad["boks"]
+                rad["boks"] = [min(rb[0], b[0]), min(rb[1], b[1]),
+                               max(rb[2], b[2]), max(rb[3], b[3])]
+                rad["midt"] = (rad["boks"][1] + rad["boks"][3]) / 2
+                break
+        else:
+            rader.append({"midt": midt, "boks": list(b)})
+    rader.sort(key=lambda r: r["midt"])
+    return [r["boks"] for r in rader]
+
+
+def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
+    """Kjører linjesegmentering + norhand når førstepasset ser svakt ut,
+    og beholder det passet som MÅLT gir høyest vektet konfidens."""
+    try:
+        from delt.linjesegmentering import finn_tekstlinjer, tilgjengelig
+    except ImportError:
+        return resultat
+    if not tilgjengelig():
+        return resultat
+
+    regioner = resultat["regioner"]
+    gammel_konf = _vektet_konfidens(regioner)
+    handskrift_andel = (sum(1 for r in regioner
+                            if r.get("skrift") == "handskrift")
+                        / len(regioner)) if regioner else 0.0
+    tomt = not any((r.get("tekst") or "").strip() for r in regioner)
+    if not (tomt or gammel_konf < UFCN_KONF_TERSKEL
+            or handskrift_andel >= UFCN_HANDSKRIFT_ANDEL):
+        return resultat          # førstepasset er godt nok — spar tiden
+
+    linjer = finn_tekstlinjer(bilde_np)
+    strimler = _slaa_sammen_linjebokser(linjer)
+    if not strimler:
+        return resultat
+    h, b = bilde_np.shape[0], bilde_np.shape[1]
+    utsnitt, bokser = [], []
+    for x0, y0, x1, y1 in strimler:
+        x0, y0 = max(x0 - 4, 0), max(y0 - 4, 0)
+        x1, y1 = min(x1 + 4, b), min(y1 + 4, h)
+        if x1 - x0 < 16 or y1 - y0 < 10:
+            continue
+        utsnitt.append(bilde_np[y0:y1, x0:x1])
+        bokser.append([x0, y0, x1, y1])
+    if not utsnitt:
+        return resultat
+
+    nye = []
+    for start in range(0, len(utsnitt), NORHAND_BATCH):
+        porsjon = utsnitt[start:start + NORHAND_BATCH]
+        try:
+            svar = _norhand_les_batch(porsjon)
+        except Exception:
+            return resultat      # norhand utilgjengelig → behold førstepasset
+        for (tekst, konf), boks in zip(svar, bokser[start:start + len(porsjon)]):
+            if not tekst.strip():
+                continue
+            nye.append({"boks": boks, "tekst": tekst.strip(),
+                        "motor": "norhand+ufcn",
+                        "konfidens": round(float(konf), 3),
+                        "easyocr_tekst": "", "easyocr_konfidens": 0.0,
+                        "norhand_tekst": tekst.strip(),
+                        "norhand_konfidens": round(float(konf), 3),
+                        "skrift": "handskrift"})
+    if not nye:
+        return resultat
+    ny_konf = _vektet_konfidens(nye)
+    if ny_konf > gammel_konf + UFCN_MARGIN or (tomt and nye):
+        return {"tekst": flett_regioner(nye), "regioner": nye}
+    return resultat
 
 
 def _les_med_norhand(regioner: list, kandidater: list) -> None:
