@@ -142,6 +142,13 @@ def finjuster_norhand() -> int | None:
         shutil.rmtree(kandidat)
     trener.save_model(kandidat)
     prosessor.save_pretrained(kandidat)   # så kandidaten kan lastes selvstendig
+    # Rydd bort mellomsjekkpunktene (checkpoint-*): de er KUN treningsprosess-
+    # rester og vokste til 11 GB over noen få kjøringer. Kandidaten over er
+    # det eneste som trengs videre.
+    try:
+        shutil.rmtree(f"{MODELLER_STI}/norhand-finjustert")
+    except OSError:
+        pass
     print(f"TrOCR-NorHand finjustering fullført — {len(korreksjoner)} eksempler.")
     print(f"Kandidat lagret: {kandidat} (IKKE live ennå — porten avgjør).")
     return len(korreksjoner)
