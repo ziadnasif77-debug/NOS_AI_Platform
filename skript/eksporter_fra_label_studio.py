@@ -116,14 +116,32 @@ def konverter_til_trocr_format(oppgave: dict) -> dict | None:
     return None
 
 
+def _allerede_klargjorte_ider() -> set:
+    """Oppgave-ID-ene som allerede ligger i tidligere trocr_*.json —
+    eksporten er INKREMENTELL: samme korreksjon klargjøres aldri to
+    ganger (før dette ble alt re-eksportert hver gang → duplikater som
+    skjevvektet treningen)."""
+    ider = set()
+    for fil in Path(FINJUSTERING_STI).glob("trocr_*.json"):
+        try:
+            for rad in json.loads(fil.read_text(encoding="utf-8")):
+                if rad.get("oppgave_id") is not None:
+                    ider.add(rad["oppgave_id"])
+        except (OSError, ValueError):
+            continue
+    return ider
+
+
 def eksporter():
-    """Hovedfunksjon — eksporterer alle korreksjoner."""
+    """Hovedfunksjon — eksporterer NYE korreksjoner (inkrementelt)."""
     Path(FINJUSTERING_STI).mkdir(parents=True, exist_ok=True)
 
     prosjekter = hent_prosjekter()
     print(f"Fant {len(prosjekter)} prosjekt(er) i Label Studio")
 
+    klargjort = _allerede_klargjorte_ider()
     trocr_data = []
+    hoppet_over = 0
 
     for prosjekt in prosjekter:
         prosjekt_id = prosjekt["id"]
@@ -134,9 +152,15 @@ def eksporter():
         print(f"  -> {len(oppgaver)} fullforte oppgaver")
 
         for oppgave in oppgaver:
+            if oppgave.get("id") in klargjort:
+                hoppet_over += 1
+                continue
             trocr = konverter_til_trocr_format(oppgave)
             if trocr:
                 trocr_data.append(trocr)
+
+    if hoppet_over:
+        print(f"  ({hoppet_over} allerede klargjort tidligere — hoppet over)")
 
     tidsstempel = datetime.now().strftime("%Y%m%d_%H%M%S")
 

@@ -1767,6 +1767,8 @@ TRENING_RESULTATER = {
                               "ikke automatisk.", GUL),
     "ukjent": ("Løpet stoppet uventet — se loggen under.", ROD),
     "avbrutt": ("Treningen ble avbrutt av deg.", GUL),
+    "ingen_nye": ("Ingen nye korreksjoner siden forrige trening — modellen "
+                  "er allerede oppdatert på alt.", GUL),
 }
 
 
@@ -1817,6 +1819,13 @@ class TreningPanel:
             relief="flat", highlightthickness=0, pady=10,
         )
         self.start_knapp.pack(side="left", fill="x", expand=True)
+        self.hent_knapp = tk.Button(
+            knapperad, text="⬇  Hent korreksjoner", command=self._hent_korreksjoner,
+            bg=GRONN, fg="white", activebackground=GRONN_AKTIV,
+            activeforeground="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", highlightthickness=0, padx=12, pady=10,
+        )
+        self.hent_knapp.pack(side="left", padx=(10, 0))
         tema_knapp(knapperad, "Annoter i Label Studio",
                    lambda: webbrowser.open("http://127.0.0.1:8080/projects/"
                                            + _les_lokal_env().get(
@@ -1847,12 +1856,13 @@ class TreningPanel:
         telleramme.pack(fill="x", **pad)
         rute = tk.Frame(telleramme, bg=BG_PANEL)
         rute.pack(fill="x", padx=8, pady=8)
-        for kol in range(3):
+        for kol in range(4):
             rute.columnconfigure(kol, weight=1, uniform="telle")
         self.telle_vars = {}
         for kol, (nokkel, tittel, farge) in enumerate([
-                ("klare", "Klare til trening\n(annotert, ikke trent)", GRONN),
                 ("venter", "Venter på ansatt\n(ikke annotert ennå)", GUL),
+                ("klare", "Klare til henting\n(annotert av ansatt)", GRONN),
+                ("klargjort", "Klargjort til trening\n(hentet, ikke trent)", ORANSJE),
                 ("livstid", "Trent gjennom livstiden\n(unike dokumenter)", CYAN)]):
             boks = tk.Frame(rute, bg=BG_INNDATA, highlightthickness=1,
                             highlightbackground=KANTLINJE)
@@ -1934,20 +1944,7 @@ class TreningPanel:
             except requests.exceptions.RequestException:
                 pass
 
-        # trent = unike oppgave-id-er i alle eksporterte treningsfiler
-        trent = set()
-        eksempler = 0
-        for fil in (PROSJEKT_ROT / "data" / "finjustering").glob("trocr_*.json"):
-            try:
-                for rad in json.loads(fil.read_text(encoding="utf-8")):
-                    eksempler += 1
-                    if rad.get("oppgave_id") is not None:
-                        trent.add(rad["oppgave_id"])
-            except (OSError, ValueError):
-                continue
-        stat["trent_ids"] = trent
-        stat["eksempler"] = eksempler
-
+        # historikken leses først — den skiller TRENT fra bare KLARGJORT
         historikk_sti = (PROSJEKT_ROT / "data" / "finjustering"
                          / "treningshistorikk.json")
         stat["historikk"] = []
@@ -1957,6 +1954,37 @@ class TreningPanel:
                     historikk_sti.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
+        siste_trening = 0.0
+        from datetime import datetime as _dt
+        for rad in stat["historikk"]:
+            if isinstance(rad, dict) and rad.get("trent_paa", 0) > 0:
+                try:
+                    siste_trening = max(
+                        siste_trening,
+                        _dt.fromisoformat(rad["tidspunkt"]).timestamp())
+                except (KeyError, ValueError, TypeError):
+                    pass
+
+        # klargjorte filer deles i TRENT (fantes ved siste fullførte
+        # trening — finjusteringen leser alle filene) og KLARGJORT
+        # (hentet i ettertid, venter på neste trening)
+        trent, klargjort = set(), set()
+        eksempler = 0
+        for fil in (PROSJEKT_ROT / "data" / "finjustering").glob("trocr_*.json"):
+            try:
+                mtime = fil.stat().st_mtime
+                for rad in json.loads(fil.read_text(encoding="utf-8")):
+                    eksempler += 1
+                    oid = rad.get("oppgave_id")
+                    if oid is not None:
+                        (trent if mtime <= siste_trening + 5
+                         else klargjort).add(oid)
+            except (OSError, ValueError):
+                continue
+        klargjort -= trent
+        stat["trent_ids"] = trent
+        stat["klargjort_ids"] = klargjort
+        stat["eksempler"] = eksempler
 
         stat["gpu"] = self.kontroll._maaler.gpu()
         stat["gpu_finnes"] = self.kontroll._maaler.nvidia_ok
@@ -1970,10 +1998,12 @@ class TreningPanel:
         if self._lukket:
             return
         try:
-            klare = stat["annotert_ids"] - stat["trent_ids"]
+            klare = (stat["annotert_ids"] - stat["trent_ids"]
+                     - stat["klargjort_ids"])
             venter = stat["totalt"] - len(stat["annotert_ids"])
-            self.telle_vars["klare"].set(str(len(klare)) if stat["ls_ok"] else "?")
             self.telle_vars["venter"].set(str(max(0, venter)) if stat["ls_ok"] else "?")
+            self.telle_vars["klare"].set(str(len(klare)) if stat["ls_ok"] else "?")
+            self.telle_vars["klargjort"].set(str(len(stat["klargjort_ids"])))
             self.telle_vars["livstid"].set(str(len(stat["trent_ids"])))
 
             historikk = stat["historikk"]
@@ -1987,7 +2017,8 @@ class TreningPanel:
             else:
                 self.siste_var.set("Ingen treningskjøringer ennå.")
 
-            annotert_totalt = len(stat["annotert_ids"] | stat["trent_ids"])
+            annotert_totalt = len(stat["annotert_ids"] | stat["trent_ids"]
+                                  | stat["klargjort_ids"])
             self._sett_krav("ls", stat["ls_ok"],
                             detalj=None if stat["ls_ok"]
                             else "— start den fra Kontrollpanelet")
@@ -2009,6 +2040,60 @@ class TreningPanel:
         dot.config(fg=GRONN if oppfylt else (GUL if advarsel else ROD))
         var.set(grunntekst + (f" {detalj}" if detalj else ""))
 
+    # ---------- henting av korreksjoner (uten trening) ----------
+    def _hent_korreksjoner(self):
+        """Kjører KUN eksporten: henter det de ansatte har annotert og
+        klargjør det for trening (inkrementelt — aldri duplikater).
+        Trenger ikke GPU, så API-et får stå urørt."""
+        if self._prosess is not None:
+            return  # trening/henting pågår allerede
+        self.hent_knapp.config(state="disabled")
+        self.start_knapp.config(state="disabled")
+        self.fase_var.set("Henter korreksjoner fra Label Studio ...")
+        self._sett_logg("")
+        miljo = {**os.environ, **_les_lokal_env(),
+                 "PYTHONNOUSERSITE": "1", "PYTHONUTF8": "1"}
+
+        def arbeider():
+            try:
+                self._prosess = subprocess.Popen(
+                    [str(PROSJEKT_ROT / ".pyruntime" / "python.exe"), "-u",
+                     str(PROSJEKT_ROT / "skript" / "eksporter_fra_label_studio.py")],
+                    cwd=str(PROSJEKT_ROT), env=miljo,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    creationflags=_UTEN_VINDU)
+            except OSError as exc:
+                self._prosess = None
+                self._trygg_after(self._hent_ferdig,
+                                  f"Klarte ikke å starte hentingen: {exc}")
+                return
+            nye = None
+            for linje in self._prosess.stdout:
+                linje = linje.rstrip()
+                if not linje:
+                    continue
+                treff = re.search(r"Totalt eksportert:\s*(\d+)", linje)
+                if treff:
+                    nye = int(treff.group(1))
+                self._trygg_after(self._logglinje, linje)
+            self._prosess.wait()
+            self._prosess = None
+            self._vekk.set()   # oppdater tellingen med en gang
+            self._trygg_after(self._hent_ferdig,
+                              "Henting ferdig — se loggen." if nye is None else
+                              f"{nye} nye korreksjoner klargjort til trening.")
+
+        threading.Thread(target=arbeider, daemon=True).start()
+
+    def _hent_ferdig(self, melding: str):
+        try:
+            self.hent_knapp.config(state="normal")
+            self.start_knapp.config(state="normal")
+            self.fase_var.set(melding)
+        except tk.TclError:
+            pass
+
     # ---------- selve treningsløpet ----------
     def _start_eller_avbryt(self):
         if self._prosess is not None:
@@ -2022,6 +2107,7 @@ class TreningPanel:
             return
         self.resultat_etikett.pack_forget()
         self._sett_logg("")
+        self.hent_knapp.config(state="disabled")
         self.start_knapp.config(text="■  AVBRYT TRENING", bg=ROD,
                                 activebackground=ROD_AKTIV)
         self.fase_var.set("Stopper API-et (frigjør GPU-en) ...")
@@ -2107,6 +2193,7 @@ class TreningPanel:
                                        before=self.logg.master)
             self.start_knapp.config(text="▶  START TRENING", bg=LILLA,
                                     activebackground=_bland(LILLA, "#000000", 0.2))
+            self.hent_knapp.config(state="normal")
             self.fase_var.set("Klar.")
             self._fase = None
             self._sett_fremdrift(1.0 if resultat == "promotert" else 0.0)

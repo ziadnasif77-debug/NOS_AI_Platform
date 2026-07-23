@@ -26,6 +26,22 @@ except Exception:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
+def _allerede_trent_paa(totalt: int) -> bool:
+    """Har en tidligere fullført trening allerede dekket nøyaktig dette
+    antallet klargjorte eksempler? (Eksporten er inkrementell, så antallet
+    vokser bare når noe nytt kommer til.)"""
+    import json
+    import os
+    sti = (Path(os.environ.get("FINJUSTERING_STI", "./data/finjustering"))
+           / "treningshistorikk.json")
+    try:
+        historikk = json.loads(sti.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return any(rad.get("trent_paa", 0) == totalt and totalt > 0
+               for rad in historikk if isinstance(rad, dict))
+
+
 def _skriv_historikk(resultat: str, varighet: float,
                      eksportert: int, trent: int) -> None:
     """Livstidshistorikk over treningsløp (data/finjustering/
@@ -61,13 +77,31 @@ def kjor() -> None:
     antall_eksportert = 0
     antall_trent = 0
     try:
-        # 1) Eksport fra Label Studio
+        # 1) Eksport fra Label Studio (inkrementell — henter bare NYE).
+        # GUI-ets «Hent korreksjoner»-knapp kan ha klargjort data på
+        # forhånd, så 0 nye betyr IKKE nødvendigvis ingenting å trene på.
         print("=== 1/3  Eksporterer korreksjoner fra Label Studio ===")
+        import json
         import eksporter_fra_label_studio as eksport
         antall_eksportert = eksport.eksporter() or 0
-        if antall_eksportert == 0:
-            print("Ingen nye korreksjoner — hopper over trening.")
+
+        totalt_klargjort = 0
+        finjustering = Path(eksport.FINJUSTERING_STI)
+        for fil in finjustering.glob("trocr_*.json"):
+            try:
+                totalt_klargjort += len(json.loads(fil.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+        print(f"Klargjort totalt: {totalt_klargjort} eksempler "
+              f"({antall_eksportert} nye i denne kjøringen)")
+
+        if totalt_klargjort == 0:
+            print("Ingen korreksjoner klargjort — hopper over trening.")
             resultat = "ingen_data"
+            return
+        if antall_eksportert == 0 and _allerede_trent_paa(totalt_klargjort):
+            print("Ingen nye korreksjoner siden forrige trening — hopper over.")
+            resultat = "ingen_nye"
             return
 
         # 2) Finjuster norhand (TrOCR) → KANDIDAT (ikke live)
