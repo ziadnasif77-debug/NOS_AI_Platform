@@ -12,6 +12,10 @@ set "EASYOCR_MODULE_PATH=%CD%\.EasyOCR"
 set "HF_HOME=%CD%\.cache\huggingface"
 set "PIP_CACHE_DIR=%CD%\.cache\pip"
 set "PREFECT_HOME=%CD%\.prefect"
+REM Prefect 3.7 IGNORERER PREFECT_HOME for disse tre (defaulter til C:\Users\...).
+set "PREFECT_LOCAL_STORAGE_PATH=%CD%\.prefect\storage"
+set "PREFECT_MEMO_STORE_PATH=%CD%\.prefect\memo_store.toml"
+set "PREFECT_LOGGING_SETTINGS_PATH=%CD%\.prefect\logging.yml"
 REM Kun nav-lokale pakker: ignorer %APPDATA%\Python (user-site) -> ingen C-binding.
 set "PYTHONNOUSERSITE=1"
 REM UTF-8-trygg utskrift (norske tegn i pipe/redirect).

@@ -18,7 +18,7 @@ if "%BOREALIS_KONTEKST%"=="" set "BOREALIS_KONTEKST=4096"
 if not exist "%PY%" (
     echo [FEIL] Fant ikke prosjekt-Python: %PY%
     echo        Kopierte du HELE nav-mappa ^(inkl. .pyruntime^)?
-    pause
+    if not defined NAV_SKJULT pause
     exit /b 1
 )
 

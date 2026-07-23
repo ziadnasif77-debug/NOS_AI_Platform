@@ -15,7 +15,7 @@ set "LABEL_STUDIO_PORT=8080"
 
 if not exist "%PY%" (
     echo [FEIL] Fant ikke prosjekt-Python: %PY%
-    pause
+    if not defined NAV_SKJULT pause
     exit /b 1
 )
 if not exist "data\label-studio" mkdir "data\label-studio"

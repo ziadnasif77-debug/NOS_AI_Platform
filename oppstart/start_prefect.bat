@@ -8,6 +8,11 @@ cd /d "%~dp0.."
 
 set "PY=%CD%\.pyruntime\python.exe"
 set "PREFECT_HOME=%CD%\.prefect"
+REM Prefect 3.7 IGNORERER PREFECT_HOME for disse tre (defaulter til C:\Users\...)
+REM -> pin dem eksplisitt til nav, ellers provde serveren aa skrive til C.
+set "PREFECT_LOCAL_STORAGE_PATH=%CD%\.prefect\storage"
+set "PREFECT_MEMO_STORE_PATH=%CD%\.prefect\memo_store.toml"
+set "PREFECT_LOGGING_SETTINGS_PATH=%CD%\.prefect\logging.yml"
 set "PIP_CACHE_DIR=%CD%\.cache\pip"
 set "PYTHONNOUSERSITE=1"
 set "PYTHONUTF8=1"
@@ -25,7 +30,7 @@ if "%PREFEKT_OK%"=="0" (
 if not exist ".venv-prefect\Scripts\prefect.exe" (
     echo [FEIL] Klarte ikke aa bygge Prefect-venv ^(trenger internett for
     echo        'pip install prefect'^). API-en kjorer uansett uten Prefect.
-    pause
+    if not defined NAV_SKJULT pause
     exit /b 1
 )
 
