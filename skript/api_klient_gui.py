@@ -1493,7 +1493,7 @@ class KontrollPanel:
 FLYT_NODER = [
     # (nokkel, tittel, undertekst, farge, x, y, bredde, hoyde)
     ("inn", "1 · Dokument inn", "PDF / bilde / Word / Excel", CYAN, 30, 14, 310, 58),
-    ("lese", "2 · Lesing", "PDF-tekstlag eller OCR + håndskrift", BLAA, 30, 98, 310, 58),
+    ("lese", "2 · Lesing", "tekstlag · OCR · Doc-UFCN + norhand for håndskrift", BLAA, 30, 98, 310, 58),
     ("uttrekk", "3 · Deterministisk uttrekk", "datoer · beløp · ID (mod 11) · tallvakt", GRONN, 30, 182, 310, 58),
     ("borealis", "4 · Borealis (LLM)", "spørsmål/svar på GPU — tallvakt-beskyttet", LILLA, 30, 266, 310, 58),
     ("svar", "5 · Ærlig svar ut", "advarsel · avvik · kilde · versjon", GRONN, 30, 350, 310, 58),
@@ -1508,7 +1508,10 @@ FLYT_DETALJER = {
            "skanninger i bakgrunnen. Bilder og Office-filer konverteres til PDF.",
     "lese": "Har PDF-en tekstlag, leses det direkte (raskt og eksakt). Skannede sider "
             "går til regionbasert OCR: EasyOCR/RapidOCR for trykt tekst, norhand "
-            "(TrOCR) for norsk håndskrift, pyzbar for strekkoder/QR — på GPU-en.",
+            "(TrOCR, Nasjonalbiblioteket) for norsk håndskrift, pyzbar for strekkoder. "
+            "Håndskriftstunge/usikre sider får et ANDREPASS: Doc-UFCN (NorHand, "
+            "Teklia) segmenterer tekstlinjene på CPU, norhand leser dem — og passet "
+            "med høyest målt konfidens vinner. Målt gevinst på løkkeskrift: 22 → 88 %.",
     "uttrekk": "delt/tekstuttrekk.py finner datoer, beløp og identifikatorer "
                "deterministisk, med kontrollsiffer-validering (mod 11). Tallvakten "
                "garanterer at hvert tall i svaret står ordrett i dokumentet. "
@@ -1522,9 +1525,11 @@ FLYT_DETALJER = {
     "svar": "Svaret deklarerer ærlig hva som skjedde: advarsel, avvik, uten_dokument, "
             "kilde og versjonsstempel (api/prompt/regler). Alle kall logges i "
             "tilgangsloggen med rate-begrensning.",
-    "labelstudio": "Leses et dokument dårlig (lav OCR-konfidens), sendes det automatisk "
-                   "til Label Studio der et menneske retter teksten. Best-effort: "
-                   "API-et virker helt fint selv om Label Studio er avslått.",
+    "labelstudio": "Leses et dokument dårlig (lav konfidens, håndskrift eller tomt), "
+                   "sendes det automatisk til Label Studio — med OCR-boksene "
+                   "FORHÅNDSMERKET på bildet og teksten forhåndsutfylt, så den "
+                   "ansatte bare retter feilene. Samme dokument sendes aldri to "
+                   "ganger. Best-effort: API-et virker fint uten Label Studio.",
     "trening": "skript/finjuster.py trener norhand videre på de menneskerettede "
                "eksemplene (eksportert fra Label Studio). Kjøres periodisk via "
                "Prefect-flyten — serveren stoppes først så GPU-en er ledig.",
