@@ -163,8 +163,20 @@ _valgt = {"motor": None}      # hva auto faktisk landet på
 
 def _hent_rapid():
     if _rapid["motor"] is None:
-        from rapidocr_onnxruntime import RapidOCR
-        _rapid["motor"] = RapidOCR()
+        # rapidocr v3 med LATINSK PP-OCRv5-gjenkjenner. R-fiks 2026-07-23:
+        # den gamle standardmodellen (kinesisk ch_PP-OCRv4 i
+        # rapidocr_onnxruntime) manglet æ/ø/å i ordboka og kunne dermed
+        # ALDRI skrive norsk riktig — fallbacken var i praksis død.
+        # Målt på «Blåbærsyltetøy fra Ålesund»: gammel ga
+        # «Blabaersyltetoy fra Alesund», ny leser feilfritt.
+        # Modellfilene lastes til .pyruntime\...\rapidocr\models (i nav →
+        # portabelt og offline etter første nedlasting).
+        from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
+        _rapid["motor"] = RapidOCR(params={
+            "Rec.lang_type": LangRec.LATIN,
+            "Rec.ocr_version": OCRVersion.PPOCRV5,
+            "Rec.model_type": ModelType.MOBILE,
+        })
     return _rapid["motor"]
 
 
@@ -195,8 +207,13 @@ def _les_regioner(bilde_np) -> list:
     """Motoruavhengig regionlesing: liste av (punkter, tekst, konfidens)."""
     if _velg_motor_for_maskinen() == "rapid":
         try:
-            resultat, _ = _hent_rapid()(bilde_np)
-            return [(r[0], r[1], float(r[2])) for r in (resultat or [])]
+            # rapidocr v3 returnerer et objekt med .boxes/.txts/.scores
+            # (ikke lenger en (liste, tid)-tuppel som i v1).
+            res = _hent_rapid()(bilde_np)
+            bokser = res.boxes if res.boxes is not None else []
+            return [(np.asarray(punkter).tolist(), tekst, float(score))
+                    for punkter, tekst, score in
+                    zip(bokser, res.txts or [], res.scores or [])]
         except Exception:
             pass   # RapidOCR feilet på denne siden → fall tilbake til EasyOCR
     # R54: EasyOCR bruker batch_size=1 som standard, altså ett eget

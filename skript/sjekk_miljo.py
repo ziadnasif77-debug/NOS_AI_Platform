@@ -53,7 +53,7 @@ def sjekk_importer():
         ("bs4", "beautifulsoup4", True),
         ("bitsandbytes", "bitsandbytes", False),
         ("accelerate", "accelerate", False),
-        ("rapidocr_onnxruntime", "rapidocr-onnxruntime", False),
+        ("rapidocr", "rapidocr", False),
         ("huggingface_hub", "huggingface-hub", False),
     ]
     for modul, pip_navn, kritisk in pakker:
