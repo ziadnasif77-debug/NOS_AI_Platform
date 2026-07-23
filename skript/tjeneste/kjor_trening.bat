@@ -11,7 +11,7 @@ REM  Steg 1 og 3 er best-effort: kjorer ikke serveren som tjeneste, gjor
 REM  de ingenting (og du bor stoppe en manuelt startet server selv forst).
 REM ====================================================================
 cd /d "%~dp0..\.."
-REM Alt i nav-mappa (ikke C) — gjelder ogsaa SYSTEM-kontoen.
+REM Alt i nav-mappa (ikke C) ? gjelder ogsaa SYSTEM-kontoen.
 set "EASYOCR_MODULE_PATH=%CD%\.EasyOCR"
 set "HF_HOME=%CD%\.cache\huggingface"
 set "PIP_CACHE_DIR=%CD%\.cache\pip"

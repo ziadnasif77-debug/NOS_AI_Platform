@@ -5,3 +5,8 @@ Makefile text eol=lf
 *.py text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
+
+# Windows-batch og VBScript MÅ ha CRLF — cmd sin parser feiler på
+# LF-bare linjer inne i parentesblokker ("'X' is not recognized ...").
+*.bat text eol=crlf
+*.vbs text eol=crlf

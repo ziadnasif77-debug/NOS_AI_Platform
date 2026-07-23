@@ -2,7 +2,7 @@
 REM ====================================================================
 REM  Starter KUN Label Studio paa :8080 (menneskelig korrektur/annotering).
 REM  Data lagres i nav\data\label-studio (folger en mappe-kopi).
-REM  Valgfri tjeneste — dokument-API-et virker uten den.
+REM  Valgfri tjeneste ? dokument-API-et virker uten den.
 REM ====================================================================
 title Label Studio :8080
 cd /d "%~dp0.."

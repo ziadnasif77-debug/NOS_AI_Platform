@@ -3,7 +3,7 @@ chcp 65001 >nul
 title NAV dokument-API + tunnel
 cd /d "%~dp0"
 
-REM Prosjektets EGEN Python i nav (.pyruntime) — ingen system-Python noodvendig.
+REM Prosjektets EGEN Python i nav (.pyruntime) ? ingen system-Python noodvendig.
 set "PY=%CD%\.pyruntime\python.exe"
 set "EASYOCR_MODULE_PATH=%CD%\.EasyOCR"
 set "HF_HOME=%CD%\.cache\huggingface"
