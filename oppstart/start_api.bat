@@ -14,6 +14,8 @@ set "PREFECT_HOME=%CD%\.prefect"
 set "PYTHONNOUSERSITE=1"
 set "PYTHONUTF8=1"
 if "%BOREALIS_KONTEKST%"=="" set "BOREALIS_KONTEKST=4096"
+REM Lokale hemmeligheter (Label Studio-token -> auto-gjennomgang PAA).
+if exist "%~dp0lokal_env.bat" call "%~dp0lokal_env.bat"
 
 if not exist "%PY%" (
     echo [FEIL] Fant ikke prosjekt-Python: %PY%

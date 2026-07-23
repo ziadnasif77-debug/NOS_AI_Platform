@@ -11,6 +11,8 @@ if not exist "data\logger" mkdir "data\logger"
 
 REM Forteller de enkelte starterne at de kjorer skjult (ingen pause).
 set "NAV_SKJULT=1"
+REM Lokale hemmeligheter (arves av tjenestene som startes under).
+if exist "%~dp0lokal_env.bat" call "%~dp0lokal_env.bat"
 
 echo ================================================================
 echo   NAV - starter ALLE tjenester SKJULT i bakgrunnen ...

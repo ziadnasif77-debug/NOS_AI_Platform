@@ -22,6 +22,8 @@ REM UTF-8-trygg utskrift (norske tegn i pipe/redirect).
 set "PYTHONUTF8=1"
 REM Trygg Borealis-kontekst paa 8 GB-kort (8192 segfaulter i llama.cpp KV-cache).
 if "%BOREALIS_KONTEKST%"=="" set "BOREALIS_KONTEKST=4096"
+REM Lokale hemmeligheter (Label Studio-token -> auto-gjennomgang PAA).
+if exist "%CD%\oppstart\lokal_env.bat" call "%CD%\oppstart\lokal_env.bat"
 
 if not exist "%PY%" (
     echo [FEIL] Fant ikke prosjekt-Python: %PY%

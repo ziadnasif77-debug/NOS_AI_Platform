@@ -46,6 +46,9 @@ htmlcov/
 Thumbs.db
 .claude/
 
+# Lokale hemmeligheter for launcherne (Label Studio-token m.m.)
+oppstart/lokal_env.bat
+
 # Redis-dump fra lokal kjøring
 dump.rdb
 cloudflared.exe

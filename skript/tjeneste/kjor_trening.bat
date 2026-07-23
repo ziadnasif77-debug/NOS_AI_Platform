@@ -18,6 +18,8 @@ set "PIP_CACHE_DIR=%CD%\.cache\pip"
 REM Kun nav-lokale pakker: ignorer %APPDATA%\Python -> ingen C-binding. UTF-8-trygg.
 set "PYTHONNOUSERSITE=1"
 set "PYTHONUTF8=1"
+REM Lokale hemmeligheter (Label Studio-token -> eksport fra Label Studio virker).
+if exist "%CD%\oppstart\lokal_env.bat" call "%CD%\oppstart\lokal_env.bat"
 REM Prosjektets egen Python i nav (.pyruntime), ikke system-Python paa C.
 set "PY=%CD%\.pyruntime\python.exe"
 if not exist "data\logger" mkdir "data\logger"

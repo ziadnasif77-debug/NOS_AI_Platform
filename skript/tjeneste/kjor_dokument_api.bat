@@ -21,6 +21,8 @@ set "PREFECT_HOME=%CD%\.prefect"
 REM Kun nav-lokale pakker: ignorer %APPDATA%\Python -> ingen C-binding. UTF-8-trygg.
 set "PYTHONNOUSERSITE=1"
 set "PYTHONUTF8=1"
+REM Lokale hemmeligheter (Label Studio-token -> auto-gjennomgang PAA).
+if exist "%CD%\oppstart\lokal_env.bat" call "%CD%\oppstart\lokal_env.bat"
 
 REM Prosjektets egen Python i nav (.pyruntime), ikke system-Python paa C.
 set "PY=%CD%\.pyruntime\python.exe"
