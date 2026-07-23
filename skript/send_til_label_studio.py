@@ -25,6 +25,30 @@ HEADERS = {
 }
 
 
+def _finnes_allerede(fil_id: str) -> bool:
+    """Ligger dette dokumentet (samme innholds-hash) allerede som oppgave i
+    prosjektet? Importen lager alltid en NY oppgave, så uten denne sjekken
+    ga gjentatt opplasting av samme dokument duplikater i Label Studio."""
+    side = 1
+    try:
+        while True:
+            svar = requests.get(
+                f"{LABEL_STUDIO_URL}/api/tasks"
+                f"?project={OCR_PROSJEKT_ID}&page={side}&page_size=200",
+                headers=HEADERS, timeout=10)
+            svar.raise_for_status()
+            bunke = svar.json().get("tasks", [])
+            if any((o.get("data") or {}).get("fil_id") == fil_id
+                   for o in bunke):
+                return True
+            if len(bunke) < 200:
+                return False
+            side += 1
+    except requests.RequestException:
+        # Ved tvil: send — et duplikat er bedre enn en tapt korreksjon.
+        return False
+
+
 def _bygg_prediksjoner(regioner: list, bilde_dim) -> list:
     """Gjør OCR-ens regionbokser om til Label Studio-«predictions»:
     forhåndsmerkede rektangler på bildet (prosentkoordinater — derfor
@@ -85,6 +109,10 @@ def send_til_gjennomgang(
     Med `regioner` + `bilde_dim` følger OCR-ens tekstbokser med som
     forhåndsmerkede områder på bildet. Returnerer True hvis sending lyktes.
     """
+    if _finnes_allerede(fil_id):
+        print(f"Dokumentet ({fil_id}) ligger allerede i Label Studio — "
+              "sender ikke duplikat.")
+        return True
     # Kopier bilde til det delte volumet (montert i Label Studio som /label-studio/data)
     bilder_mappe = Path(GJENNOMGANG_STI) / "bilder"
     bilder_mappe.mkdir(parents=True, exist_ok=True)

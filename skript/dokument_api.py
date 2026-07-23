@@ -487,13 +487,19 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
 
     def arbeider():
         import fitz
-        # Stabil id fra innholdet: samme dokument → samme oppgave i
-        # Label Studio (unngår duplikater ved gjentatt opplasting).
-        fil_id = hashlib.sha256(innhold).hexdigest()[:16]
-        png_sti = os.path.join(tempfile.gettempdir(), f"gjennomgang_{fil_id}.png")
+        png_sti = None
         try:
             doc = fitz.open(stream=innhold, filetype="pdf")
             pix = doc[0].get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72))
+            # Stabil id fra SIDEBILDETS piksler, ikke PDF-bytene: klienten
+            # konverterer bilder til PDF ved HVER opplasting, og PDF-en får
+            # da nytt tidsstempel → ny hash → duplikater i Label Studio.
+            # Pikslene er identiske for samme dokument uansett.
+            fil_id = hashlib.sha256(
+                f"{pix.width}x{pix.height}".encode() + bytes(pix.samples)
+            ).hexdigest()[:16]
+            png_sti = os.path.join(tempfile.gettempdir(),
+                                   f"gjennomgang_{fil_id}.png")
             pix.save(png_sti)
             doc.close()
             from send_til_label_studio import send_til_gjennomgang
@@ -511,10 +517,11 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
             print(f"  [gjennomgang] hoppet over ({type(exc).__name__}: {exc})",
                   file=sys.stderr)
         finally:
-            try:
-                os.remove(png_sti)
-            except OSError:
-                pass
+            if png_sti is not None:
+                try:
+                    os.remove(png_sti)
+                except OSError:
+                    pass
 
     threading.Thread(target=arbeider, daemon=True).start()
     return {"grunn": grunn, "konfidens": konfidens}
