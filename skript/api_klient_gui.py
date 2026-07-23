@@ -1510,10 +1510,14 @@ FLYT_DETALJER = {
             "(TrOCR) for norsk håndskrift, pyzbar for strekkoder/QR — på GPU-en.",
     "uttrekk": "delt/tekstuttrekk.py finner datoer, beløp og identifikatorer "
                "deterministisk, med kontrollsiffer-validering (mod 11). Tallvakten "
-               "garanterer at hvert tall i svaret står ordrett i dokumentet.",
+               "garanterer at hvert tall i svaret står ordrett i dokumentet. "
+               "For /analyser og /uttrekk går svaret RETT ut herfra — uten LLM "
+               "(den grønne snarveien).",
     "borealis": "Spørsmål besvares av Borealis 4B (GGUF via llama.cpp på CUDA). "
                 "Modellen får OCR-teksten + spørsmålet; tallvakt og kodevalidering "
-                "stopper hallusinerte tall før de når svaret.",
+                "stopper hallusinerte tall før de når svaret. Et rent spørsmål "
+                "uten fil hopper hit direkte (den lilla stiplede snarveien) og "
+                "merkes ærlig med uten_dokument.",
     "svar": "Svaret deklarerer ærlig hva som skjedde: advarsel, avvik, uten_dokument, "
             "kilde og versjonsstempel (api/prompt/regler). Alle kall logges i "
             "tilgangsloggen med rate-begrensning.",
@@ -1620,8 +1624,36 @@ class FlytskjemaPanel:
                 c.create_text((x2a + x1b) // 2, midty - 10, text="dårlig lesing",
                               fill=ROSA, font=("Segoe UI", 8, "italic"))
 
-        # tilbakesloeyfen: kvalitetsport → (rundt utsiden) → lesing
+        # -- de tre alternative stiene (uten disse mangler ekte flyt) --
+        # A) deterministisk: /analyser og /uttrekk hopper OVER Borealis
+        xu1, yu1, xu2, yu2 = rekt["uttrekk"]
+        xs1, ys1, xs2, ys2 = rekt["svar"]
+        midt_u, midt_s = (yu1 + yu2) // 2, (ys1 + ys2) // 2
+        c.create_line(xu2, midt_u, 400, midt_u, 400, midt_s, xs2, midt_s,
+                      fill=GRONN, width=2, arrow=tk.LAST, arrowshape=(10, 12, 5))
+        c.create_text(409, (midt_u + midt_s) // 2, angle=90,
+                      text="uten spørsmål: /analyser · /uttrekk",
+                      fill=GRONN, font=("Segoe UI", 8, "italic"))
+        # B) rent spørsmål UTEN fil: rett fra inn til Borealis
+        xi1, yi1, xi2, yi2 = rekt["inn"]
+        xb1, yb1, xb2, yb2 = rekt["borealis"]
+        midt_i, midt_b = (yi1 + yi2) // 2, (yb1 + yb2) // 2
+        c.create_line(xi2, midt_i, 372, midt_i, 372, midt_b, xb2, midt_b,
+                      fill=LILLA, width=2, dash=(5, 3),
+                      arrow=tk.LAST, arrowshape=(10, 12, 5))
+        c.create_text(363, (midt_i + midt_b) // 2 + 26, angle=90,
+                      text="rent spørsmål (uten fil)",
+                      fill=LILLA, font=("Segoe UI", 8, "italic"))
+        # C) kvalitetsporten kan ogsaa FORKASTE: rull tilbake til trening
         x1p, y1p, x2p, y2p = rekt["port"]
+        x1t, y1t, x2t, y2t = rekt["trening"]
+        c.create_line(640, y1p, 640, y2t, fill=ROD, width=2, dash=(5, 3),
+                      arrow=tk.LAST, arrowshape=(10, 12, 5))
+        c.create_text(628, (y1p + y2t) // 2, anchor="e",
+                      text="dårligere → rull tilbake",
+                      fill=ROD, font=("Segoe UI", 8, "italic"))
+
+        # tilbakesloeyfen: kvalitetsport → (rundt utsiden) → lesing
         x1l, y1l, x2l, y2l = rekt["lese"]
         midtp = (x1p + x2p) // 2
         self._sloyfe = c.create_line(
