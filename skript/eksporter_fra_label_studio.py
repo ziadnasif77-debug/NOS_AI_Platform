@@ -73,18 +73,48 @@ def hent_prosjekter() -> list:
 
 
 def hent_fullforte_oppgaver(prosjekt_id: int) -> list:
-    """Henter alle fullforte annoteringer fra ett prosjekt."""
+    """Henter oppgavene som HAR annoteringer i ett prosjekt (paginert).
+
+    MERK (Label Studio 1.23): liste-endepunktet /api/tasks returnerer IKKE
+    lenger selve annoteringsinnholdet (feltet «annotations» er None) —
+    før denne fiksen eksporterte vi derfor alltid 0, uansett hvor mye de
+    ansatte hadde rettet. Innholdet hentes nå per oppgave i
+    hent_annoteringer()."""
+    oppgaver = []
+    side = 1
     try:
-        svar = requests.get(
-            f"{LABEL_STUDIO_URL}/api/tasks"
-            f"?project={prosjekt_id}&annotation_results=true",
-            headers=HEADERS,
-            timeout=30
-        )
-        svar.raise_for_status()
-        return svar.json().get("tasks", [])
+        while True:
+            svar = requests.get(
+                f"{LABEL_STUDIO_URL}/api/tasks"
+                f"?project={prosjekt_id}&page={side}&page_size=200",
+                headers=HEADERS,
+                timeout=30
+            )
+            svar.raise_for_status()
+            bunke = svar.json().get("tasks", [])
+            oppgaver.extend(o for o in bunke
+                            if o.get("total_annotations", 0) > 0)
+            if len(bunke) < 200:
+                return oppgaver
+            side += 1
     except requests.RequestException as feil:
         print(f"Kunne ikke hente oppgaver for prosjekt {prosjekt_id}: {feil}")
+        return oppgaver
+
+
+def hent_annoteringer(oppgave_id: int) -> list:
+    """Henter selve annoteringene for én oppgave — det verifisert
+    fungerende endepunktet i Label Studio 1.23."""
+    try:
+        svar = requests.get(
+            f"{LABEL_STUDIO_URL}/api/tasks/{oppgave_id}/annotations/",
+            headers=HEADERS,
+            timeout=15
+        )
+        svar.raise_for_status()
+        return svar.json()
+    except requests.RequestException as feil:
+        print(f"Kunne ikke hente annoteringer for oppgave {oppgave_id}: {feil}")
         return []
 
 
@@ -149,12 +179,15 @@ def eksporter():
         print(f"Behandler: {prosjekt_navn} (ID: {prosjekt_id})")
 
         oppgaver = hent_fullforte_oppgaver(prosjekt_id)
-        print(f"  -> {len(oppgaver)} fullforte oppgaver")
+        print(f"  -> {len(oppgaver)} annoterte oppgaver")
 
         for oppgave in oppgaver:
             if oppgave.get("id") in klargjort:
                 hoppet_over += 1
                 continue
+            # LS 1.23: annoteringsinnholdet må hentes per oppgave (lista
+            # over har det ikke) — kun for NYE oppgaver, så det er billig.
+            oppgave["annotations"] = hent_annoteringer(oppgave["id"])
             trocr = konverter_til_trocr_format(oppgave)
             if trocr:
                 trocr_data.append(trocr)
