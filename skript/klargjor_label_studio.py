@@ -40,21 +40,13 @@ PROSJEKT_TITTEL = "OCR-korreksjon (norsk)"
 # så regionverktøyene er bevisst uten perRegion-transkripsjon.
 ETIKETT_KONFIG = """<View>
   <Header value="Rett maskinens lesing så den stemmer med dokumentbildet — Ctrl+Enter sender inn"/>
-  <View style="display: flex; gap: 20px; align-items: flex-start;">
-    <View style="flex: 62%; min-width: 55%;">
+  <View style="display: flex; gap: 18px; align-items: flex-start;">
+    <View style="flex: 64%; min-width: 55%;">
       <Image name="bilde" value="$bilde" width="100%" maxWidth="100%"
              zoom="true" zoomControl="true" defaultZoom="fit"
              rotateControl="true" brightnessControl="true" contrastControl="true"/>
-      <Header value="Marker gjerne områder (valgfritt)" size="4"/>
-      <Labels name="omraade_type" toName="bilde">
-        <Label value="Håndskrift" background="#ec4899"/>
-        <Label value="Trykt tekst" background="#22c55e"/>
-        <Label value="Uleselig" background="#ef4444"/>
-        <Label value="Stempel/signatur" background="#f59e0b"/>
-      </Labels>
-      <Rectangle name="omraade" toName="bilde" strokeWidth="3"/>
     </View>
-    <View style="flex: 38%; position: sticky; top: 12px;">
+    <View style="flex: 36%; position: sticky; top: 12px;">
       <Header value="Maskinens lesing — konfidens: $konfidens %"/>
       <Collapse>
         <Panel value="Felter maskinen fant">
@@ -64,9 +56,17 @@ ETIKETT_KONFIG = """<View>
           <Text name="tekst" value="$tekst"/>
         </Panel>
       </Collapse>
-      <Header value="Korrigert tekst — forhåndsutfylt, rett bare feilene"/>
+      <Header value="Områder på bildet — forhåndsmerket av maskinen" size="4"/>
+      <RectangleLabels name="omraade" toName="bilde" showInline="true"
+                       strokeWidth="2" opacity="0.15">
+        <Label value="Håndskrift" background="#ec4899"/>
+        <Label value="Trykt tekst" background="#22c55e"/>
+        <Label value="Uleselig" background="#ef4444"/>
+        <Label value="Stempel/signatur" background="#f59e0b"/>
+      </RectangleLabels>
+      <Header value="Korrigert tekst — forhåndsutfylt, rett bare feilene" size="4"/>
       <TextArea name="transkripsjon" toName="bilde" value="$tekst"
-                rows="16" editable="true" maxSubmissions="1"/>
+                rows="14" editable="true" maxSubmissions="1"/>
     </View>
   </View>
 </View>"""

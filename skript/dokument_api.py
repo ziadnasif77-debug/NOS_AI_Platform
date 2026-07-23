@@ -414,6 +414,11 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     # dokumentet bør til Label Studio for korreksjon.
     konf_sum = 0.0
     konf_vekt = 0.0
+    # Side 1-regionene (bokser + skriftslag) beholdes for auto-
+    # gjennomgangen: Label Studio-oppgaven får dem som forhåndsmerkede
+    # områder, så den ansatte ser hvor maskinen fant tekst.
+    side1_regioner = []
+    side1_dim = None
     for i, side in enumerate(doc):
         if i >= maks_sider:
             break
@@ -423,6 +428,9 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             bilde = bilde[:, :, :3]
         rendrede.append(bilde)
         resultat = ocr_side(bilde)
+        if i == 0:
+            side1_regioner = resultat["regioner"]
+            side1_dim = (pix.width, pix.height)
         tekster.append(resultat["tekst"])
         for r in resultat["regioner"]:
             motorer[r["motor"]] = motorer.get(r["motor"], 0) + 1
@@ -445,7 +453,9 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             "sider_totalt": sider_totalt,
             # Understrek = internt felt, aldri med i et JSON-svar (samme
             # konvensjon som jobb["_data"]). Dette er numpy-arrayer.
-            "_sidebilder": rendrede}
+            "_sidebilder": rendrede,
+            "_side1_regioner": side1_regioner,
+            "_side1_dim": side1_dim}
 
 
 # ------------------------------------------------------------------ #
@@ -491,7 +501,9 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
                 fil_id=fil_id, bilde_sti=png_sti, raa_tekst=raa_tekst,
                 konfidens=konfidens,
                 metadata={k: felter.get(k, "") for k in
-                          ("navn", "dato", "ytelse", "fylke")})
+                          ("navn", "dato", "ytelse", "fylke")},
+                regioner=ocr_res.get("_side1_regioner") or [],
+                bilde_dim=ocr_res.get("_side1_dim"))
             print(f"  [gjennomgang] {filnavn} ({grunn}, konf={konfidens}) "
                   f"→ Label Studio: {'sendt' if ok else 'feilet'}",
                   file=sys.stderr)
