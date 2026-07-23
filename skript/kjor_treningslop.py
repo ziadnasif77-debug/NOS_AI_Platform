@@ -26,9 +26,40 @@ except Exception:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
+def _skriv_historikk(resultat: str, varighet: float,
+                     eksportert: int, trent: int) -> None:
+    """Livstidshistorikk over treningsløp (data/finjustering/
+    treningshistorikk.json) — leses av GUI-ets Trening-fane. Skrives av
+    ALLE løpere (GUI, ukejobb, manuell kjøring) siden alle går via her."""
+    import json
+    import os
+    sti = (Path(os.environ.get("FINJUSTERING_STI", "./data/finjustering"))
+           / "treningshistorikk.json")
+    try:
+        historikk = (json.loads(sti.read_text(encoding="utf-8"))
+                     if sti.is_file() else [])
+        if not isinstance(historikk, list):
+            historikk = []
+    except (OSError, ValueError):
+        historikk = []
+    historikk.append({
+        "tidspunkt": datetime.now().isoformat(timespec="seconds"),
+        "resultat": resultat, "varighet_s": varighet,
+        "eksportert": eksportert, "trent_paa": trent,
+    })
+    try:
+        sti.parent.mkdir(parents=True, exist_ok=True)
+        sti.write_text(json.dumps(historikk, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+    except OSError as exc:
+        print(f"(klarte ikke å skrive treningshistorikk: {exc})")
+
+
 def kjor() -> None:
     start = time.time()
     resultat = "ukjent"
+    antall_eksportert = 0
+    antall_trent = 0
     try:
         # 1) Eksport fra Label Studio
         print("=== 1/3  Eksporterer korreksjoner fra Label Studio ===")
@@ -42,7 +73,7 @@ def kjor() -> None:
         # 2) Finjuster norhand (TrOCR) → KANDIDAT (ikke live)
         print("\n=== 2/3  Finjusterer norhand (TrOCR) → kandidat ===")
         import finjuster
-        antall_trent = finjuster.finjuster_norhand()
+        antall_trent = finjuster.finjuster_norhand() or 0
         if not antall_trent:
             print("For få korreksjoner — ingen kandidat trent.")
             resultat = "for_faa"
@@ -73,6 +104,7 @@ def kjor() -> None:
         varighet = round(time.time() - start, 1)
         print(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] resultat={resultat} "
               f"varighet={varighet}s")
+        _skriv_historikk(resultat, varighet, antall_eksportert, antall_trent)
         print("Ferdig.")
 
 

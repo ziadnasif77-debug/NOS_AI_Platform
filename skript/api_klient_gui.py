@@ -223,6 +223,7 @@ LILLA = "#a855f7"          # RAM-graf
 FANER = [
     ("kontroll", "Kontrollpanel"),
     ("flyt", "Flytskjema"),
+    ("trening", "Trening"),
     ("spor", "Spør"),
     ("fyll_skjema", "Fyll skjema"),
     ("analyser", "Analyser"),
@@ -1738,11 +1739,450 @@ class FlytskjemaPanel:
             self.detalj_var.set(FLYT_DETALJER[self._valgt])
 
 
+# ==========================================================================
+# Trening — én knapp kjører hele treningsløkken (eksport → finjustering →
+# kvalitetsport) med ekte fremdriftslinje, kravliste og telling av
+# dokumenter (klare / venter på ansatt / trent gjennom livstiden).
+# API-serveren stoppes automatisk (GPU-en må være ledig) og startes igjen.
+# ==========================================================================
+TRENING_FASER = {
+    "eksport": ("1/3 — Eksport fra Label Studio", 0.02, 0.10),
+    "trening": ("2/3 — Finjustering av norhand", 0.10, 0.85),
+    "port": ("3/3 — Kvalitetsport (CER)", 0.85, 0.98),
+}
+TRENING_EPOKER = 3.0          # num_train_epochs i finjuster.py
+TRENING_MIN_EKSEMPLER = 10    # MIN_EKSEMPLER i finjuster.py
+
+TRENING_RESULTATER = {
+    "promotert": ("Kandidaten var minst like god — PROMOTERT til live. "
+                  "API-omstarten lastet den nye modellen.", GRONN),
+    "avvist_daarligere": ("Kandidaten var dårligere — AVVIST i porten. "
+                          "Live-modellen står urørt.", ROD),
+    "ingen_data": ("Ingen annoterte korreksjoner i Label Studio — "
+                   "ingenting å trene på ennå.", GUL),
+    "for_faa": (f"For få eksempler (minimum {TRENING_MIN_EKSEMPLER}) — "
+                "annoter flere i Label Studio først.", GUL),
+    "ingen_valideringssett": ("Kandidat trent, men uten valideringssett "
+                              "(data/validering/norhand.json) promoteres den "
+                              "ikke automatisk.", GUL),
+    "ukjent": ("Løpet stoppet uventet — se loggen under.", ROD),
+    "avbrutt": ("Treningen ble avbrutt av deg.", GUL),
+}
+
+
+def _les_lokal_env() -> dict:
+    """Leser oppstart\\lokal_env.bat (set \"K=V\"-linjer) — gir GUI-en samme
+    hemmeligheter som launcherne (Label Studio-token m.m.)."""
+    miljo = {}
+    try:
+        for linje in (OPPSTART_MAPPE / "lokal_env.bat").read_text(
+                encoding="ascii", errors="replace").splitlines():
+            treff = re.match(r'\s*set\s+"([^=]+)=([^"]*)"', linje, re.IGNORECASE)
+            if treff:
+                miljo[treff.group(1)] = treff.group(2)
+    except OSError:
+        pass
+    return miljo
+
+
+class TreningPanel:
+    """Treningsfanen. Statistikk hentes i bakgrunnstråd; selve løpet kjøres
+    som subprocess (kjor_treningslop.py) med linjeparsing for fremdrift.
+    All widget-oppdatering skjer på hovedtråden via rot.after."""
+
+    def __init__(self, forelder, rot, kontroll: "KontrollPanel"):
+        self.rot = rot
+        self.kontroll = kontroll
+        self._lukket = False
+        self._vekk = threading.Event()
+        self._prosess = None          # subprocess.Popen under kjøring
+        self._api_var_oppe = False
+        self._fase = None
+        self._start_tid = None
+        self._klokke_jobb = None
+
+        self._bygg(forelder)
+        threading.Thread(target=self._statistikk_lokke, daemon=True).start()
+
+    # ---------- oppbygging ----------
+    def _bygg(self, forelder):
+        pad = {"padx": 12, "pady": 6}
+
+        knapperad = tk.Frame(forelder, bg=BG_HOVED)
+        knapperad.pack(fill="x", **pad)
+        self.start_knapp = tk.Button(
+            knapperad, text="▶  START TRENING", command=self._start_eller_avbryt,
+            bg=LILLA, fg="white", activebackground=_bland(LILLA, "#000000", 0.2),
+            activeforeground="white", font=("Segoe UI", 12, "bold"),
+            relief="flat", highlightthickness=0, pady=10,
+        )
+        self.start_knapp.pack(side="left", fill="x", expand=True)
+        tema_knapp(knapperad, "Annoter i Label Studio",
+                   lambda: webbrowser.open("http://127.0.0.1:8080/projects/"
+                                           + _les_lokal_env().get(
+                                               "LABEL_STUDIO_OCR_PROSJEKT_ID", "1"))
+                   ).pack(side="left", padx=(10, 0))
+        tema_knapp(knapperad, "Oppdater", self._vekk.set).pack(side="left", padx=(8, 0))
+
+        # -- fremdrift --
+        fr = tk.Frame(forelder, bg=BG_HOVED)
+        fr.pack(fill="x", padx=12)
+        self.fase_var = tk.StringVar(value="Klar — treningen stopper API-et "
+                                           "automatisk og starter det igjen etterpå.")
+        tk.Label(fr, textvariable=self.fase_var, fg=FG_TEKST, bg=BG_HOVED,
+                 anchor="w", font=("Segoe UI", 10, "bold")).pack(side="left")
+        self.tid_var = tk.StringVar(value="")
+        tk.Label(fr, textvariable=self.tid_var, fg=FG_DEMPET, bg=BG_HOVED,
+                 anchor="e").pack(side="right")
+        self.fremdrift = tk.Canvas(forelder, height=14, bg=FREMDRIFT_BG,
+                                   highlightthickness=1,
+                                   highlightbackground=FREMDRIFT_KANT)
+        self.fremdrift.pack(fill="x", padx=12, pady=(2, 6))
+        self._fyllt = self.fremdrift.create_rectangle(0, 0, 0, 14, fill=LILLA, width=0)
+        self._prosent_tekst = self.fremdrift.create_text(
+            8, 7, anchor="w", text="", fill="white", font=("Segoe UI", 8, "bold"))
+
+        # -- telling (det brukeren spurte om) --
+        telleramme = tema_rammefelt(forelder, "Dokumenter i treningsløkka")
+        telleramme.pack(fill="x", **pad)
+        rute = tk.Frame(telleramme, bg=BG_PANEL)
+        rute.pack(fill="x", padx=8, pady=8)
+        for kol in range(3):
+            rute.columnconfigure(kol, weight=1, uniform="telle")
+        self.telle_vars = {}
+        for kol, (nokkel, tittel, farge) in enumerate([
+                ("klare", "Klare til trening\n(annotert, ikke trent)", GRONN),
+                ("venter", "Venter på ansatt\n(ikke annotert ennå)", GUL),
+                ("livstid", "Trent gjennom livstiden\n(unike dokumenter)", CYAN)]):
+            boks = tk.Frame(rute, bg=BG_INNDATA, highlightthickness=1,
+                            highlightbackground=KANTLINJE)
+            boks.grid(row=0, column=kol, sticky="nsew",
+                      padx=(0 if kol == 0 else 6, 0))
+            var = tk.StringVar(value="—")
+            tk.Label(boks, textvariable=var, fg=farge, bg=BG_INNDATA,
+                     font=("Segoe UI", 22, "bold")).pack(pady=(8, 0))
+            tk.Label(boks, text=tittel, fg=FG_DEMPET, bg=BG_INNDATA,
+                     font=("Segoe UI", 8), justify="center").pack(pady=(0, 8))
+            self.telle_vars[nokkel] = var
+        self.siste_var = tk.StringVar(value="Ingen treningskjøringer ennå.")
+        tk.Label(telleramme, textvariable=self.siste_var, fg=FG_DEMPET,
+                 bg=BG_PANEL, anchor="w", wraplength=830).pack(
+                     fill="x", padx=8, pady=(0, 8))
+
+        # -- krav --
+        kravramme = tema_rammefelt(forelder, "Krav for å trene (sjekkes live)")
+        kravramme.pack(fill="x", **pad)
+        self.krav_rader = {}
+        for nokkel, tekst in [
+                ("ls", "Label Studio kjører og API-nøkkelen virker"),
+                ("data", f"Nok annoterte korreksjoner (minst {TRENING_MIN_EKSEMPLER} totalt)"),
+                ("gpu", "NVIDIA-GPU tilgjengelig (API-et stoppes automatisk for å frigjøre VRAM)"),
+                ("modell", "Basismodellen norhand finnes (modeller/norhand)"),
+                ("validering", "Valideringssett for auto-promotering (ellers manuell promotering)")]:
+            rad = tk.Frame(kravramme, bg=BG_PANEL)
+            rad.pack(fill="x", padx=8, pady=1)
+            dot = tk.Label(rad, text="●", fg=FG_DEMPET, bg=BG_PANEL,
+                           font=("Segoe UI", 11))
+            dot.pack(side="left")
+            var = tk.StringVar(value=tekst)
+            tk.Label(rad, textvariable=var, fg=FG_TEKST, bg=BG_PANEL,
+                     anchor="w", font=("Segoe UI", 9)).pack(
+                         side="left", fill="x", expand=True, padx=(6, 0))
+            self.krav_rader[nokkel] = (dot, var, tekst)
+
+        # -- resultat + logg --
+        self.resultat_var = tk.StringVar(value="")
+        self.resultat_etikett = tk.Label(
+            forelder, textvariable=self.resultat_var, fg="white", bg=BG_PANEL,
+            anchor="w", wraplength=830, font=("Segoe UI", 10, "bold"),
+            padx=10, pady=6)
+        # pakkes først når et løp er ferdig
+
+        loggramme = tema_rammefelt(forelder, "Logg fra treningsløpet (live)")
+        loggramme.pack(fill="both", expand=True, **pad)
+        self.logg = tema_tekstfelt(loggramme, wrap="none",
+                                   font=("Consolas", 8), height=7)
+        self.logg.pack(fill="both", expand=True, padx=8, pady=8)
+        self.logg.config(state="disabled")
+
+    # ---------- statistikk (bakgrunnstråd) ----------
+    def _statistikk_lokke(self):
+        while not self._lukket:
+            stat = self._hent_statistikk()
+            self._trygg_after(self._vis_statistikk, stat)
+            self._vekk.wait(timeout=15.0)
+            self._vekk.clear()
+
+    def _hent_statistikk(self) -> dict:
+        miljo = _les_lokal_env()
+        nokkel = miljo.get("LABEL_STUDIO_API_KEY", "")
+        prosjekt = miljo.get("LABEL_STUDIO_OCR_PROSJEKT_ID", "1")
+        stat = {"ls_ok": False, "totalt": 0, "annotert_ids": set()}
+
+        if nokkel:
+            try:
+                svar = requests.get(
+                    f"http://127.0.0.1:8080/api/tasks?project={prosjekt}",
+                    headers={"Authorization": f"Token {nokkel}"}, timeout=4)
+                if svar.ok:
+                    stat["ls_ok"] = True
+                    oppgaver = svar.json().get("tasks", [])
+                    stat["totalt"] = len(oppgaver)
+                    stat["annotert_ids"] = {
+                        o["id"] for o in oppgaver
+                        if o.get("total_annotations", 0) > 0}
+            except requests.exceptions.RequestException:
+                pass
+
+        # trent = unike oppgave-id-er i alle eksporterte treningsfiler
+        trent = set()
+        eksempler = 0
+        for fil in (PROSJEKT_ROT / "data" / "finjustering").glob("trocr_*.json"):
+            try:
+                for rad in json.loads(fil.read_text(encoding="utf-8")):
+                    eksempler += 1
+                    if rad.get("oppgave_id") is not None:
+                        trent.add(rad["oppgave_id"])
+            except (OSError, ValueError):
+                continue
+        stat["trent_ids"] = trent
+        stat["eksempler"] = eksempler
+
+        historikk_sti = (PROSJEKT_ROT / "data" / "finjustering"
+                         / "treningshistorikk.json")
+        stat["historikk"] = []
+        try:
+            if historikk_sti.is_file():
+                stat["historikk"] = json.loads(
+                    historikk_sti.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+
+        stat["gpu"] = self.kontroll._maaler.gpu()
+        stat["gpu_finnes"] = self.kontroll._maaler.nvidia_ok
+        stat["modell_ok"] = (PROSJEKT_ROT / "modeller" / "norhand"
+                             / "config.json").is_file()
+        stat["validering_ok"] = (PROSJEKT_ROT / "data" / "validering"
+                                 / "norhand.json").is_file()
+        return stat
+
+    def _vis_statistikk(self, stat: dict):
+        if self._lukket:
+            return
+        try:
+            klare = stat["annotert_ids"] - stat["trent_ids"]
+            venter = stat["totalt"] - len(stat["annotert_ids"])
+            self.telle_vars["klare"].set(str(len(klare)) if stat["ls_ok"] else "?")
+            self.telle_vars["venter"].set(str(max(0, venter)) if stat["ls_ok"] else "?")
+            self.telle_vars["livstid"].set(str(len(stat["trent_ids"])))
+
+            historikk = stat["historikk"]
+            if historikk:
+                siste = historikk[-1]
+                self.siste_var.set(
+                    f"Siste kjøring: {siste.get('tidspunkt', '?')} — resultat: "
+                    f"{siste.get('resultat', '?')} ({siste.get('trent_paa', 0)} "
+                    f"eksempler, {siste.get('varighet_s', 0):.0f} s). "
+                    f"Totalt {len(historikk)} kjøringer gjennom livstiden.")
+            else:
+                self.siste_var.set("Ingen treningskjøringer ennå.")
+
+            annotert_totalt = len(stat["annotert_ids"] | stat["trent_ids"])
+            self._sett_krav("ls", stat["ls_ok"],
+                            detalj=None if stat["ls_ok"]
+                            else "— start den fra Kontrollpanelet")
+            self._sett_krav("data", annotert_totalt >= TRENING_MIN_EKSEMPLER,
+                            detalj=f"— har {annotert_totalt}")
+            gpu_detalj = None
+            if stat["gpu"]:
+                _p, brukt, totalt = stat["gpu"]
+                gpu_detalj = f"— VRAM nå: {brukt/1024:.1f}/{totalt/1024:.1f} GB"
+            self._sett_krav("gpu", stat["gpu_finnes"], detalj=gpu_detalj)
+            self._sett_krav("modell", stat["modell_ok"])
+            self._sett_krav("validering", stat["validering_ok"],
+                            advarsel=True)
+        except tk.TclError:
+            pass
+
+    def _sett_krav(self, nokkel, oppfylt, detalj=None, advarsel=False):
+        dot, var, grunntekst = self.krav_rader[nokkel]
+        dot.config(fg=GRONN if oppfylt else (GUL if advarsel else ROD))
+        var.set(grunntekst + (f" {detalj}" if detalj else ""))
+
+    # ---------- selve treningsløpet ----------
+    def _start_eller_avbryt(self):
+        if self._prosess is not None:
+            self._avbryt()
+            return
+        if not (PROSJEKT_ROT / "skript" / "kjor_treningslop.py").is_file():
+            messagebox.showwarning(
+                "Kun på servermaskinen",
+                "Fant ikke treningsskriptene — trening kjøres på maskinen "
+                "der nav-mappa ligger.")
+            return
+        self.resultat_etikett.pack_forget()
+        self._sett_logg("")
+        self.start_knapp.config(text="■  AVBRYT TRENING", bg=ROD,
+                                activebackground=ROD_AKTIV)
+        self.fase_var.set("Stopper API-et (frigjør GPU-en) ...")
+        self._start_tid = time.monotonic()
+        self._tikk_klokke()
+        threading.Thread(target=self._kjor_lop, daemon=True).start()
+
+    def _kjor_lop(self):
+        # 1) stopp API-et hvis det kjører (Borealis holder ellers VRAM-en)
+        api = KONTROLL_TJENESTER[0]
+        self._api_var_oppe = bool(self.kontroll._pids_paa_port(api["port"]))
+        if self._api_var_oppe:
+            self.kontroll._stopp_tjeneste(api, stille=True)
+            frist = time.monotonic() + 30
+            while (time.monotonic() < frist
+                   and self.kontroll._pids_paa_port(api["port"])):
+                time.sleep(2)
+            time.sleep(4)   # la CUDA slippe minnet helt
+
+        # 2) kjør treningsløpet
+        self._trygg_after(self.fase_var.set, "Starter treningsløpet ...")
+        miljo = {**os.environ, **_les_lokal_env(),
+                 "PYTHONNOUSERSITE": "1", "PYTHONUTF8": "1"}
+        try:
+            self._prosess = subprocess.Popen(
+                [str(PROSJEKT_ROT / ".pyruntime" / "python.exe"), "-u",
+                 str(PROSJEKT_ROT / "skript" / "kjor_treningslop.py")],
+                cwd=str(PROSJEKT_ROT), env=miljo,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace",
+                creationflags=_UTEN_VINDU)
+        except OSError as exc:
+            self._trygg_after(self._ferdig, "ukjent", f"Klarte ikke å starte: {exc}")
+            return
+
+        resultat = "ukjent"
+        for linje in self._prosess.stdout:
+            linje = linje.rstrip()
+            if not linje:
+                continue
+            treff = re.search(r"resultat=(\w+)", linje)
+            if treff:
+                resultat = treff.group(1)
+            self._trygg_after(self._logglinje, linje)
+        kode = self._prosess.wait()
+        avbrutt = self._prosess is None or getattr(self, "_ble_avbrutt", False)
+        self._ble_avbrutt = False
+        self._prosess = None
+        if avbrutt:
+            resultat = "avbrutt"
+        elif kode != 0 and resultat == "ukjent":
+            resultat = "ukjent"
+
+        # 3) start API-et igjen (laster evt. promotert modell)
+        if self._api_var_oppe:
+            self._trygg_after(self.fase_var.set,
+                              "Starter API-et igjen (laster modellen) ...")
+            self._trygg_after(lambda: self.kontroll._start_tjeneste(api))
+        self._vekk.set()
+        self._trygg_after(self._ferdig, resultat, None)
+
+    def _avbryt(self):
+        prosess = self._prosess
+        if prosess is None:
+            return
+        self._ble_avbrutt = True
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(prosess.pid)],
+                       capture_output=True, creationflags=_UTEN_VINDU)
+
+    def _ferdig(self, resultat: str, ekstra: str | None):
+        try:
+            if self._klokke_jobb is not None:
+                self.rot.after_cancel(self._klokke_jobb)
+                self._klokke_jobb = None
+            tekst, farge = TRENING_RESULTATER.get(
+                resultat, TRENING_RESULTATER["ukjent"])
+            if ekstra:
+                tekst = f"{tekst} ({ekstra})"
+            self.resultat_var.set(("✔  " if farge == GRONN else "✖  " if farge == ROD
+                                   else "⚠  ") + tekst)
+            self.resultat_etikett.config(bg=_bland(farge, BG_HOVED, 0.6))
+            self.resultat_etikett.pack(fill="x", padx=12, pady=(0, 6),
+                                       before=self.logg.master)
+            self.start_knapp.config(text="▶  START TRENING", bg=LILLA,
+                                    activebackground=_bland(LILLA, "#000000", 0.2))
+            self.fase_var.set("Klar.")
+            self._fase = None
+            self._sett_fremdrift(1.0 if resultat == "promotert" else 0.0)
+        except tk.TclError:
+            pass
+
+    # ---------- fremdrift/logg (hovedtråden) ----------
+    def _logglinje(self, linje: str):
+        try:
+            if "=== 1/3" in linje:
+                self._fase = "eksport"
+            elif "=== 2/3" in linje:
+                self._fase = "trening"
+            elif "=== 3/3" in linje:
+                self._fase = "port"
+            andel = None
+            if self._fase == "trening":
+                treff = re.search(r"'epoch':\s*([0-9.]+)", linje)
+                if treff:
+                    andel = min(float(treff.group(1)) / TRENING_EPOKER, 1.0)
+            if self._fase:
+                tittel, fra, til = TRENING_FASER[self._fase]
+                total = fra if andel is None else fra + (til - fra) * andel
+                epok = (f" — epoke {andel * TRENING_EPOKER:.1f}/"
+                        f"{TRENING_EPOKER:.0f}" if andel is not None else "")
+                self.fase_var.set(tittel + epok)
+                self._sett_fremdrift(total)
+
+            self.logg.config(state="normal")
+            self.logg.insert("end", linje + "\n")
+            if int(self.logg.index("end-1c").split(".")[0]) > 400:
+                self.logg.delete("1.0", "100.0")   # hold loggen lett
+            self.logg.see("end")
+            self.logg.config(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _sett_fremdrift(self, andel: float):
+        bredde = self.fremdrift.winfo_width()
+        self.fremdrift.coords(self._fyllt, 0, 0, bredde * max(0.0, min(andel, 1.0)), 14)
+        self.fremdrift.itemconfig(self._prosent_tekst,
+                                  text=f"{andel * 100:.0f} %" if andel > 0.02 else "")
+
+    def _tikk_klokke(self):
+        if self._start_tid is None or self._prosess is None and self._fase is None:
+            pass
+        gaatt = time.monotonic() - (self._start_tid or time.monotonic())
+        self.tid_var.set(f"{int(gaatt // 60)} min {int(gaatt % 60):02d} s")
+        self._klokke_jobb = self.rot.after(1000, self._tikk_klokke)
+
+    def _sett_logg(self, tekst: str):
+        self.logg.config(state="normal")
+        self.logg.delete("1.0", "end")
+        if tekst:
+            self.logg.insert("1.0", tekst)
+        self.logg.config(state="disabled")
+
+    def _trygg_after(self, fn, *argumenter):
+        try:
+            self.rot.after(0, fn, *argumenter)
+        except (tk.TclError, RuntimeError):
+            pass
+
+    def har_aktiv_trening(self) -> bool:
+        return self._prosess is not None
+
+    def lukk(self):
+        self._lukket = True
+        self._vekk.set()
+
+
 class DokumentKlientApp:
     def __init__(self, rot: tk.Tk):
         self.rot = rot
         self.rot.title("NAV dokument-API — klient (Borealis)")
-        self.rot.geometry("780x880")
+        self.rot.geometry("900x920")
         self.rot.minsize(640, 700)
         self.rot.configure(bg=BG_HOVED)
 
@@ -1759,6 +2199,15 @@ class DokumentKlientApp:
         self.rot.protocol("WM_DELETE_WINDOW", self._ved_lukking)
 
     def _ved_lukking(self):
+        if hasattr(self, "trening") and self.trening.har_aktiv_trening():
+            if not messagebox.askyesno(
+                    "Trening pågår",
+                    "Et treningsløp kjører fortsatt. Avbryte treningen og "
+                    "lukke likevel?"):
+                return
+            self.trening._avbryt()
+        if hasattr(self, "trening"):
+            self.trening.lukk()
         if hasattr(self, "kontroll"):
             self.kontroll.lukk()  # stopper bakgrunnstrådene rent
         lagre_konfig(self.url_var.get().strip(), self.nokkel_var.get().strip())
@@ -1820,6 +2269,8 @@ class DokumentKlientApp:
 
         self.kontroll = KontrollPanel(self._fane_rammer["kontroll"], self.rot)
         self.flytskjema = FlytskjemaPanel(self._fane_rammer["flyt"], self.rot)
+        self.trening = TreningPanel(self._fane_rammer["trening"], self.rot,
+                                    self.kontroll)
         self._bygg_spor_fane(self._fane_rammer["spor"])
         self._bygg_fyll_skjema_fane(self._fane_rammer["fyll_skjema"])
         self._bygg_analyser_fane(self._fane_rammer["analyser"])
