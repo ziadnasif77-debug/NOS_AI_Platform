@@ -222,6 +222,7 @@ LILLA = "#a855f7"          # RAM-graf
 # Fanene i appen, i rekkefølge: (intern nøkkel, knappetekst)
 FANER = [
     ("kontroll", "Kontrollpanel"),
+    ("flyt", "Flytskjema"),
     ("spor", "Spør"),
     ("fyll_skjema", "Fyll skjema"),
     ("analyser", "Analyser"),
@@ -1482,6 +1483,229 @@ class KontrollPanel:
         self._vekk.set()
 
 
+# ==========================================================================
+# Flytskjema — interaktivt, farget kart over hele prosjektet fra dokument
+# inn til selvforbedringssløyfen. Tegnet rett på tk.Canvas (ingen nye
+# avhengigheter, helt portabelt). Klikk en boks for forklaring, eller
+# «Spill av» for en guidet gjennomgang steg for steg.
+# ==========================================================================
+FLYT_NODER = [
+    # (nokkel, tittel, undertekst, farge, x, y, bredde, hoyde)
+    ("inn", "1 · Dokument inn", "PDF / bilde / Word / Excel", CYAN, 30, 14, 310, 58),
+    ("lese", "2 · Lesing", "PDF-tekstlag eller OCR + håndskrift", BLAA, 30, 98, 310, 58),
+    ("uttrekk", "3 · Deterministisk uttrekk", "datoer · beløp · ID (mod 11) · tallvakt", GRONN, 30, 182, 310, 58),
+    ("borealis", "4 · Borealis (LLM)", "spørsmål/svar på GPU — tallvakt-beskyttet", LILLA, 30, 266, 310, 58),
+    ("svar", "5 · Ærlig svar ut", "advarsel · avvik · kilde · versjon", GRONN, 30, 350, 310, 58),
+    ("labelstudio", "6 · Label Studio", "menneske retter dårlig lesing", ROSA, 430, 98, 280, 58),
+    ("trening", "7 · Finjustering", "norhand trenes på korreksjonene", ORANSJE, 430, 210, 280, 58),
+    ("port", "8 · Kvalitetsport", "CER-test → promoter eller rull tilbake", GUL, 430, 322, 280, 58),
+]
+
+FLYT_DETALJER = {
+    "inn": "UiPath, GUI-klienten eller ren HTTP laster opp dokumentet. Endepunkter: "
+           "/spor (spørsmål), /analyser, /uttrekk, /fyll_skjema og /jobb for store "
+           "skanninger i bakgrunnen. Bilder og Office-filer konverteres til PDF.",
+    "lese": "Har PDF-en tekstlag, leses det direkte (raskt og eksakt). Skannede sider "
+            "går til regionbasert OCR: EasyOCR/RapidOCR for trykt tekst, norhand "
+            "(TrOCR) for norsk håndskrift, pyzbar for strekkoder/QR — på GPU-en.",
+    "uttrekk": "delt/tekstuttrekk.py finner datoer, beløp og identifikatorer "
+               "deterministisk, med kontrollsiffer-validering (mod 11). Tallvakten "
+               "garanterer at hvert tall i svaret står ordrett i dokumentet.",
+    "borealis": "Spørsmål besvares av Borealis 4B (GGUF via llama.cpp på CUDA). "
+                "Modellen får OCR-teksten + spørsmålet; tallvakt og kodevalidering "
+                "stopper hallusinerte tall før de når svaret.",
+    "svar": "Svaret deklarerer ærlig hva som skjedde: advarsel, avvik, uten_dokument, "
+            "kilde og versjonsstempel (api/prompt/regler). Alle kall logges i "
+            "tilgangsloggen med rate-begrensning.",
+    "labelstudio": "Leses et dokument dårlig (lav OCR-konfidens), sendes det automatisk "
+                   "til Label Studio der et menneske retter teksten. Best-effort: "
+                   "API-et virker helt fint selv om Label Studio er avslått.",
+    "trening": "skript/finjuster.py trener norhand videre på de menneskerettede "
+               "eksemplene (eksportert fra Label Studio). Kjøres periodisk via "
+               "Prefect-flyten — serveren stoppes først så GPU-en er ledig.",
+    "port": "valider_modell.py måler CER for kandidatmodellen mot dagens modell på et "
+            "kontrollsett. Bedre → promoteres til modeller/norhand. Dårligere → "
+            "rulles tilbake. Omstart laster den nye modellen — sløyfen er sluttet.",
+    "_slutt": "Sløyfen er sluttet: den forbedrede modellen leser neste dokument bedre — "
+              "og slik blir systemet gradvis skarpere helt av seg selv.",
+}
+
+FLYT_PILER = [
+    # (fra, til, retning) — retning: "ned" eller "hoyre"
+    ("inn", "lese", "ned"), ("lese", "uttrekk", "ned"),
+    ("uttrekk", "borealis", "ned"), ("borealis", "svar", "ned"),
+    ("lese", "labelstudio", "hoyre"),
+    ("labelstudio", "trening", "ned"), ("trening", "port", "ned"),
+]
+
+FLYT_REKKEFOLGE = ["inn", "lese", "uttrekk", "borealis", "svar",
+                   "labelstudio", "trening", "port"]
+FLYT_STEG_MS = 2600  # per steg i avspillingen
+
+
+class FlytskjemaPanel:
+    """Interaktivt flytskjema over hele prosjektet. Alt kjører på
+    hovedtråden (ren tegning + after-animasjon) — ingen tråder her."""
+
+    def __init__(self, forelder, rot):
+        self.rot = rot
+        self._valgt = None
+        self._anim_jobb = None
+        self._anim_indeks = 0
+        self._elementer = {}   # nokkel -> {"boks": id, "farge": ...}
+
+        topp = tk.Frame(forelder, bg=BG_HOVED)
+        topp.pack(fill="x", padx=12, pady=(8, 2))
+        self.spill_knapp = tk.Button(
+            topp, text="▶  Spill av flyten", command=self._spill_eller_stopp,
+            bg=AKSENT, fg="white", activebackground=AKSENT_AKTIV,
+            activeforeground="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", highlightthickness=0, padx=14, pady=5,
+        )
+        self.spill_knapp.pack(side="left")
+        tk.Label(topp, text="… eller klikk på en boks for forklaring",
+                 fg=FG_DEMPET, bg=BG_HOVED).pack(side="left", padx=10)
+
+        self.canvas = tk.Canvas(forelder, width=730, height=444, bg=BG_HOVED,
+                                highlightthickness=0)
+        self.canvas.pack(padx=12, pady=(4, 2))
+
+        detaljramme = tema_rammefelt(forelder, "Forklaring")
+        detaljramme.pack(fill="both", expand=True, padx=12, pady=(4, 10))
+        self.detalj_var = tk.StringVar(
+            value="Slik virker hele prosjektet: dokument inn → lesing → uttrekk → "
+                  "svar, pluss sløyfen til høyre som gjør modellen bedre over tid. "
+                  "Klikk en boks, eller trykk «Spill av flyten».")
+        tk.Label(detaljramme, textvariable=self.detalj_var, fg=FG_TEKST,
+                 bg=BG_PANEL, anchor="nw", justify="left", wraplength=690,
+                 font=("Segoe UI", 10)).pack(fill="both", expand=True, padx=10, pady=8)
+
+        self._tegn()
+
+    # ---------- tegning ----------
+    @staticmethod
+    def _rund_boks(canvas, x1, y1, x2, y2, radius, **valg):
+        punkter = [
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+        ]
+        return canvas.create_polygon(punkter, smooth=True, **valg)
+
+    def _tegn(self):
+        c = self.canvas
+        rekt = {}
+        for nokkel, _t, _u, _f, x, y, b, h in FLYT_NODER:
+            rekt[nokkel] = (x, y, x + b, y + h)
+
+        # kolonneoverskrifter
+        c.create_text(185, 6, text="DOKUMENTFLYT (hver forespørsel)",
+                      fill=FG_DEMPET, font=("Segoe UI", 8, "bold"))
+        c.create_text(570, 6, text="FORBEDRINGSSLØYFE (over tid)",
+                      fill=FG_DEMPET, font=("Segoe UI", 8, "bold"))
+
+        # piler foerst (bak boksene)
+        for fra, til, retning in FLYT_PILER:
+            x1a, y1a, x2a, y2a = rekt[fra]
+            x1b, y1b, x2b, y2b = rekt[til]
+            farge = dict((n[0], n[3]) for n in FLYT_NODER)[til]
+            if retning == "ned":
+                midt = (x1a + x2a) // 2
+                c.create_line(midt, y2a, midt, y1b, fill=farge, width=3,
+                              arrow=tk.LAST, arrowshape=(10, 12, 5))
+            else:
+                midty = (y1a + y2a) // 2
+                c.create_line(x2a, midty, x1b, midty, fill=farge, width=3,
+                              arrow=tk.LAST, arrowshape=(10, 12, 5))
+                c.create_text((x2a + x1b) // 2, midty - 10, text="dårlig lesing",
+                              fill=ROSA, font=("Segoe UI", 8, "italic"))
+
+        # tilbakesloeyfen: kvalitetsport → (rundt utsiden) → lesing
+        x1p, y1p, x2p, y2p = rekt["port"]
+        x1l, y1l, x2l, y2l = rekt["lese"]
+        midtp = (x1p + x2p) // 2
+        self._sloyfe = c.create_line(
+            midtp, y2p, midtp, 430, 14, 430, 14, (y1l + y2l) // 2,
+            x1l, (y1l + y2l) // 2,
+            fill=GRONN, width=2, dash=(6, 4), arrow=tk.LAST,
+            arrowshape=(10, 12, 5), smooth=False)
+        c.create_text(150, 418, text="bedre modell → neste dokument leses bedre",
+                      fill=GRONN, font=("Segoe UI", 8, "italic"))
+
+        # boksene
+        for nokkel, tittel, under, farge, x, y, b, h in FLYT_NODER:
+            fyll = _bland(farge, BG_INNDATA, 0.72)
+            boks = self._rund_boks(c, x, y, x + b, y + h, 14,
+                                   fill=fyll, outline=farge, width=2,
+                                   tags=("node", nokkel))
+            c.create_text(x + 14, y + h / 2 - 10, text=tittel, anchor="w",
+                          fill="white", font=("Segoe UI", 10, "bold"),
+                          tags=("node", nokkel))
+            c.create_text(x + 14, y + h / 2 + 11, text=under, anchor="w",
+                          fill=_bland("#ffffff", farge, 0.25),
+                          font=("Segoe UI", 8), tags=("node", nokkel))
+            self._elementer[nokkel] = {"boks": boks, "farge": farge}
+
+        c.tag_bind("node", "<Button-1>", self._ved_klikk)
+        c.tag_bind("node", "<Enter>", lambda _e: c.config(cursor="hand2"))
+        c.tag_bind("node", "<Leave>", lambda _e: c.config(cursor=""))
+
+    # ---------- interaksjon ----------
+    def _ved_klikk(self, hendelse):
+        self._stopp_avspilling()
+        for tagg in self.canvas.gettags("current"):
+            if tagg in self._elementer:
+                self._velg(tagg)
+                return
+
+    def _velg(self, nokkel):
+        for n, e in self._elementer.items():
+            aktiv = n == nokkel
+            self.canvas.itemconfig(
+                e["boks"],
+                width=4 if aktiv else 2,
+                outline="white" if aktiv else e["farge"],
+                fill=_bland(e["farge"], BG_INNDATA, 0.55 if aktiv else 0.72),
+            )
+        self._valgt = nokkel
+        self.detalj_var.set(FLYT_DETALJER[nokkel])
+
+    # ---------- avspilling ----------
+    def _spill_eller_stopp(self):
+        if self._anim_jobb is not None:
+            self._stopp_avspilling()
+            return
+        self._anim_indeks = 0
+        self.spill_knapp.config(text="■  Stopp", bg=ROD, activebackground=ROD_AKTIV)
+        self._neste_steg()
+
+    def _neste_steg(self):
+        if self._anim_indeks < len(FLYT_REKKEFOLGE):
+            self._velg(FLYT_REKKEFOLGE[self._anim_indeks])
+            self._anim_indeks += 1
+            self._anim_jobb = self.rot.after(FLYT_STEG_MS, self._neste_steg)
+            return
+        # siste steg: marker sløyfen tilbake
+        self.canvas.itemconfig(self._sloyfe, width=4)
+        self._velg("lese")
+        self.detalj_var.set(FLYT_DETALJER["_slutt"])
+        self._anim_jobb = self.rot.after(
+            FLYT_STEG_MS, lambda: self._stopp_avspilling(behold_tekst=True))
+
+    def _stopp_avspilling(self, behold_tekst=False):
+        if self._anim_jobb is not None:
+            self.rot.after_cancel(self._anim_jobb)
+            self._anim_jobb = None
+        try:
+            self.canvas.itemconfig(self._sloyfe, width=2)
+            self.spill_knapp.config(text="▶  Spill av flyten", bg=AKSENT,
+                                    activebackground=AKSENT_AKTIV)
+        except tk.TclError:
+            pass
+        if not behold_tekst and self._valgt:
+            self.detalj_var.set(FLYT_DETALJER[self._valgt])
+
+
 class DokumentKlientApp:
     def __init__(self, rot: tk.Tk):
         self.rot = rot
@@ -1563,6 +1787,7 @@ class DokumentKlientApp:
             self._fane_rammer[nokkel] = tk.Frame(fanebeholder, bg=BG_HOVED)
 
         self.kontroll = KontrollPanel(self._fane_rammer["kontroll"], self.rot)
+        self.flytskjema = FlytskjemaPanel(self._fane_rammer["flyt"], self.rot)
         self._bygg_spor_fane(self._fane_rammer["spor"])
         self._bygg_fyll_skjema_fane(self._fane_rammer["fyll_skjema"])
         self._bygg_analyser_fane(self._fane_rammer["analyser"])
