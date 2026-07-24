@@ -431,7 +431,19 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
         # Forbehandling FØR OCR: perspektiv/skygge/skjevhet rettes og
         # kvaliteten måles ærlig. Boksene og LS-bildet bygges av det
         # FORBEHANDLEDE bildet, så alt forblir samstemt.
+        from delt import innsyn_hendelser
+        if i == 0 and innsyn_hendelser.aktiv():
+            b64, vb, vh, fb, fh = _bilde_til_b64(bilde)
+            innsyn_hendelser.send("side_bilde", stadie="original", bilde=b64,
+                                  vist_bredde=vb, vist_hoyde=vh,
+                                  full_bredde=fb, full_hoyde=fh)
         bilde, side_rapport = forbehandle_side(bilde)
+        if i == 0 and innsyn_hendelser.aktiv():
+            b64, vb, vh, fb, fh = _bilde_til_b64(bilde)
+            innsyn_hendelser.send("side_bilde", stadie="forbehandlet",
+                                  bilde=b64, vist_bredde=vb, vist_hoyde=vh,
+                                  full_bredde=fb, full_hoyde=fh,
+                                  rapport=side_rapport)
         rendrede.append(bilde)
         resultat = ocr_side(bilde)
         if i == 0:
@@ -1764,6 +1776,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         if sti == "/openapi.json":
             return self._svar(200, _openapi())
+        if sti.startswith("/innsyn/"):
+            # Direktevisnings-poll: hendelser fra og med ?fra=N + resultat
+            okt = _innsyn_okter.get(sti.split("/")[2])
+            if okt is None:
+                return self._svar(404, {"ok": False, "feil": "Ukjent innsyn_id"})
+            try:
+                from urllib.parse import parse_qs, urlparse
+                fra = int(parse_qs(urlparse(self.path).query)
+                          .get("fra", ["0"])[0])
+            except (ValueError, IndexError):
+                fra = 0
+            hendelser = okt["hendelser"]
+            return self._svar(200, {
+                "ok": True, "status": okt["status"],
+                "hendelser": hendelser[fra:], "neste": len(hendelser),
+                "resultat": okt["resultat"] if okt["status"] == "ferdig" else None,
+                "feil": okt.get("feil")})
         if sti in ("/dokumentasjon", "/docs"):
             return self._html(_SWAGGER_HTML)
         if sti in ("", "/hjelp"):
@@ -1781,6 +1810,8 @@ class Handler(BaseHTTPRequestHandler):
                     "POST /fyll_skjema": ("felter 'fil' + 'skjema' (din egen JSON-mal) → malen utfylt "
                                           "fra dokumentet, kodevalidert felt for felt (avvik rapporteres)"),
                     "POST /jobb": "felt 'fil' → jobb_id med en gang; OCR av HELE dokumentet kjører i bakgrunnen",
+                    "POST /innsyn": ("felt 'fil' → innsyn_id; direktevisning av lesingen — "
+                                     "poll GET /innsyn/<id>?fra=N for hendelsesstrømmen"),
                     "GET /jobb/<id>": "status + fremdrift (sider_ferdig/sider_totalt, tidsestimat)",
                     "GET /jobb/<id>/tekst": "hele den utlestne teksten når jobben er ferdig",
                     "POST /jobb/<id>/avbryt": "stopp en kø/pågående jobb",
@@ -1955,6 +1986,27 @@ class Handler(BaseHTTPRequestHandler):
             svar["svar"] = json.dumps(renset, ensure_ascii=False, indent=2)
         return self._svar(200, svar)
 
+    def _innsyn(self, filnavn, slag, innhold, maks_ocr):
+        """POST /innsyn — starter en DIREKTEVISNINGS-økt: dokumentet
+        behandles i en bakgrunnstråd som strømmer hendelser (side rendret,
+        forbehandlet, hver region lest, andrepasset ...) til økta.
+        GUI-et poller GET /innsyn/<id>?fra=N og tegner prosessen LIVE.
+        Sender ALDRI til Label Studio (ren inspeksjon)."""
+        if innhold is None:
+            return self._svar(400, {"ok": False,
+                                    "feil": "Ingen fil funnet (felt 'fil')"})
+        okt_id = uuid.uuid4().hex[:12]
+        okt = {"status": "pågår", "hendelser": [], "resultat": None,
+               "start": time.time()}
+        with _innsyn_las:
+            _innsyn_okter[okt_id] = okt
+            while len(_innsyn_okter) > 6:      # eldste økter ryddes
+                _innsyn_okter.pop(next(iter(_innsyn_okter)))
+        threading.Thread(target=_innsyn_arbeider,
+                         args=(okt, filnavn, slag, innhold, maks_ocr),
+                         daemon=True).start()
+        return self._svar(200, {"ok": True, "innsyn_id": okt_id})
+
     def do_POST(self):
         self._t0_req = time.time()
         # Sikkerhetsnett: en uventet feil skal gi et ærlig JSON-svar
@@ -1982,8 +2034,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._svar(200, {"ok": True, "jobb_id": jid, "status": "avbrytes"})
             return self._svar(409, {"ok": False, "feil": f"Jobben er allerede {jobb.get('status')}"})
 
-        if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk", "/fyll_skjema"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor, /uttrekk, /fyll_skjema eller /jobb (se /hjelp)"})
+        if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
+                       "/fyll_skjema", "/innsyn"):
+            return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
         try:
             lengde = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -2049,6 +2102,9 @@ class Handler(BaseHTTPRequestHandler):
                          "om cirka 15 sekunder"),
                 "ocr": "varmer_opp",
             })
+
+        if sti == "/innsyn":
+            return self._innsyn(filnavn, slag, innhold, maks_ocr)
 
         if sti == "/jobb":
             jobb_id = uuid.uuid4().hex[:12]
@@ -2428,6 +2484,104 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         # Én ryddig linje per forespørsel så du ser at UiPath treffer
         print(f"  [{self.command}] {self.path} → {args[1] if len(args) > 1 else ''}")
+
+
+# ------------------------------------------------------------------ #
+#  Direktevisning («røntgen» av lesingen) — /innsyn                    #
+# ------------------------------------------------------------------ #
+_innsyn_okter = {}
+_innsyn_las = threading.Lock()
+
+
+def _bilde_til_b64(bilde_np, maks_bredde: int = 900):
+    """PNG-base64 av et sidebilde, nedskalert for rask overføring.
+    Returnerer (b64, vist_bredde, vist_hoyde, full_bredde, full_hoyde) —
+    GUI-et skalerer boksene med full/vist-forholdet."""
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+    full_h, full_b = bilde_np.shape[0], bilde_np.shape[1]
+    img = Image.fromarray(bilde_np)
+    if img.width > maks_bredde:
+        img = img.resize((maks_bredde,
+                          max(1, int(img.height * maks_bredde / img.width))))
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    return (base64.b64encode(buffer.getvalue()).decode("ascii"),
+            img.width, img.height, full_b, full_h)
+
+
+def _innsyn_arbeider(okt, filnavn, slag, innhold, maks_ocr):
+    """Bakgrunnstråden som faktisk behandler dokumentet for /innsyn —
+    hendelsene strømmer via delt.innsyn_hendelser mens det skjer."""
+    from delt import innsyn_hendelser
+    innsyn_hendelser.aktiver(okt["hendelser"])
+    try:
+        t0 = okt["start"]
+        if slag != "pdf":
+            okt["resultat"] = {
+                "ok": True, "filnavn": filnavn, "kilde": "tekstlag",
+                "melding": "Ren tekst (DOCX/TXT) — ingen OCR å vise.",
+                "tekst": innhold if isinstance(innhold, str) else "",
+                "regioner": [], "tid_sekunder": round(time.time() - t0, 1)}
+            okt["status"] = "ferdig"
+            innsyn_hendelser.send("ferdig", kilde="tekstlag")
+            return
+
+        import fitz
+        doc = fitz.open(stream=innhold, filetype="pdf")
+        tekstlag = "".join((s.get_text() or "") for s in doc)
+        if len(tekstlag.strip()) >= 20:
+            import numpy as np
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72))
+            bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.height, pix.width, pix.n)[:, :, :3]
+            b64, vb, vh, fb, fh = _bilde_til_b64(np.ascontiguousarray(bilde))
+            doc.close()
+            innsyn_hendelser.send("side_bilde", stadie="original", bilde=b64,
+                                  vist_bredde=vb, vist_hoyde=vh,
+                                  full_bredde=fb, full_hoyde=fh)
+            okt["resultat"] = {
+                "ok": True, "filnavn": filnavn, "kilde": "tekstlag",
+                "melding": ("PDF-en har innebygd tekstlag — teksten leses "
+                            "direkte, ingen OCR kjøres."),
+                "tekst": tekstlag.strip(), "regioner": [],
+                "tid_sekunder": round(time.time() - t0, 1)}
+            okt["status"] = "ferdig"
+            innsyn_hendelser.send("ferdig", kilde="tekstlag")
+            return
+        doc.close()
+
+        ocr_res = ocr_pdf_bytes(innhold, maks_ocr)
+        regioner = [{
+            "boks": r.get("boks"), "tekst": r.get("tekst", ""),
+            "motor": r.get("motor", ""), "konfidens": r.get("konfidens", 0.0),
+            "skrift": r.get("skrift", ""),
+            "easyocr_tekst": r.get("easyocr_tekst"),
+            "easyocr_konfidens": r.get("easyocr_konfidens"),
+            "norhand_tekst": r.get("norhand_tekst"),
+            "norhand_konfidens": r.get("norhand_konfidens"),
+        } for r in (ocr_res.get("_side1_regioner") or [])]
+        okt["resultat"] = {
+            "ok": True, "filnavn": filnavn, "kilde": "regionocr",
+            "regioner": regioner,
+            "forbehandling": ocr_res.get("forbehandling"),
+            "tekst": ocr_res.get("tekst", "").strip(),
+            "ocr_konfidens": ocr_res.get("konfidens"),
+            "ocr_motorer": ocr_res.get("motorer"),
+            "sider_lest": ocr_res.get("sider_lest"),
+            "sider_totalt": ocr_res.get("sider_totalt"),
+            "tid_sekunder": round(time.time() - t0, 1)}
+        okt["status"] = "ferdig"
+        innsyn_hendelser.send("ferdig", kilde="regionocr",
+                              konfidens=ocr_res.get("konfidens"))
+    except Exception as exc:
+        okt["status"] = "feil"
+        okt["feil"] = f"{type(exc).__name__}: {exc}"
+        innsyn_hendelser.send("feil", melding=okt["feil"])
+    finally:
+        innsyn_hendelser.deaktiver()
 
 
 def _varm_opp_ocr():

@@ -520,6 +520,14 @@ def _ocr_side_intern(bilde_np) -> dict:
         region["konfidens"] = round(float(region["konfidens"]), 3)
         regioner.append(region)
 
+    # Direktevisning: førstepasset er lest — send alle regionene
+    from delt import innsyn_hendelser
+    innsyn_hendelser.send(
+        "forstepass_lest", motor=_valgt["motor"] or "easy",
+        regioner=[{"boks": r["boks"], "tekst": r["tekst"],
+                   "konfidens": r["konfidens"], "skrift": r.get("skrift", "")}
+                  for r in regioner])
+
     _les_med_norhand(regioner, kandidater)
     resultat = {"tekst": flett_regioner(regioner), "regioner": regioner}
     return _kanskje_ufcn_andrepass(bilde_np, resultat)
@@ -595,10 +603,13 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
             or handskrift_andel >= UFCN_HANDSKRIFT_ANDEL):
         return resultat          # førstepasset er godt nok — spar tiden
 
+    from delt import innsyn_hendelser
+    innsyn_hendelser.send("andrepass_start")
     linjer = finn_tekstlinjer(bilde_np)
     strimler = _slaa_sammen_linjebokser(linjer)
     if not strimler:
         return resultat
+    innsyn_hendelser.send("andrepass_linjer", bokser=strimler)
     h, b = bilde_np.shape[0], bilde_np.shape[1]
     utsnitt, bokser = [], []
     for x0, y0, x1, y1 in strimler:
@@ -621,6 +632,9 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
         for (tekst, konf), boks in zip(svar, bokser[start:start + len(porsjon)]):
             if not tekst.strip():
                 continue
+            innsyn_hendelser.send("andrepass_lest", boks=boks,
+                                  tekst=tekst.strip(),
+                                  konfidens=round(float(konf), 3))
             nye.append({"boks": boks, "tekst": tekst.strip(),
                         "motor": "norhand+ufcn",
                         "konfidens": round(float(konf), 3),
@@ -631,7 +645,11 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
     if not nye:
         return resultat
     ny_konf = _vektet_konfidens(nye)
-    if ny_konf > gammel_konf + UFCN_MARGIN or (tomt and nye):
+    vant = ny_konf > gammel_konf + UFCN_MARGIN or (tomt and bool(nye))
+    innsyn_hendelser.send("andrepass_resultat", vant=vant,
+                          ny_konfidens=round(ny_konf, 3),
+                          gammel_konfidens=round(gammel_konf, 3))
+    if vant:
         return {"tekst": flett_regioner(nye), "regioner": nye}
     return resultat
 
@@ -657,14 +675,20 @@ def _les_med_norhand(regioner: list, kandidater: list) -> None:
         finally:
             brukt += time.perf_counter() - t0
 
+        from delt import innsyn_hendelser
         for (i, _), (nh_tekst, nh_konf) in zip(porsjon, svar):
             region = regioner[i]
             region["norhand_tekst"] = nh_tekst
             region["norhand_konfidens"] = round(nh_konf, 3)
-            if velg_motor(region["easyocr_tekst"], region["easyocr_konfidens"],
-                          nh_tekst, nh_konf) == "norhand":
+            vant = velg_motor(region["easyocr_tekst"],
+                              region["easyocr_konfidens"],
+                              nh_tekst, nh_konf) == "norhand"
+            if vant:
                 region["tekst"] = nh_tekst
                 region["motor"] = "norhand"
                 region["konfidens"] = round(float(nh_konf), 3)
                 # Ny tekst → den visuelle klassifiseringen gjaldt den gamle
                 region["skrift"] = "handskrift"
+            innsyn_hendelser.send(
+                "norhand_lest", boks=region["boks"], tekst=nh_tekst,
+                konfidens=round(nh_konf, 3), vant=vant)

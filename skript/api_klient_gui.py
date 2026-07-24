@@ -223,6 +223,7 @@ LILLA = "#a855f7"          # RAM-graf
 FANER = [
     ("kontroll", "Kontrollpanel"),
     ("flyt", "Flytskjema"),
+    ("innsyn", "Innsyn"),
     ("trening", "Trening"),
     ("spor", "Spør"),
     ("fyll_skjema", "Fyll skjema"),
@@ -2270,6 +2271,395 @@ class TreningPanel:
         self._vekk.set()
 
 
+# ==========================================================================
+# Innsyn — DIREKTEVISNING i eget vindu: se dokumentet bli behandlet LIVE.
+# Serveren strømmer hendelser (side rendret → forbehandlet → hver region
+# lest → andrepass → ferdig) via POST /innsyn + GET /innsyn/<id>?fra=N,
+# og vinduet tegner dem i sanntid: bildet retter seg, boksene dukker opp
+# én og én i motorens farge, og teksten fylles inn når den leses.
+# ==========================================================================
+INNSYN_MOTORFARGER = {"easy": GRONN, "rapid": BLAA, "norhand": ROSA,
+                      "ufcn": ORANSJE}
+
+
+class InnsynVindu:
+    """Selve direktevisningsvinduet (Toplevel). Poller økta i en
+    bakgrunnstråd; all tegning skjer på hovedtråden via after."""
+
+    def __init__(self, rot, klient: ApiKlient, innsyn_id: str, filnavn: str):
+        self.rot = rot
+        self.klient = klient
+        self.innsyn_id = innsyn_id
+        self._lukket = False
+        self._faktor = (1.0, 1.0)      # full-koordinat → canvas-koordinat
+        self._foto = None              # holdes i live (ellers GC-es bildet)
+
+        self.vindu = tk.Toplevel(rot)
+        self.vindu.title(f"Innsyn — {filnavn}")
+        self.vindu.geometry("1150x800")
+        self.vindu.configure(bg=BG_HOVED)
+        self.vindu.protocol("WM_DELETE_WINDOW", self._ved_lukking)
+
+        topp = tk.Frame(self.vindu, bg=BG_HOVED)
+        topp.pack(fill="x", padx=10, pady=(8, 2))
+        self.status_var = tk.StringVar(value="Venter på serveren ...")
+        tk.Label(topp, textvariable=self.status_var, fg=GUL, bg=BG_HOVED,
+                 font=("Segoe UI", 12, "bold"), anchor="w").pack(side="left")
+        self.tid_var = tk.StringVar(value="")
+        tk.Label(topp, textvariable=self.tid_var, fg=FG_DEMPET,
+                 bg=BG_HOVED).pack(side="right")
+
+        # fargeforklaring
+        legende = tk.Frame(self.vindu, bg=BG_HOVED)
+        legende.pack(fill="x", padx=10)
+        for tekst, farge in (("EasyOCR (trykt)", GRONN), ("RapidOCR", BLAA),
+                             ("norhand (håndskrift)", ROSA),
+                             ("Doc-UFCN-andrepass", ORANSJE)):
+            tk.Label(legende, text="■ " + tekst, fg=farge, bg=BG_HOVED,
+                     font=("Segoe UI", 8)).pack(side="left", padx=(0, 12))
+
+        hoved = tk.Frame(self.vindu, bg=BG_HOVED)
+        hoved.pack(fill="both", expand=True, padx=10, pady=6)
+
+        self.canvas = tk.Canvas(hoved, width=700, height=680, bg=BG_INNDATA,
+                                highlightthickness=1,
+                                highlightbackground=KANTLINJE)
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        side = tk.Frame(hoved, bg=BG_HOVED, width=400)
+        side.pack(side="left", fill="both", padx=(10, 0))
+        tk.Label(side, text="Hendelser (live)", fg=FG_DEMPET, bg=BG_HOVED,
+                 anchor="w").pack(fill="x")
+        self.logg = tema_tekstfelt(side, wrap="word", font=("Consolas", 9),
+                                   height=22, width=48)
+        self.logg.pack(fill="both", expand=True)
+        for navn, farge in (("gronn", GRONN), ("blaa", BLAA), ("rosa", ROSA),
+                            ("oransje", ORANSJE), ("gul", GUL), ("rod", ROD),
+                            ("dempet", FG_DEMPET)):
+            self.logg.tag_configure(navn, foreground=farge)
+        self.logg.config(state="disabled")
+
+        tk.Label(side, text="Slutttekst", fg=FG_DEMPET, bg=BG_HOVED,
+                 anchor="w").pack(fill="x", pady=(6, 0))
+        self.tekst = tema_tekstfelt(side, wrap="word", font=("Segoe UI", 9),
+                                    height=9, width=48)
+        self.tekst.pack(fill="x")
+        self.tekst.config(state="disabled")
+
+        self._start = time.monotonic()
+        self._tikk()
+        threading.Thread(target=self._poll_lokke, daemon=True).start()
+
+    # ---------- polling (bakgrunnstråd) ----------
+    def _poll_lokke(self):
+        fra = 0
+        feil_paa_rad = 0
+        while not self._lukket:
+            time.sleep(0.3)
+            try:
+                svar = requests.get(
+                    f"{self.klient.base_url}/innsyn/{self.innsyn_id}?fra={fra}",
+                    headers=self.klient._hoder(), timeout=10).json()
+                feil_paa_rad = 0
+            except requests.exceptions.RequestException:
+                feil_paa_rad += 1
+                if feil_paa_rad > 10:
+                    self._trygg_after(self._sett_status,
+                                      "Mistet kontakten med serveren", ROD)
+                    return
+                continue
+            for hendelse in svar.get("hendelser", []):
+                self._trygg_after(self._vis_hendelse, hendelse)
+            fra = svar.get("neste", fra)
+            if svar.get("status") in ("ferdig", "feil"):
+                self._trygg_after(self._ferdig, svar)
+                return
+
+    # ---------- tegning (hovedtråden) ----------
+    def _vis_hendelse(self, h: dict):
+        if self._lukket:
+            return
+        try:
+            type_ = h.get("type")
+            if type_ == "side_bilde":
+                self._vis_bilde(h)
+            elif type_ == "forstepass_lest":
+                motor = h.get("motor", "easy")
+                farge = INNSYN_MOTORFARGER.get(motor, GRONN)
+                regioner = h.get("regioner", [])
+                self._logglinje(f"Førstepass ({motor}): {len(regioner)} "
+                                "tekstregioner funnet", "gronn")
+                # boksene dukker opp én og én — ekte data, paced visning
+                for indeks, region in enumerate(regioner):
+                    self.rot.after(indeks * 60, self._tegn_region,
+                                   region, farge)
+            elif type_ == "norhand_lest":
+                vant = h.get("vant")
+                self._tegn_boks(h.get("boks"), ROSA, solid=vant)
+                self._logglinje(
+                    ("norhand vant: " if vant else "norhand (easy beholdt): ")
+                    + f"«{h.get('tekst', '')[:38]}» "
+                    f"({h.get('konfidens', 0):.2f})", "rosa")
+            elif type_ == "andrepass_start":
+                self._logglinje("Doc-UFCN-andrepass: segmenterer "
+                                "tekstlinjene ...", "oransje")
+            elif type_ == "andrepass_linjer":
+                for boks in h.get("bokser", []):
+                    self._tegn_boks(boks, ORANSJE, stiplet=True)
+                self._logglinje(f"{len(h.get('bokser', []))} linjer funnet "
+                                "— norhand leser dem ...", "oransje")
+            elif type_ == "andrepass_lest":
+                self._tegn_boks(h.get("boks"), ORANSJE, solid=True)
+                self._logglinje(f"  «{h.get('tekst', '')[:42]}» "
+                                f"({h.get('konfidens', 0):.2f})", "oransje")
+            elif type_ == "andrepass_resultat":
+                if h.get("vant"):
+                    self._logglinje(
+                        f"Andrepasset VANT ({h.get('ny_konfidens')} mot "
+                        f"{h.get('gammel_konfidens')}) — brukes som svar",
+                        "oransje")
+                else:
+                    self._logglinje(
+                        f"Førstepasset beholdt ({h.get('gammel_konfidens')} "
+                        f"mot {h.get('ny_konfidens')})", "dempet")
+            elif type_ == "feil":
+                self._logglinje("FEIL: " + h.get("melding", ""), "rod")
+        except tk.TclError:
+            pass
+
+    def _vis_bilde(self, h: dict):
+        import base64
+        from io import BytesIO
+
+        from PIL import Image, ImageTk
+        raa = base64.b64decode(h["bilde"])
+        img = Image.open(BytesIO(raa))
+        lerret_b = max(self.canvas.winfo_width(), 660)
+        lerret_h = max(self.canvas.winfo_height(), 620)
+        skala = min(lerret_b / img.width, lerret_h / img.height, 1.0)
+        img = img.resize((max(1, int(img.width * skala)),
+                          max(1, int(img.height * skala))))
+        self._foto = ImageTk.PhotoImage(img)
+        self.canvas.delete("all")
+        self.canvas.create_image(0, 0, anchor="nw", image=self._foto)
+        full_b = h.get("full_bredde") or img.width
+        full_h = h.get("full_hoyde") or img.height
+        self._faktor = (img.width / full_b, img.height / full_h)
+        if h.get("stadie") == "original":
+            self._logglinje("Side 1 rendret", "dempet")
+            self._sett_status("Forbehandler bildet ...", GUL)
+        else:
+            rapport = h.get("rapport") or {}
+            deler = []
+            if rapport.get("skjevhet_grader"):
+                deler.append(f"rettet {rapport['skjevhet_grader']}° skjevhet")
+            if rapport.get("belysning_flatet"):
+                deler.append("skygge utjevnet")
+            if rapport.get("perspektiv_rettet"):
+                deler.append("perspektiv rettet")
+            kvalitet = rapport.get("kvalitet") or {}
+            for advarsel in kvalitet.get("advarsler", []):
+                self._logglinje("⚠ " + advarsel, "gul")
+            self._logglinje("Forbehandlet"
+                            + (": " + ", ".join(deler) if deler else
+                               " (ingenting å rette)"), "blaa")
+            self._sett_status("Leser tekstregioner ...", GUL)
+
+    def _tegn_region(self, region: dict, farge: str):
+        try:
+            self._tegn_boks(region.get("boks"), farge,
+                            solid=region.get("skrift") != "handskrift")
+        except tk.TclError:
+            pass
+
+    def _tegn_boks(self, boks, farge, solid=False, stiplet=False):
+        if not boks or len(boks) != 4:
+            return
+        fx, fy = self._faktor
+        x0, y0, x1, y1 = (boks[0] * fx, boks[1] * fy,
+                          boks[2] * fx, boks[3] * fy)
+        valg = {"outline": farge, "width": 2}
+        if stiplet:
+            valg["dash"] = (4, 3)
+        self.canvas.create_rectangle(x0, y0, x1, y1, **valg)
+
+    def _ferdig(self, svar: dict):
+        try:
+            resultat = svar.get("resultat") or {}
+            if svar.get("status") == "feil":
+                self._sett_status("Feilet: "
+                                  + (svar.get("feil") or "ukjent"), ROD)
+                return
+            konfidens = resultat.get("ocr_konfidens")
+            kilde = resultat.get("kilde")
+            if kilde == "tekstlag":
+                self._sett_status("Ferdig — PDF-en hadde tekstlag "
+                                  "(ingen OCR nødvendig)", GRONN)
+                self._logglinje("Tekstlag lest direkte — raskt og eksakt",
+                                "gronn")
+            else:
+                self._sett_status(
+                    f"Ferdig — samlet konfidens {konfidens * 100:.0f} %"
+                    if konfidens is not None else "Ferdig", GRONN)
+            motorer = resultat.get("ocr_motorer") or {}
+            if motorer:
+                self._logglinje("Motorer: " + ", ".join(
+                    f"{navn}: {antall}" for navn, antall in motorer.items()),
+                    "dempet")
+            self.tekst.config(state="normal")
+            self.tekst.delete("1.0", "end")
+            self.tekst.insert("1.0", resultat.get("tekst") or "(ingen tekst)")
+            self.tekst.config(state="disabled")
+        except tk.TclError:
+            pass
+
+    # ---------- småting ----------
+    def _logglinje(self, tekst: str, tagg: str = "dempet"):
+        try:
+            self.logg.config(state="normal")
+            self.logg.insert("end",
+                             f"+{time.monotonic() - self._start:5.1f}s  ",
+                             "dempet")
+            self.logg.insert("end", tekst + "\n", tagg)
+            self.logg.see("end")
+            self.logg.config(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _sett_status(self, tekst: str, farge: str):
+        try:
+            self.status_var.set(tekst)
+            for barn in self.vindu.winfo_children():
+                pass
+        except tk.TclError:
+            pass
+
+    def _tikk(self):
+        if self._lukket:
+            return
+        self.tid_var.set(f"{time.monotonic() - self._start:.0f} s")
+        self.rot.after(1000, self._tikk)
+
+    def _trygg_after(self, fn, *argumenter):
+        try:
+            self.rot.after(0, fn, *argumenter)
+        except (tk.TclError, RuntimeError):
+            pass
+
+    def _ved_lukking(self):
+        self._lukket = True
+        self.vindu.destroy()
+
+
+class InnsynPanel:
+    """Innsyn-fanen: velg dokument → «Se dokumentet bli lest LIVE» åpner
+    direktevisningsvinduet."""
+
+    def __init__(self, forelder, rot, app):
+        self.rot = rot
+        self.app = app
+        self.valgt_fil = None
+
+        pad = {"padx": 12, "pady": 6}
+        ramme = tema_rammefelt(forelder,
+                               "Dokument (PDF, bilde, Word, Excel — som ellers)")
+        ramme.pack(fill="x", **pad)
+        rad = tk.Frame(ramme, bg=BG_PANEL)
+        rad.pack(fill="x", padx=8, pady=8)
+        self.fil_etikett = tk.Label(rad, text="Ingen fil valgt",
+                                    fg=FG_DEMPET, bg=BG_PANEL, anchor="w")
+        self.fil_etikett.pack(side="left", fill="x", expand=True)
+        tema_knapp(rad, "Bla gjennom ...", self._velg_fil).pack(side="right")
+
+        self.start_knapp = tk.Button(
+            forelder, text="▶  SE DOKUMENTET BLI LEST — LIVE",
+            command=self._start, bg=CYAN,
+            activebackground=_bland(CYAN, "#000000", 0.2),
+            fg="white", activeforeground="white",
+            font=("Segoe UI", 12, "bold"), relief="flat",
+            highlightthickness=0, pady=10)
+        self.start_knapp.pack(fill="x", **pad)
+
+        self.status_var = tk.StringVar(value="")
+        tk.Label(forelder, textvariable=self.status_var, fg=FG_DEMPET,
+                 bg=BG_HOVED, anchor="w").pack(fill="x", padx=12)
+
+        tk.Label(forelder, text=(
+            "Direktevisningen åpner et eget vindu som viser prosessen mens "
+            "den skjer:\n"
+            "  1. Siden rendres og forbehandles (skjevhet/skygge/perspektiv "
+            "rettes foran øynene dine)\n"
+            "  2. Tekstregionene dukker opp én og én i motorens farge\n"
+            "  3. Håndskriftmodellen norhand leser usikre regioner — du ser "
+            "hver lesing og hvem som vant\n"
+            "  4. Doc-UFCN-andrepasset tegnes med oransje linjer når det "
+            "trår til\n"
+            "  5. Slutteksten og samlet konfidens vises når alt er ferdig\n\n"
+            "Ingenting sendes til Label Studio herfra — ren inspeksjon."),
+            fg=FG_DEMPET, bg=BG_HOVED, anchor="nw", justify="left",
+            wraplength=830).pack(fill="both", expand=True, padx=12, pady=8)
+
+    def _velg_fil(self):
+        sti = filedialog.askopenfilename(title="Velg et dokument",
+                                         filetypes=FILDIALOG_TYPER)
+        if sti:
+            self.valgt_fil = sti
+            self.fil_etikett.config(text=os.path.basename(sti), fg=FG_TEKST)
+
+    def _start(self, sti: str | None = None):
+        sti = sti or self.valgt_fil
+        if not sti or not os.path.isfile(sti):
+            messagebox.showwarning("Merk", "Velg en fil først.")
+            return
+        if not self.app._oppdater_klient():
+            return
+        self.status_var.set("Klargjør og sender ...")
+        self.start_knapp.config(state="disabled")
+
+        def arbeider():
+            konvertert = None
+            try:
+                pdf_sti, midlertidig = forbered_pdf(Path(sti))
+                if midlertidig:
+                    konvertert = pdf_sti
+                with open(pdf_sti, "rb") as fil:
+                    svar = requests.post(
+                        self.app.klient.base_url + "/innsyn",
+                        files={"fil": (pdf_sti.name, fil, "application/pdf")},
+                        headers=self.app.klient._hoder(), timeout=60)
+                svar.raise_for_status()
+                innsyn_id = svar.json().get("innsyn_id")
+                if not innsyn_id:
+                    raise RuntimeError(svar.json().get("feil", "mangler innsyn_id"))
+                self.rot.after(0, self._aapne_vindu, innsyn_id,
+                               os.path.basename(sti))
+            except Exception as exc:
+                self.rot.after(0, self._feil, str(exc))
+            finally:
+                if konvertert is not None:
+                    try:
+                        os.remove(konvertert)
+                    except OSError:
+                        pass
+
+        threading.Thread(target=arbeider, daemon=True).start()
+
+    def _aapne_vindu(self, innsyn_id: str, filnavn: str):
+        try:
+            self.status_var.set("Direktevisning åpnet i eget vindu.")
+            self.start_knapp.config(state="normal")
+            InnsynVindu(self.rot, self.app.klient, innsyn_id, filnavn)
+        except tk.TclError:
+            pass
+
+    def _feil(self, melding: str):
+        try:
+            self.status_var.set("Feilet: " + melding)
+            self.start_knapp.config(state="normal")
+        except tk.TclError:
+            pass
+
+
 class DokumentKlientApp:
     def __init__(self, rot: tk.Tk):
         self.rot = rot
@@ -2361,6 +2751,7 @@ class DokumentKlientApp:
 
         self.kontroll = KontrollPanel(self._fane_rammer["kontroll"], self.rot)
         self.flytskjema = FlytskjemaPanel(self._fane_rammer["flyt"], self.rot)
+        self.innsyn = InnsynPanel(self._fane_rammer["innsyn"], self.rot, self)
         self.trening = TreningPanel(self._fane_rammer["trening"], self.rot,
                                     self.kontroll)
         self._bygg_spor_fane(self._fane_rammer["spor"])
