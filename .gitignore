@@ -20,6 +20,9 @@ env/
 # Data og modeller (for store for git)
 data/
 modeller/
+# EasyOCR-vekter (craft 80 MB + latin_g2 15 MB) — samme policy som
+# modeller/: modellvekter foelger den portable nav-mappa, ikke git.
+.EasyOCR/
 
 # Loggfiler
 *.log
