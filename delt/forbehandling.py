@@ -162,12 +162,59 @@ def fjern_linjal_linjer(bilde_np):
     graa = cv2.cvtColor(bilde_np, cv2.COLOR_RGB2GRAY)
     h, b = graa.shape
     binaer = cv2.adaptiveThreshold(graa, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                   cv2.THRESH_BINARY_INV, 25, 15)
-    maske = np.zeros_like(binaer)
-    for kjerne_dim in (((max(b // 4, 60)), 1), (1, (max(h // 4, 60)))):
-        kjerne = cv2.getStructuringElement(cv2.MORPH_RECT, kjerne_dim)
-        maske |= cv2.morphologyEx(binaer, cv2.MORPH_OPEN, kjerne)
-    # bagatellgrense: færre streker enn ~én full linje → ikke rør bildet
+                                   cv2.THRESH_BINARY_INV, 25, 10)
+
+    def _baandmaske(bin_bilde):
+        """Horisontale linjal-linjer med «notelinje»-metoden (kjent fra
+        notegjenkjenning): (1) lange åpne segmenter MELLOM ordene røper
+        hvert strøks y-BÅND pålitelig; (2) inne i båndet maskeres en
+        piksel BARE hvis det ikke er blekk rett over og rett under —
+        bokstavstrøk som krysser linjen har blekk på begge sider og
+        overlever, mens selve streken (bakgrunn over/under) fjernes
+        OGSÅ under teksten, der «_»-artefaktene oppstår."""
+        blekk = bin_bilde > 0
+        # «tynn i høyden»: blekk uten blekk 3 px rett over OG rett under —
+        # treffer linjal-streker (2–4 px tykke) OGSÅ midt under et ord,
+        # mens bokstavkropper (10 px+) og kryssende strøk har blekk på
+        # minst én side og overlever.
+        over = np.zeros_like(blekk)
+        under = np.zeros_like(blekk)
+        over[3:, :] = blekk[:-3, :]
+        under[:-3, :] = blekk[3:, :]
+        tynn = blekk & ~over & ~under
+        # Finn selve LINJERADENE: en linjal-rad har tynne piksler over
+        # store deler av bredden (i alle ordmellomrom), en tekstrad har
+        # nesten ingen. Inne i linjeradene fjernes tynt blekk UTEN
+        # lengdekrav — det er der de korte «_»-bitene i ordmellomrom og
+        # «#»-bitene inni bokstaver (f.eks. H) bor. Utenfor linjeradene
+        # kreves ≥ 25 px, så t-/f-tverrstreker aldri røres.
+        bb = bin_bilde.shape[1]
+        profil = tynn.sum(axis=1)
+        linjerad = profil > 0.18 * bb
+        linjerad = np.convolve(linjerad.astype(np.uint8),
+                               np.ones(3, dtype=np.uint8), mode="same") > 0
+        i_baand = tynn & linjerad[:, None]
+        utenfor = cv2.morphologyEx(
+            np.uint8(tynn & ~linjerad[:, None]) * 255, cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1)))
+        return np.uint8(i_baand) * 255 | utenfor
+
+    def _vertikalmaske(bin_bilde):
+        """Vertikale streker (margstrek, skjemarammer) — lange og tynne."""
+        hh, bb = bin_bilde.shape
+        kandidat = cv2.morphologyEx(
+            bin_bilde, cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(hh // 4, 60))))
+        antall, merker, stats, _ = cv2.connectedComponentsWithStats(
+            kandidat, connectivity=8)
+        ut = np.zeros_like(bin_bilde)
+        for i in range(1, antall):
+            if stats[i, cv2.CC_STAT_WIDTH] <= max(5, bb // 120):
+                ut[merker == i] = 255
+        return ut
+
+    maske = _baandmaske(binaer) | _vertikalmaske(binaer)
+    # bagatellgrense: færre strekpiksler enn ~én full linje → ikke rør bildet
     if int(maske.sum() // 255) < max(b, h):
         return bilde_np, False
     maske = cv2.dilate(maske, np.ones((3, 3), np.uint8))

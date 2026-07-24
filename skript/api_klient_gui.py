@@ -2025,6 +2025,7 @@ class TreningPanel:
 
             annotert_totalt = len(stat["annotert_ids"] | stat["trent_ids"]
                                   | stat["klargjort_ids"])
+            self._annotert_totalt = annotert_totalt
             self._sett_krav("ls", stat["ls_ok"],
                             detalj=None if stat["ls_ok"]
                             else "— start den fra Kontrollpanelet")
@@ -2111,6 +2112,17 @@ class TreningPanel:
                 "Fant ikke treningsskriptene — trening kjøres på maskinen "
                 "der nav-mappa ligger.")
             return
+        # Si det HØYT før vi kaster bort en kjøring: under minstekravet
+        # ender løpet garantert i «for_faa» (som bare synes i småskrift).
+        annotert = getattr(self, "_annotert_totalt", None)
+        if annotert is not None and annotert < TRENING_MIN_EKSEMPLER:
+            if not messagebox.askyesno(
+                    "For få korreksjoner",
+                    f"Du har bare {annotert} annoterte korreksjoner — "
+                    f"minst {TRENING_MIN_EKSEMPLER} trengs.\n\n"
+                    "Treningen vil stoppe med «for få». Annoter flere i "
+                    "Label Studio først.\n\nStarte likevel?"):
+                return
         self.resultat_etikett.pack_forget()
         self._sett_logg("")
         self.hent_knapp.config(state="disabled")
