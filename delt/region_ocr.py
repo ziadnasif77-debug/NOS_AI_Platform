@@ -62,11 +62,19 @@ MAKS_NORHAND_TOKENS = int(os.environ.get("MAKS_NORHAND_TOKENS", "96"))
 # MiB, og arbeidsbufferne skalerer med bildestørrelsen. Etter at den
 # unødige oppskaleringen ble fjernet (ocr_skala i dokument_api) er
 # sidebildene ~4× mindre, så 800 MiB gir god margin for en A4-side.
-MINSTE_LEDIG_GPU_MB = int(os.environ.get("OCR_MINSTE_LEDIG_GPU_MB", "800"))
+# R-fiks 2026-07-23: hevet fra 800. Med Borealis residerende (~5,7 GB av
+# 8) ga 800 MiB grønt lys til EasyOCR på GPU-en — og llama.cpp sine
+# compute-buffere under neste inferens sprengte kortet → stille NATIV
+# krasj (serveren bare døde, ingen traceback). Nå kreves ekte rom før
+# OCR får GPU; ellers brukes RapidOCR på CPU — som etter latin-fiksen
+# leser norsk feilfritt, så fallbacken er endelig trygg å stå i.
+MINSTE_LEDIG_GPU_MB = int(os.environ.get("OCR_MINSTE_LEDIG_GPU_MB", "2600"))
 # norhand (TrOCR) er mindre enn EasyOCR: ~330 MiB i fp16. Eget, lavere
 # krav så den ikke havner på CPU bare fordi EasyOCR alt har tatt sin del.
+# Hevet fra 450 av samme grunn: 450 MiB margin på et kort der Borealis
+# allokerer compute-buffere dynamisk er en kollisjon som venter.
 MINSTE_LEDIG_GPU_NORHAND_MB = int(
-    os.environ.get("OCR_MINSTE_LEDIG_GPU_NORHAND_MB", "450"))
+    os.environ.get("OCR_MINSTE_LEDIG_GPU_NORHAND_MB", "1500"))
 
 _las = threading.Lock()
 

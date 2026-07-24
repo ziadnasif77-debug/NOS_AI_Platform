@@ -396,6 +396,7 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     POST /jobb. Rapporterer alltid sider_lest/sider_totalt ærlig."""
     import fitz
     import numpy as np
+    from delt.forbehandling import forbehandle_side
     from delt.region_ocr import ocr_side
 
     if maks_sider is None:
@@ -419,6 +420,7 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     # områder, så den ansatte ser hvor maskinen fant tekst.
     side1_regioner = []
     side1_dim = None
+    forbehandling_rapport = None
     for i, side in enumerate(doc):
         if i >= maks_sider:
             break
@@ -426,11 +428,17 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
         bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
         if pix.n == 4:      # RGBA → RGB
             bilde = bilde[:, :, :3]
+        # Forbehandling FØR OCR: perspektiv/skygge/skjevhet rettes og
+        # kvaliteten måles ærlig. Boksene og LS-bildet bygges av det
+        # FORBEHANDLEDE bildet, så alt forblir samstemt.
+        bilde, side_rapport = forbehandle_side(bilde)
         rendrede.append(bilde)
         resultat = ocr_side(bilde)
         if i == 0:
             side1_regioner = resultat["regioner"]
-            side1_dim = (pix.width, pix.height)
+            # forbehandlet størrelse — perspektivretting kan endre den
+            side1_dim = (bilde.shape[1], bilde.shape[0])
+            forbehandling_rapport = side_rapport
         tekster.append(resultat["tekst"])
         for r in resultat["regioner"]:
             motorer[r["motor"]] = motorer.get(r["motor"], 0) + 1
@@ -455,7 +463,8 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             # konvensjon som jobb["_data"]). Dette er numpy-arrayer.
             "_sidebilder": rendrede,
             "_side1_regioner": side1_regioner,
-            "_side1_dim": side1_dim}
+            "_side1_dim": side1_dim,
+            "forbehandling": forbehandling_rapport}
 
 
 # ------------------------------------------------------------------ #
@@ -486,22 +495,35 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
              "lav_ocr_konfidens" if lav_konfidens else "handskrift")
 
     def arbeider():
-        import fitz
         png_sti = None
         try:
-            doc = fitz.open(stream=innhold, filetype="pdf")
-            pix = doc[0].get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72))
-            # Stabil id fra SIDEBILDETS piksler, ikke PDF-bytene: klienten
-            # konverterer bilder til PDF ved HVER opplasting, og PDF-en får
-            # da nytt tidsstempel → ny hash → duplikater i Label Studio.
-            # Pikslene er identiske for samme dokument uansett.
-            fil_id = hashlib.sha256(
-                f"{pix.width}x{pix.height}".encode() + bytes(pix.samples)
-            ).hexdigest()[:16]
-            png_sti = os.path.join(tempfile.gettempdir(),
-                                   f"gjennomgang_{fil_id}.png")
-            pix.save(png_sti)
-            doc.close()
+            # Bruk det FORBEHANDLEDE side 1-bildet fra OCR-en (allerede
+            # rendret): (1) regionboksene ble beregnet på nøyaktig dette
+            # bildet, så forhåndsmerkingen i Label Studio treffer riktig,
+            # (2) annotatøren ser det rettede bildet, (3) ingen dobbel
+            # rendring. Stabil id fra PIKSLENE, ikke PDF-bytene: klienten
+            # lager ny PDF (nytt tidsstempel) ved hver opplasting.
+            side1 = (ocr_res.get("_sidebilder") or [None])[0]
+            if side1 is not None:
+                from PIL import Image
+                fil_id = hashlib.sha256(
+                    f"{side1.shape[1]}x{side1.shape[0]}".encode()
+                    + side1.tobytes()).hexdigest()[:16]
+                png_sti = os.path.join(tempfile.gettempdir(),
+                                       f"gjennomgang_{fil_id}.png")
+                Image.fromarray(side1).save(png_sti)
+            else:
+                # reserve: rendrer selv (eldre kall uten _sidebilder)
+                import fitz
+                doc = fitz.open(stream=innhold, filetype="pdf")
+                pix = doc[0].get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72))
+                fil_id = hashlib.sha256(
+                    f"{pix.width}x{pix.height}".encode() + bytes(pix.samples)
+                ).hexdigest()[:16]
+                png_sti = os.path.join(tempfile.gettempdir(),
+                                       f"gjennomgang_{fil_id}.png")
+                pix.save(png_sti)
+                doc.close()
             from send_til_label_studio import send_til_gjennomgang
             ok = send_til_gjennomgang(
                 fil_id=fil_id, bilde_sti=png_sti, raa_tekst=raa_tekst,
@@ -712,6 +734,13 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
                 f"OCR leste {ocr_res['sider_lest']} av {ocr_res['sider_totalt']} sider "
                 f"(synkron grense — øk med felt maks_sider inntil {OCR_TAK_SIDER}, "
                 "eller bruk POST /jobb for hele dokumentet)")
+        # Ærlig bildekvalitet: uskarpt/mørkt/utbrent/lite bilde sies RETT UT
+        # («ta et nytt bilde») i stedet for å levere stille søppel-OCR.
+        kvalitet = (ocr_res.get("forbehandling") or {}).get("kvalitet") or {}
+        if kvalitet.get("advarsler"):
+            kv_tekst = "bildekvalitet: " + "; ".join(kvalitet["advarsler"])
+            ocr_advarsel = (f"{ocr_advarsel} — {kv_tekst}"
+                            if ocr_advarsel else kv_tekst)
         if len(ocr_tekst.strip()) < 5:
             melding = ("Fant ingen lesbar tekst i dokumentet — selv med OCR. "
                        "Men fant strekkoder/QR-koder (se 'strekkoder')."
@@ -735,6 +764,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
                 "ocr_sider_lest": ocr_res["sider_lest"],
                 "ocr_sider_totalt": ocr_res["sider_totalt"],
                 "ocr_konfidens": ocr_res.get("konfidens"),
+                "bildekvalitet": ocr_res.get("forbehandling"),
                 "sendt_til_gjennomgang": sendt,
                 "advarsel": ocr_advarsel,
             }
@@ -766,6 +796,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "ocr_sider_lest": ocr_res["sider_lest"],
             "ocr_sider_totalt": ocr_res["sider_totalt"],
             "ocr_konfidens": ocr_res.get("konfidens"),
+            "bildekvalitet": ocr_res.get("forbehandling"),
             "sendt_til_gjennomgang": sendt,
             "advarsel": ocr_advarsel,
         }
@@ -2413,10 +2444,20 @@ def _varm_opp_ocr():
     # å få beskjed om å prøve igjen.
     _oppvarming["pagaar"] = True
     try:
-        for _ in range(60):                   # opptil ~1 min på Borealis
+        # R-fiks 2026-07-23: vent lenger, og GI OPP hvis Borealis fortsatt
+        # laster. Før: etter 60 s fortsatte oppvarmingen mens Borealis var
+        # midt i allokeringen — VRAM-avgjørelsen så et halvtomt kort, begge
+        # motorene la seg på GPU-en, og neste llama.cpp-buffer sprengte den
+        # (stille nativ krasj). Å hoppe over oppvarming er ufarlig: modellene
+        # lastes da ved første forespørsel, med RIKTIG VRAM-bilde.
+        for _ in range(180):
             if _borealis["status"] in ("klar", "feil"):
                 break
             time.sleep(1)
+        if _borealis["status"] not in ("klar", "feil"):
+            print("  [OCR] Oppvarming hoppet over — Borealis laster ennå "
+                  "(motorene lastes trygt ved første forespørsel).")
+            return
         import numpy as _np
 
         from delt.region_ocr import ocr_side
