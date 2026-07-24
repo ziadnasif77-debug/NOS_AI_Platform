@@ -1374,25 +1374,78 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
     return renset, avvik
 
 
-def korriger_borealis(ocr_tekst: str) -> str:
-    """Retter åpenbare OCR-feil i teksten ut fra sammenhengen — med
-    strenge regler mot hallusinering. Rå OCR-tekst beholdes alltid ved
-    siden av; dette er et lag OVER, aldri en erstatning."""
+def _reparer_ocr_artefakter(tekst: str) -> str:
+    """Deterministiske reparasjoner av linje-gjennom-bokstav-artefakter.
+    «#» og «ł» finnes ikke i norsk tekst — de oppstår når en rutelinje
+    skjærer gjennom en bokstav i samme høyde som bokstavens tverrstrek
+    (H → «#», tt → «#», t → «ł»). Mekanisk feil → mekanisk fiks; språk-
+    modellen (som nekter å røre dem) trengs ikke til dette."""
+    tekst = re.sub(r"ł", "t", tekst)
+    tekst = re.sub(r"(?<=[a-zæøåA-ZÆØÅ])#(?=[a-zæøå])", "t", tekst)
+    tekst = re.sub(r"(?:^|(?<=[\s(«\"']))#(?=[a-zæøå]{2})", "H", tekst,
+                   flags=re.MULTILINE)
+    return tekst
+
+
+def korriger_borealis(ocr_tekst: str, regioner: list | None = None) -> str:
+    """Retter OCR-feil ut fra SETNINGSSAMMENHENGEN, i TO pass:
+    1) korreksjon — med kjente OCR-artefaktmønstre og (når vi har dem)
+       regionene som ble lest med lav konfidens, så modellen vet nøyaktig
+       HVOR den skal våge seg og hvor den skal ligge unna,
+    2) selvkontroll — kandidaten sammenlignes med originalen setning for
+       setning: oversette tegnfeil rettes, tillegg/omformuleringer rulles
+       tilbake, sifferverdier må være identiske.
+    Rå OCR-tekst beholdes alltid ved siden av; dette er et lag OVER."""
+    # Pass 0 — deterministisk: mekaniske artefakter («#», «ł») fikses før
+    # språkmodellen ser teksten (den nekter å røre dem selv med instruks).
+    ocr_tekst = _reparer_ocr_artefakter(ocr_tekst)
+    usikre = [f"- «{(r.get('tekst') or '')[:60]}» (konfidens "
+              f"{float(r.get('konfidens', 0)):.2f})"
+              for r in (regioner or [])
+              if float(r.get("konfidens", 1.0)) < 0.75
+              and (r.get("tekst") or "").strip()]
+    usikre_blokk = ""
+    if usikre:
+        usikre_blokk = ("Disse bitene ble lest med LAV konfidens — her er "
+                        "tegnfeil mest sannsynlige, vær modig men presis:\n"
+                        + "\n".join(usikre[:12]) + "\n")
     prompt = (
         "Under står tekst fra OCR av et håndskrevet/skannet dokument.\n"
-        "Rett KUN åpenbare OCR-feil ut fra sammenhengen. Strenge regler:\n"
-        "- IKKE legg til, fjern eller omformuler innhold\n"
-        "- Behold linjeskift og rekkefølge nøyaktig\n"
-        "- Tall: rett bare opplagte tegnforvekslinger (O→0, l→1) når "
-        "sammenhengen er entydig; endre ALDRI tallverdier ellers\n"
-        "- Er et ord uleselig eller usikkert, behold det uendret\n"
+        "Rett OCR-feil ut fra setningssammenhengen. Regler:\n"
+        "- Rett åpenbare TEGNFORVEKSLINGER når ordet er entydig i "
+        "sammenhengen — typiske OCR-artefakter: «#»→H/tt, «ł»→t, 0→o, "
+        "1→l, rn→m, «;»→«,», dobbeltord («for for», «å å»)\n"
+        "- IKKE legg til, fjern eller omformuler innhold; behold "
+        "linjeskift og rekkefølge nøyaktig\n"
+        "- Tall og beløp: endre ALDRI sifferverdier\n"
+        "- Er et ord VIRKELIG uleselig (ingen rimelig tolkning i "
+        "sammenhengen), behold det uendret\n"
+        + usikre_blokk +
         "Svar KUN med den korrigerte teksten, ingenting annet.\n\n"
         f"OCR-tekst:\n{ocr_tekst[:3000]}\n\nKorrigert tekst:"
     )
-    tekst, avkortet = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
+    forste, avkortet = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
     if avkortet:
-        tekst += "\n[AVKORTET: nådde maksimal svarlengde]"
-    return tekst
+        return forste + "\n[AVKORTET: nådde maksimal svarlengde]"
+
+    # Pass 2 — selvkontroll («sjekk flere ganger»): fanger både tegnfeil
+    # første pass overså og eventuelle påfunn den la til.
+    kontroll = (
+        "Du kvalitetssikrer en OCR-korreksjon. Sammenlign ORIGINAL og "
+        "KANDIDAT setning for setning:\n"
+        "1) Rett tegnfeil kandidaten OVERSÅ (f.eks. «#», «ł», 0/o, 1/l) "
+        "når sammenhengen gjør ordet entydig\n"
+        "2) TILBAKESTILL alt kandidaten har lagt til, fjernet eller "
+        "omformulert i forhold til originalen\n"
+        "3) Alle sifferverdier skal være identiske med originalen\n"
+        "Svar KUN med den endelige korrigerte teksten.\n\n"
+        f"ORIGINAL (OCR):\n{ocr_tekst[:3000]}\n\n"
+        f"KANDIDAT:\n{forste[:3000]}\n\nEndelig korrigert tekst:"
+    )
+    andre, avkortet2 = _borealis_generer(kontroll, MAKS_SVAR_TOKENS)
+    if avkortet2 or len(andre.strip()) < len(forste.strip()) // 2:
+        return forste          # kontrollpasset sporet av → behold første
+    return andre
 
 
 # ------------------------------------------------------------------ #
