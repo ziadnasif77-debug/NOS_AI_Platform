@@ -1884,6 +1884,16 @@ class TreningPanel:
         tk.Label(telleramme, textvariable=self.siste_var, fg=FG_DEMPET,
                  bg=BG_PANEL, anchor="w", wraplength=830).pack(
                      fill="x", padx=8, pady=(0, 8))
+        # Vises BARE når norhand-vektene avviker fra sist kjente avtrykk —
+        # dvs. basismodellen er byttet utenfra og arkivet venter på retrening.
+        self.basis_advarsel = tk.Label(
+            telleramme,
+            text=("⚠ NY BASISMODELL oppdaget — korreksjonsarkivet er ikke "
+                  "lært inn i den nye modellen ennå. Neste treningsløp "
+                  "retrener automatisk på HELE arkivet (trykk START TRENING, "
+                  "eller vent på den planlagte kjøringen)."),
+            fg=GUL, bg=BG_PANEL, anchor="w", wraplength=830,
+            font=("Segoe UI", 9, "bold"), justify="left")
 
         # -- krav --
         kravramme = tema_rammefelt(forelder, "Krav for å trene (sjekkes live)")
@@ -1992,6 +2002,25 @@ class TreningPanel:
         stat["klargjort_ids"] = klargjort
         stat["eksempler"] = eksempler
 
+        # basisbytte: live-vektene avviker fra sist kjente avtrykk →
+        # korreksjonsarkivet venter på automatisk retrening (samme
+        # avtrykksalgoritme som valider_modell.modell_avtrykk)
+        stat["ny_basis"] = False
+        try:
+            import hashlib
+            vekter = (PROSJEKT_ROT / "modeller" / "norhand"
+                      / "model.safetensors")
+            kjent = json.loads(
+                (PROSJEKT_ROT / "data" / "finjustering" / "grunnmodell.json")
+                .read_text(encoding="utf-8")).get("basis")
+            h = hashlib.sha256()
+            h.update(str(vekter.stat().st_size).encode())
+            with open(vekter, "rb") as f:
+                h.update(f.read(1024 * 1024))
+            stat["ny_basis"] = bool(kjent) and h.hexdigest()[:16] != kjent
+        except (OSError, ValueError):
+            pass
+
         stat["gpu"] = self.kontroll._maaler.gpu()
         stat["gpu_finnes"] = self.kontroll._maaler.nvidia_ok
         stat["modell_ok"] = (PROSJEKT_ROT / "modeller" / "norhand"
@@ -2022,6 +2051,11 @@ class TreningPanel:
                     f"Totalt {len(historikk)} kjøringer gjennom livstiden.")
             else:
                 self.siste_var.set("Ingen treningskjøringer ennå.")
+
+            if stat.get("ny_basis"):
+                self.basis_advarsel.pack(fill="x", padx=8, pady=(0, 8))
+            else:
+                self.basis_advarsel.pack_forget()
 
             annotert_totalt = len(stat["annotert_ids"] | stat["trent_ids"]
                                   | stat["klargjort_ids"])

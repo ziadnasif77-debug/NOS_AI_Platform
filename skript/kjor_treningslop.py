@@ -43,7 +43,7 @@ def _allerede_trent_paa(totalt: int) -> bool:
 
 
 def _skriv_historikk(resultat: str, varighet: float,
-                     eksportert: int, trent: int) -> None:
+                     eksportert: int, trent: int, basis: str) -> None:
     """Livstidshistorikk over treningsløp (data/finjustering/
     treningshistorikk.json) — leses av GUI-ets Trening-fane. Skrives av
     ALLE løpere (GUI, ukejobb, manuell kjøring) siden alle går via her."""
@@ -62,6 +62,7 @@ def _skriv_historikk(resultat: str, varighet: float,
         "tidspunkt": datetime.now().isoformat(timespec="seconds"),
         "resultat": resultat, "varighet_s": varighet,
         "eksportert": eksportert, "trent_paa": trent,
+        "basis": basis,
     })
     try:
         sti.parent.mkdir(parents=True, exist_ok=True)
@@ -76,6 +77,13 @@ def kjor() -> None:
     resultat = "ukjent"
     antall_eksportert = 0
     antall_trent = 0
+    import valider_modell as vm
+    basis = vm.modell_avtrykk()
+    kjent = vm.kjent_avtrykk()
+    # Ny basismodell = live-vektene avviker fra sist registrerte avtrykk.
+    # Egne bytter (promotering/rull-tilbake) registrerer selv, så bare et
+    # bytte UTENFRA (ny modellutgave lagt inn) utløser dette.
+    ny_basis = kjent is not None and basis != "ukjent" and basis != kjent
     try:
         # 1) Eksport fra Label Studio (inkrementell — henter bare NYE).
         # GUI-ets «Hent korreksjoner»-knapp kan ha klargjort data på
@@ -99,7 +107,11 @@ def kjor() -> None:
             print("Ingen korreksjoner klargjort — hopper over trening.")
             resultat = "ingen_data"
             return
-        if antall_eksportert == 0 and _allerede_trent_paa(totalt_klargjort):
+        if ny_basis:
+            print(f"NY BASISMODELL oppdaget (avtrykk {basis}, kjente {kjent})"
+                  " — retrener HELE korreksjonsarkivet "
+                  f"({totalt_klargjort} eksempler) på det nye grunnlaget.")
+        elif antall_eksportert == 0 and _allerede_trent_paa(totalt_klargjort):
             print("Ingen nye korreksjoner siden forrige trening — hopper over.")
             resultat = "ingen_nye"
             return
@@ -117,7 +129,6 @@ def kjor() -> None:
         # Promoter BARE hvis kandidaten er minst like god (lavere/lik CER),
         # så en dårlig batch aldri når produksjon — den stoppes i porten.
         print("\n=== 3/3  Kvalitetsport: kandidat vs live (CER) ===")
-        import valider_modell as vm
         v = vm.vurder()
         if v["godkjent"]:
             vm.promuster()
@@ -138,7 +149,12 @@ def kjor() -> None:
         varighet = round(time.time() - start, 1)
         print(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] resultat={resultat} "
               f"varighet={varighet}s")
-        _skriv_historikk(resultat, varighet, antall_eksportert, antall_trent)
+        _skriv_historikk(resultat, varighet, antall_eksportert, antall_trent,
+                         basis)
+        # Registrer live-avtrykket som «kjent» — men IKKE etter krasj
+        # («ukjent»), så et uhåndtert basisbytte oppdages på nytt neste løp.
+        if resultat != "ukjent":
+            vm.husk_avtrykk("trening")
         print("Ferdig.")
 
 

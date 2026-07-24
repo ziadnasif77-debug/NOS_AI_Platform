@@ -45,6 +45,55 @@ FORRIGE = Path(MODELLER_STI) / "norhand-forrige"
 # Hvor mye DÅRLIGERE kandidaten kan være og fremdeles godtas.
 # 0.0 = må være minst like god. En liten margin tåler støy i små sett.
 CER_MARGIN = float(os.environ.get("CER_MARGIN", "0.0"))
+# Sist KJENTE avtrykk av live-vektene. Avviker live fra dette, er modellen
+# byttet ut UTENFRA (ny utgave fra Nasjonalbiblioteket) — og treningsløpet
+# retrener automatisk hele korreksjonsarkivet på det nye grunnlaget.
+GRUNNMODELL_STI = (Path(os.environ.get("FINJUSTERING_STI",
+                                       "./data/finjustering"))
+                   / "grunnmodell.json")
+
+
+def modell_avtrykk() -> str:
+    """Avtrykk av live-vektene (modeller/norhand): størrelse + sha256 av
+    første megabyte av model.safetensors. Billig, men skiller sikkert
+    mellom to ulike modellutgaver."""
+    import hashlib
+    sti = LIVE / "model.safetensors"
+    try:
+        h = hashlib.sha256()
+        h.update(str(sti.stat().st_size).encode())
+        with open(sti, "rb") as f:
+            h.update(f.read(1024 * 1024))
+        return h.hexdigest()[:16]
+    except OSError:
+        return "ukjent"
+
+
+def kjent_avtrykk():
+    """Avtrykket vi SIST registrerte for live-modellen (None = aldri
+    registrert, f.eks. første kjøring etter oppgradering)."""
+    try:
+        return json.loads(GRUNNMODELL_STI.read_text(encoding="utf-8")).get("basis")
+    except (OSError, ValueError):
+        return None
+
+
+def husk_avtrykk(hendelse: str) -> None:
+    """Registrer nåværende live-avtrykk som «kjent». Kalles etter hvert
+    treningsløp OG etter promotering/rull-tilbake, så våre EGNE bytter
+    aldri feiltolkes som en ny basismodell."""
+    avtrykk = modell_avtrykk()
+    if avtrykk == "ukjent":
+        return
+    try:
+        GRUNNMODELL_STI.parent.mkdir(parents=True, exist_ok=True)
+        GRUNNMODELL_STI.write_text(json.dumps({
+            "basis": avtrykk,
+            "tidspunkt": datetime.now().isoformat(timespec="seconds"),
+            "hendelse": hendelse,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"(klarte ikke å registrere basis-avtrykk: {exc})")
 
 
 def _lev(a: str, b: str) -> int:
@@ -135,6 +184,7 @@ def promuster() -> bool:
             f"norhand-{datetime.now():%Y%m%d-%H%M%S}", encoding="utf-8")
     except Exception:
         pass
+    husk_avtrykk("promotering")    # egen promotering er IKKE et basisbytte
     print(f"Promotert: kandidat → live (forrige lagret i {FORRIGE.name} "
           "for rull-tilbake).")
     return True
@@ -148,6 +198,7 @@ def rull_tilbake() -> bool:
     if LIVE.exists():
         _flytt(LIVE, Path(f"{LIVE}-avvist"))   # ta vare på den vi ruller vekk
     _flytt(FORRIGE, LIVE)
+    husk_avtrykk("rull_tilbake")   # egen rull-tilbake er heller ikke et bytte
     print("Rullet tilbake: forrige → live. Start serveren på nytt.")
     return True
 
