@@ -2736,6 +2736,15 @@ def main():
     _jobb_last_fra_disk()
     threading.Thread(target=_jobb_arbeider, daemon=True).start()
 
+    # Motoravtrykk: varsle høyt hvis EasyOCR-/RapidOCR-/Doc-UFCN-/Borealis-
+    # vektene er byttet siden tersklene ble kalibrert (norhand har sin egen,
+    # sterkere mekanisme: grunnmodell.json + automatisk retrening).
+    try:
+        from delt import motoravtrykk
+        motoravtrykk.sjekk()
+    except Exception as exc:
+        print(f"(motoravtrykk-sjekk hoppet over: {exc})")
+
     # R54: varm opp OCR-motorene i bakgrunnen. Uten dette betaler den
     # FØRSTE brukerforespørselen for at modellene lastes — målt på en
     # taxikvittering: 10,3 s første gang, 4,3 s deretter, der ~6 s var

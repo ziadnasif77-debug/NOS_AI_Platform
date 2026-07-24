@@ -47,11 +47,29 @@ def bytt(ny_sti: str, tren_naa: bool = False) -> int:
     import valider_modell as vm
     gammelt = vm.modell_avtrykk()
 
+    stempel = f"{datetime.now():%Y%m%d-%H%M%S}"
+    arkiv = MODELLER_STI / f"norhand-utgaatt-{stempel}"
     if LIVE.exists():
-        arkiv = MODELLER_STI / f"norhand-utgaatt-{datetime.now():%Y%m%d-%H%M%S}"
-        shutil.move(str(LIVE), str(arkiv))
+        arkiv.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(LIVE), str(arkiv / "norhand"))
         print(f"Gammel basis arkivert: {arkiv}")
+    # Kandidat og forrige tilhører den GAMLE slektslinjen — blir de liggende,
+    # kan «--promuster» senere legge en gammel-basis-kandidat OVER den nye
+    # basisen, eller rull-tilbake gjenopprette den gamle basisen i det stille.
+    for slektning in (vm.KANDIDAT, vm.FORRIGE):
+        if slektning.exists():
+            arkiv.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(slektning), str(arkiv / slektning.name))
+            print(f"Utdatert {slektning.name} arkivert samme sted "
+                  "(tilhørte den gamle basisen).")
     shutil.copytree(str(ny), str(LIVE))
+    # Sporbarhetsstempel (API-et legger det på hvert svar). Promotering
+    # skriver sitt eget — en fersk oppstrøms-basis må også få ett.
+    try:
+        (LIVE / "nav_versjon.txt").write_text(
+            f"norhand-basis-{stempel}", encoding="utf-8")
+    except OSError:
+        pass
 
     nytt = vm.modell_avtrykk()
     if nytt == gammelt:
