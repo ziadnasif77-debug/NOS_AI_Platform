@@ -47,6 +47,16 @@ MAKS_NORHAND_SEKUNDER = float(os.environ.get("MAKS_NORHAND_SEKUNDER", "4.0"))
 # tidstaket fortsatt kan virke (det sjekkes mellom porsjonene), samtidig
 # som vi beholder gevinsten ved å slippe én rundtur per region.
 NORHAND_BATCH = int(os.environ.get("NORHAND_BATCH", "8"))
+
+
+def _norhand_porsjon() -> int:
+    """Porsjonsstørrelse for norhand-batcher AKKURAT NÅ. På CPU er én full
+    porsjon dyrere enn hele tidstaket — da krympes den, så taket faktisk
+    får virke mellom porsjonene. Leses lat fra _norhand-tilstanden (ingen
+    modell-lasting her): før første kall er enheten ukjent → full porsjon,
+    og fra og med andre porsjon er enheten kjent."""
+    return (max(2, NORHAND_BATCH // 4) if _norhand.get("enhet") == "cpu"
+            else NORHAND_BATCH)
 # Én tekstlinje trenger aldri mange tokens. Taket beskytter mot at en
 # støyregion får modellen til å rable i vei.
 MAKS_NORHAND_TOKENS = int(os.environ.get("MAKS_NORHAND_TOKENS", "96"))
@@ -198,6 +208,8 @@ def _velg_motor_for_maskinen() -> str:
     ledig = ledig_gpu_mb()
     if ledig >= MINSTE_LEDIG_GPU_MB:
         _valgt["motor"] = "easy"          # GPU har plass → beste kvalitet
+        print(f"  [OCR] {ledig:.0f} MiB ledig VRAM (krav {MINSTE_LEDIG_GPU_MB})"
+              " — EasyOCR på GPU.")
     else:
         try:                              # fullt kort → rask CPU-motor
             _hent_rapid()
@@ -540,7 +552,9 @@ def _ocr_side_intern(bilde_np) -> dict:
         region = {
             "boks": [x0, y0, x1, y1],
             "tekst": tekst.strip(),
-            "motor": "easyocr",
+            # ærlig merkelapp: førstepasset kan være RapidOCR — før sto det
+            # «easyocr» uansett, og CPU-rutingen var usynlig i svarene
+            "motor": ("rapidocr" if _valgt["motor"] == "rapid" else "easyocr"),
             "konfidens": float(konf),
             "easyocr_tekst": tekst.strip(),
             "easyocr_konfidens": float(konf),
@@ -740,12 +754,23 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
         return resultat
 
     nye = []
-    for start in range(0, len(utsnitt), NORHAND_BATCH):
-        porsjon = utsnitt[start:start + NORHAND_BATCH]
+    # Samme tidstak som _les_med_norhand, men DOBBELT budsjett: andrepasset
+    # utløses bare når førstepasset er målbart dårlig, så redningen er verdt
+    # mer. Uten tak kunne en 20-linjers notatside med norhand på CPU koste
+    # titalls sekunder alene (målt: p90-toppene i tilgang.log).
+    brukt = 0.0
+    start = 0
+    while start < len(utsnitt):
+        if brukt >= MAKS_NORHAND_SEKUNDER * 2:
+            break                # budsjettet er brukt — døm på det vi rakk
+        porsjon = utsnitt[start:start + _norhand_porsjon()]
+        t0 = time.perf_counter()
         try:
             svar = _norhand_les_batch(porsjon)
         except Exception:
             return resultat      # norhand utilgjengelig → behold førstepasset
+        finally:
+            brukt += time.perf_counter() - t0
         for (tekst, konf), boks in zip(svar, bokser[start:start + len(porsjon)]):
             if not tekst.strip():
                 continue
@@ -759,6 +784,7 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
                         "norhand_tekst": tekst.strip(),
                         "norhand_konfidens": round(float(konf), 3),
                         "skrift": "handskrift"})
+        start += len(porsjon)
     if not nye:
         return resultat
     # HYBRID DOM, bånd for bånd: hvert av de tre båndene tilfaller passet
@@ -826,10 +852,11 @@ def _les_med_norhand(regioner: list, kandidater: list) -> None:
     gevinsten ved å lese flere regioner i samme modellkall.
     """
     brukt = 0.0
-    for start in range(0, len(kandidater), NORHAND_BATCH):
+    start = 0
+    while start < len(kandidater):
         if brukt >= MAKS_NORHAND_SEKUNDER:
             break              # budsjettet er brukt opp — resten står over
-        porsjon = kandidater[start:start + NORHAND_BATCH]
+        porsjon = kandidater[start:start + _norhand_porsjon()]
         t0 = time.perf_counter()
         try:
             svar = _norhand_les_batch([u for _, u in porsjon])
@@ -837,6 +864,7 @@ def _les_med_norhand(regioner: list, kandidater: list) -> None:
             return             # norhand utilgjengelig → behold EasyOCR
         finally:
             brukt += time.perf_counter() - t0
+        start += len(porsjon)
 
         from delt import innsyn_hendelser
         for (i, _), (nh_tekst, nh_konf) in zip(porsjon, svar):

@@ -1427,6 +1427,11 @@ def korriger_borealis(ocr_tekst: str, regioner: list | None = None) -> str:
     forste, avkortet = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
     if avkortet:
         return forste + "\n[AVKORTET: nådde maksimal svarlengde]"
+    if forste.strip() == ocr_tekst.strip():
+        # Pass 1 fant ingenting å rette — da finnes det heller ingenting å
+        # selvkontrollere. Sparer et helt modellkall (flere sekunder) i
+        # normaltilfellet der OCR-teksten alt er ren.
+        return forste.strip()
 
     # Pass 2 — selvkontroll («sjekk flere ganger»): fanger både tegnfeil
     # første pass overså og eventuelle påfunn den la til.
@@ -1532,15 +1537,6 @@ def _jobb_arbeider() -> None:
     """Én arbeidstråd — GPU-en tar uansett én OCR-side om gangen.
     Renderer hver side ÉN gang og kjører både region-OCR og
     strekkode-dekoding på samme bilde."""
-    import fitz
-    import numpy as np
-    from delt.region_ocr import ocr_side
-    try:
-        from PIL import Image
-        from pyzbar.pyzbar import decode as _dekode
-    except ImportError:
-        _dekode = None
-
     while True:
         jobb_id = _jobb_ko.get()
         jobb = _jobber.get(jobb_id)
@@ -1549,9 +1545,27 @@ def _jobb_arbeider() -> None:
                 jobb["status"] = "avbrutt"
                 with _jobb_las:
                     jobb.pop("_data", None)   # frigjør filbytene
-                _jobb_lagre(jobb)
+                try:
+                    _jobb_lagre(jobb)
+                except Exception:
+                    pass
             continue
         try:
+            # Importene ligger INNE i jobb-try-en med vilje: 2026-07-24
+            # døde tråden stille ved oppstart fordi et import feilet
+            # (halvskrevet fil på disk i utrullingsøyeblikket) — og ALLE
+            # køede jobber ble stående «i kø» for evig. Nå feiler bare
+            # den ene jobben; tråden lever og neste jobb prøver på nytt.
+            # (Vellykkede importer er gratis — Python cacher moduler.)
+            import fitz
+            import numpy as np
+            from delt.region_ocr import ocr_side
+            try:
+                from PIL import Image
+                from pyzbar.pyzbar import decode as _dekode
+            except ImportError:
+                _dekode = None
+
             jobb["status"] = "pågår"
             with _jobb_las:
                 data = jobb.pop("_data", None)

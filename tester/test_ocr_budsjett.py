@@ -42,6 +42,13 @@ def stubbet(monkeypatch):
     # Ingen ekte GPU-lås eller cache-tømming i testen
     monkeypatch.setattr(region_ocr, "frigjor_gpu", lambda: None)
     monkeypatch.setattr(region_ocr, "_paa_gpu", lambda: False)
+    # Doc-UFCN-andrepasset er sin egen motor og stubbes som de andre:
+    # det utløses med vilje på lavkonfidens-sider UANSETT skriftslag, og
+    # ville ellers sendt striper til norhand-telleren og kjørt ekte
+    # CPU-segmentering (~10 s per test) — disse testene måler R52-
+    # portvokteren per region, ikke andrepasset.
+    monkeypatch.setattr(region_ocr, "_kanskje_ufcn_andrepass",
+                        lambda _bilde, resultat: resultat)
     return teller
 
 
