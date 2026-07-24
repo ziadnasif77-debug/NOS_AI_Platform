@@ -182,22 +182,29 @@ def fjern_linjal_linjer(bilde_np):
         over[3:, :] = blekk[:-3, :]
         under[:-3, :] = blekk[3:, :]
         tynn = blekk & ~over & ~under
-        # Finn selve LINJERADENE: en linjal-rad har tynne piksler over
-        # store deler av bredden (i alle ordmellomrom), en tekstrad har
-        # nesten ingen. Inne i linjeradene fjernes tynt blekk UTEN
-        # lengdekrav — det er der de korte «_»-bitene i ordmellomrom og
-        # «#»-bitene inni bokstaver (f.eks. H) bor. Utenfor linjeradene
-        # kreves ≥ 25 px, så t-/f-tverrstreker aldri røres.
         bb = bin_bilde.shape[1]
+        # Sikre strekbiter: lange sammenhengende segmenter (ordmellomrom)
+        sikre = cv2.morphologyEx(
+            np.uint8(tynn) * 255, cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (max(bb // 8, 45), 1)))
+        if int(sikre.sum() // 255) < bb // 2:
+            return np.zeros_like(bin_bilde)   # ingen troverdige linjer
+        # LINJEFARGEN måles fra de sikre bitene. R-fiks v3 (brukerfunn):
+        # v2 fjernet ALT tynt i linjeradene — også tynne PENNESTRØK i
+        # håndskrift som satt på linjen («den slettet ord!»). Fargen
+        # skiller dem: rutelinjer er lyse/gråblå, blekket er mørkere.
+        # Bare piksler som LIGNER linjefargen fjernes; mørkere strøk
+        # overlever uansett hvor tynne de er.
+        ref = np.median(bilde_np[sikre > 0], axis=0)
+        avstand = np.abs(bilde_np.astype(np.int16)
+                         - ref.astype(np.int16)).sum(axis=2)
+        ligner = avstand < 90
         profil = tynn.sum(axis=1)
         linjerad = profil > 0.18 * bb
         linjerad = np.convolve(linjerad.astype(np.uint8),
                                np.ones(3, dtype=np.uint8), mode="same") > 0
-        i_baand = tynn & linjerad[:, None]
-        utenfor = cv2.morphologyEx(
-            np.uint8(tynn & ~linjerad[:, None]) * 255, cv2.MORPH_OPEN,
-            cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1)))
-        return np.uint8(i_baand) * 255 | utenfor
+        i_baand = tynn & linjerad[:, None] & ligner
+        return np.uint8(i_baand) * 255 | sikre
 
     def _vertikalmaske(bin_bilde):
         """Vertikale streker (margstrek, skjemarammer) — lange og tynne."""
