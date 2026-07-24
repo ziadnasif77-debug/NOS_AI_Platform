@@ -2457,6 +2457,8 @@ class InnsynVindu:
                 deler.append("skygge utjevnet")
             if rapport.get("perspektiv_rettet"):
                 deler.append("perspektiv rettet")
+            if rapport.get("linjer_fjernet"):
+                deler.append("linjal-linjer fjernet")
             kvalitet = rapport.get("kvalitet") or {}
             for advarsel in kvalitet.get("advarsler", []):
                 self._logglinje("⚠ " + advarsel, "gul")

@@ -147,11 +147,39 @@ def rett_skjevhet(bilde_np):
     return rettet, round(float(fin), 2)
 
 
+def fjern_linjal_linjer(bilde_np):
+    """Fjerner lange, tynne LINJAL-linjer (linjert papir, margstreker,
+    skjemarammer) som OCR ellers leser som «_», «#» eller gjennomstreking
+    tvers gjennom ordene. Morfologisk åpning med lange, smale kjerner
+    treffer bare sammenhengende streker (≥ ¼ av bildebredden/-høyden) —
+    bokstavstrøk er for korte og fanges aldri. Strekene males over med
+    inpainting så teksten som krysser dem overlever.
+
+    Slås av med FJERN_LINJER=av. Returnerer (bilde, brukt)."""
+    if os.environ.get("FJERN_LINJER", "").strip().lower() in ("av", "nei", "0"):
+        return bilde_np, False
+    import cv2
+    graa = cv2.cvtColor(bilde_np, cv2.COLOR_RGB2GRAY)
+    h, b = graa.shape
+    binaer = cv2.adaptiveThreshold(graa, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+                                   cv2.THRESH_BINARY_INV, 25, 15)
+    maske = np.zeros_like(binaer)
+    for kjerne_dim in (((max(b // 4, 60)), 1), (1, (max(h // 4, 60)))):
+        kjerne = cv2.getStructuringElement(cv2.MORPH_RECT, kjerne_dim)
+        maske |= cv2.morphologyEx(binaer, cv2.MORPH_OPEN, kjerne)
+    # bagatellgrense: færre streker enn ~én full linje → ikke rør bildet
+    if int(maske.sum() // 255) < max(b, h):
+        return bilde_np, False
+    maske = cv2.dilate(maske, np.ones((3, 3), np.uint8))
+    return cv2.inpaint(bilde_np, maske, 3, cv2.INPAINT_TELEA), True
+
+
 def forbehandle_side(bilde_np):
     """Full forbehandling av ett sidebilde. Returnerer (bilde, rapport).
     Feiler et steg, brukes bildet fra forrige steg — aldri et krasj."""
     rapport = {"kvalitet": None, "perspektiv_rettet": False,
-               "belysning_flatet": False, "skjevhet_grader": 0.0}
+               "belysning_flatet": False, "skjevhet_grader": 0.0,
+               "linjer_fjernet": False}
     try:
         rapport["kvalitet"] = vurder_kvalitet(bilde_np)
     except Exception:
@@ -169,6 +197,13 @@ def forbehandle_side(bilde_np):
     try:
         bilde_np, vinkel = rett_skjevhet(bilde_np)
         rapport["skjevhet_grader"] = vinkel
+    except Exception:
+        pass
+    # Linjal-linjer fjernes SIST: etter skjevhetsretting ligger de
+    # vannrett og treffes best av de lange kjernene.
+    try:
+        bilde_np, brukt = fjern_linjal_linjer(bilde_np)
+        rapport["linjer_fjernet"] = brukt
     except Exception:
         pass
     return np.ascontiguousarray(bilde_np), rapport
