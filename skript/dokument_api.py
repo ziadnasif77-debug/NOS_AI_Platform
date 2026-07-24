@@ -1444,8 +1444,44 @@ def korriger_borealis(ocr_tekst: str, regioner: list | None = None) -> str:
     )
     andre, avkortet2 = _borealis_generer(kontroll, MAKS_SVAR_TOKENS)
     if avkortet2 or len(andre.strip()) < len(forste.strip()) // 2:
-        return forste          # kontrollpasset sporet av → behold første
-    return andre
+        andre = forste         # kontrollpasset sporet av → behold første
+    return _linjevakt(ocr_tekst, andre)
+
+
+_FUNKSJONSORD = {"er", "det", "og", "i", "på", "å", "en", "et", "som",
+                 "for", "med", "til", "av", "har", "vi", "de", "den",
+                 "seg", "ikke", "at", "om", "så", "kan", "må", "skal"}
+
+
+def _linjevakt(raa: str, korrigert: str) -> str:
+    """Pass 3 — deterministisk LINJEVAKT mot omskriving: korrigeringen
+    skal fikse TEGN, ikke dikte innhold. Ord-Jaccard duger ikke (en
+    tegnfiks endrer ordets identitet og straffes urettferdig) — i stedet
+    kreves BEGGE bevis på omskriving samtidig: minst ett OPPFUNNET
+    innholdsord (finnes ikke i originalen, heller ikke som tegnfiks/
+    fuzzy-treff) OG minst ett MISTET innholdsord. Da beholdes original-
+    linjen (målt: «trene på maren» ble diktet om til «trene på å forstå»
+    — mens «#er → Her»-fikser passerer uberørt)."""
+    import difflib
+
+    raa_linjer = raa.strip().splitlines()
+    kor_linjer = korrigert.strip().splitlines()
+    if len(raa_linjer) != len(kor_linjer):
+        return korrigert       # ulik struktur → kan ikke pares trygt
+
+    def innholdsord(linje):
+        return [w for w in re.findall(r"[\wæøåÆØÅ]+", linje.lower())
+                if len(w) >= 3 and w not in _FUNKSJONSORD]
+
+    ut = []
+    for raa_l, kor_l in zip(raa_linjer, kor_linjer):
+        ra, ka = innholdsord(raa_l), innholdsord(kor_l)
+        oppfunnet = [w for w in ka
+                     if not difflib.get_close_matches(w, ra, 1, 0.65)]
+        mistet = [w for w in ra
+                  if not difflib.get_close_matches(w, ka, 1, 0.65)]
+        ut.append(raa_l if (oppfunnet and mistet) else kor_l)
+    return "\n".join(ut)
 
 
 # ------------------------------------------------------------------ #
