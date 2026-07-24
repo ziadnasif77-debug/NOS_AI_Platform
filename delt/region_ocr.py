@@ -404,26 +404,45 @@ def flett_regioner(regioner: list) -> str:
     if not regioner:
         return ""
 
-    hoyder = sorted(r["boks"][3] - r["boks"][1] for r in regioner)
-    median_hoyde = hoyder[len(hoyder) // 2]
-    terskel = max(median_hoyde * 0.6, 1.0)
-
+    # R-fiks 2026-07-24: linjegruppering på VERTIKALT OVERLAPP, ikke
+    # midtpunktavstand. På en tettskrevet notatside med 21 linjer og 147
+    # småregioner dro midtpunkt-terskelen naboliner inn i hverandre og
+    # fletningen VEKSLET ord fra to linjer («Kiøre Hvorfor bil er det …»).
+    # Overlappkravet (≥ 45 % av den laveste boksen) er umulig å oppfylle
+    # for en region som faktisk ligger på nabolinjen.
     sortert = sorted(
         regioner, key=lambda r: ((r["boks"][1] + r["boks"][3]) / 2, r["boks"][0])
     )
-    linjer = []   # [{"midt": float, "regioner": [...]}]
-    for r in sortert:
-        midt = (r["boks"][1] + r["boks"][3]) / 2
-        for linje in linjer:
-            if abs(midt - linje["midt"]) <= terskel:
-                linje["regioner"].append(r)
-                linje["midt"] = sum(
-                    (q["boks"][1] + q["boks"][3]) / 2 for q in linje["regioner"]
-                ) / len(linje["regioner"])
-                break
-        else:
-            linjer.append({"midt": midt, "regioner": [r]})
+    def _median(verdier):
+        v = sorted(verdier)
+        return v[len(v) // 2]
 
+    linjer = []   # [{"y0","y1" (MEDIANBÅND), "y0s","y1s", "regioner"}]
+    for r in sortert:
+        y0, y1 = r["boks"][1], r["boks"][3]
+        beste, beste_overlapp = None, 0.0
+        for linje in linjer:
+            felles = min(y1, linje["y1"]) - max(y0, linje["y0"])
+            minst = max(min(y1 - y0, linje["y1"] - linje["y0"]), 1.0)
+            andel = felles / minst
+            if andel > beste_overlapp:
+                beste, beste_overlapp = linje, andel
+        if beste is not None and beste_overlapp >= 0.45:
+            beste["regioner"].append(r)
+            beste["y0s"].append(y0)
+            beste["y1s"].append(y1)
+            # båndet er MEDIANEN av medlemmene — én høy ascender eller dyp
+            # descender kan aldri blåse det opp til å sluke nabolinjen
+            # (min/maks her snøballet en hel side til én «linje»)
+            beste["y0"] = _median(beste["y0s"])
+            beste["y1"] = _median(beste["y1s"])
+        else:
+            linjer.append({"y0": y0, "y1": y1,
+                           "y0s": [y0], "y1s": [y1], "regioner": [r]})
+
+    for linje in linjer:
+        linje["midt"] = sum((q["boks"][1] + q["boks"][3]) / 2
+                            for q in linje["regioner"]) / len(linje["regioner"])
     linjer.sort(key=lambda l: l["midt"])
     ut = []
     for linje in linjer:
@@ -468,10 +487,43 @@ def _paa_gpu() -> bool:
     return bool(_easyocr["gpu"]) or _norhand["enhet"] == "cuda"
 
 
+def _fjern_overlappende(funn: list) -> list:
+    """Deteksjonen gir av og til to bokser over samme tekst (målt: 20
+    par >50 % overlapp på én notatside) — begge ble lest, og fletningen
+    doblet ordene («Det Det var var en en gang gang»). Behold boksen med
+    høyest konfidens der to overlapper mer enn halvparten av den minste."""
+    def ytre(punkter):
+        xs = [p[0] for p in punkter]
+        ys = [p[1] for p in punkter]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    sortert = sorted(funn, key=lambda f: float(f[2]), reverse=True)
+    beholdt = []
+    beholdt_bokser = []
+    for kandidat in sortert:
+        kb = ytre(kandidat[0])
+        k_areal = max((kb[2] - kb[0]) * (kb[3] - kb[1]), 1)
+        duplikat = False
+        for bb in beholdt_bokser:
+            ox = max(0, min(kb[2], bb[2]) - max(kb[0], bb[0]))
+            oy = max(0, min(kb[3], bb[3]) - max(kb[1], bb[1]))
+            minst = min(k_areal,
+                        max((bb[2] - bb[0]) * (bb[3] - bb[1]), 1))
+            if ox * oy / minst > 0.5:
+                duplikat = True
+                break
+        if not duplikat:
+            beholdt.append(kandidat)
+            beholdt_bokser.append(kb)
+    # tilbake i leserekkefølge (topp → bunn) for stabil videre behandling
+    beholdt.sort(key=lambda f: (ytre(f[0])[1], ytre(f[0])[0]))
+    return beholdt
+
+
 def _ocr_side_intern(bilde_np) -> dict:
     """Selve sidebehandlingen. Kalles alltid med _las holdt (og med
     GPU_LAS i tillegg når motorene ligger på GPU)."""
-    funn = _les_regioner(bilde_np)
+    funn = _fjern_overlappende(_les_regioner(bilde_np))
 
     h, b = bilde_np.shape[0], bilde_np.shape[1]
     regioner = []
@@ -547,6 +599,24 @@ UFCN_HANDSKRIFT_ANDEL = float(os.environ.get("UFCN_HANDSKRIFT_ANDEL", "0.4"))
 UFCN_MARGIN = float(os.environ.get("UFCN_MARGIN", "0.05"))
 
 
+_NORSK_REPERTOAR = set(
+    "abcdefghijklmnopqrstuvwxyzæøåéèêàüö"
+    "0123456789 .,;:!?()[]{}«»\"'`´*/+-–—%&#@_")
+
+
+def _norsk_plausibilitet(tekst: str) -> float:
+    """Andel av teksten som ser NORSK ut. Motorkonfidens kan være
+    oppblåst («Kreveo forstå» med høy score), men tegn som ı, ã, š, ę
+    finnes ikke i norsk — de er objektive feillesingsspor. Hvert rart
+    tegn straffes 3×, så et par prosent søppel synker scoren merkbart."""
+    t = tekst.lower()
+    synlige = [c for c in t if not c.isspace()]
+    if not synlige:
+        return 0.0
+    rare = sum(1 for c in synlige if c not in _NORSK_REPERTOAR)
+    return max(0.0, 1.0 - 3.0 * rare / len(synlige))
+
+
 def _vektet_konfidens(regioner: list) -> float:
     """Lengdevektet snittkonfidens — samme mål som serverens samlede."""
     sum_, vekt = 0.0, 0.0
@@ -598,10 +668,55 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
     handskrift_andel = (sum(1 for r in regioner
                             if r.get("skrift") == "handskrift")
                         / len(regioner)) if regioner else 0.0
+    # Tredje utløser (R-fiks: notatside der skriftslags-heuristikken
+    # bommet — bokstavene var FRAKOBLET løkkeskrift → «trykt» — og
+    # motorens snittkonfidens var oppblåst): ANDELEN svake regioner
+    # avslører rotet uansett hva snittet og skriftslaget sier.
+    lav_andel = (sum(1 for r in regioner
+                     if float(r.get("konfidens", 1.0)) < 0.6)
+                 / len(regioner)) if regioner else 0.0
     tomt = not any((r.get("tekst") or "").strip() for r in regioner)
+    gammel_plaus = _norsk_plausibilitet(resultat["tekst"])
+    # SIDEGJENNOMSNITT SKJULER LOKAL KATASTROFE (målt: notatside der
+    # nederste 2/3 var fin og trakk snittet til 0,84 mens øverste
+    # tredjedel var kaudervelsk). Derfor vurderes siden i tre VANNRETTE
+    # BÅND — utløseren er det VERSTE båndet, ikke snittet.
+    h_side = bilde_np.shape[0]
+    baand_grenser = [(0, h_side / 3), (h_side / 3, 2 * h_side / 3),
+                     (2 * h_side / 3, h_side + 1)]
+
+    def _baand_del(reg_liste, y0, y1):
+        return [r for r in reg_liste
+                if y0 <= (r["boks"][1] + r["boks"][3]) / 2 < y1]
+
+    def _baand_score(reg_liste):
+        if not reg_liste:
+            return None
+        return (_vektet_konfidens(reg_liste)
+                * _norsk_plausibilitet(flett_regioner(reg_liste)))
+
+    totale_tegn = sum(len((r.get("tekst") or "")) for r in regioner) or 1
+    verste = 1.0
+    for y0, y1 in baand_grenser:
+        del_ = _baand_del(regioner, y0, y1)
+        tegn = sum(len((r.get("tekst") or "")) for r in del_)
+        if tegn / totale_tegn < 0.08:
+            continue           # bagatellbånd (nesten tomt) dømmer ikke siden
+        score = _baand_score(del_)
+        if score is not None:
+            verste = min(verste, score)
+    baand_terskel = float(os.environ.get("UFCN_BAAND_TERSKEL", "0.72"))
+    # ABSOLUTT antall svake regioner er den enkleste ærlige utløseren:
+    # 5+ svake regioner er verdt linjepassets sekunder uansett hvor fint
+    # RESTEN av siden trekker gjennomsnittene (målt: 25 svake regioner
+    # på notatsiden mens alle snittene så «greie» ut).
+    lav_antall = sum(1 for r in regioner
+                     if float(r.get("konfidens", 1.0)) < 0.6)
     if not (tomt or gammel_konf < UFCN_KONF_TERSKEL
-            or handskrift_andel >= UFCN_HANDSKRIFT_ANDEL):
-        return resultat          # førstepasset er godt nok — spar tiden
+            or handskrift_andel >= UFCN_HANDSKRIFT_ANDEL
+            or lav_andel >= 0.25 or verste < baand_terskel
+            or lav_antall >= int(os.environ.get("UFCN_LAV_ANTALL", "5"))):
+        return resultat          # siden er god nok — spar tiden
 
     from delt import innsyn_hendelser
     innsyn_hendelser.send("andrepass_start")
@@ -613,8 +728,10 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
     h, b = bilde_np.shape[0], bilde_np.shape[1]
     utsnitt, bokser = [], []
     for x0, y0, x1, y1 in strimler:
-        x0, y0 = max(x0 - 4, 0), max(y0 - 4, 0)
-        x1, y1 = min(x1 + 4, b), min(y1 + 4, h)
+        # raus VANNRETT margin: segmenteringen kutter gjerne første
+        # bokstav («Det»→«et», «Vi» forsvant) — 12 px redder ordhodene
+        x0, y0 = max(x0 - 12, 0), max(y0 - 4, 0)
+        x1, y1 = min(x1 + 12, b), min(y1 + 4, h)
         if x1 - x0 < 16 or y1 - y0 < 10:
             continue
         utsnitt.append(bilde_np[y0:y1, x0:x1])
@@ -644,14 +761,60 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
                         "skrift": "handskrift"})
     if not nye:
         return resultat
-    ny_konf = _vektet_konfidens(nye)
-    vant = ny_konf > gammel_konf + UFCN_MARGIN or (tomt and bool(nye))
-    innsyn_hendelser.send("andrepass_resultat", vant=vant,
-                          ny_konfidens=round(ny_konf, 3),
-                          gammel_konfidens=round(gammel_konf, 3))
-    if vant:
-        return {"tekst": flett_regioner(nye), "regioner": nye}
-    return resultat
+    # HYBRID DOM, bånd for bånd: hvert av de tre båndene tilfaller passet
+    # med høyest SAMMENSATT score (konfidens × norsk plausibilitet) DER.
+    # Slik kan linjepasset redde en kaudervelsk topp uten å måtte slå
+    # førstepasset på de fine trykte nederste to tredjedelene — side-
+    # gjennomsnitt tvang før et alt-eller-ingenting-valg.
+    valgte = []
+    baand_dom = []
+    for y0, y1 in baand_grenser:
+        gamle_del = _baand_del(regioner, y0, y1)
+        nye_del = _baand_del(nye, y0, y1)
+        g_score = _baand_score(gamle_del)
+        n_score = _baand_score(nye_del)
+        if n_score is None and g_score is None:
+            continue
+        # bytt bare når linjepasset er MÅLT bedre der (liten margin når
+        # båndet alt er dårlig — da er risikoen ved bytte minimal)
+        marg = UFCN_MARGIN if (g_score or 0) >= baand_terskel else -0.02
+        ta_nye = (g_score is None
+                  or (n_score is not None and n_score > g_score + marg))
+        valgte.extend(nye_del if ta_nye else gamle_del)
+        baand_dom.append({"y": [int(y0), int(y1)],
+                          "gammel": round(g_score, 3) if g_score is not None else None,
+                          "ny": round(n_score, 3) if n_score is not None else None,
+                          "valgt": "linjepass" if ta_nye else "førstepass"})
+    if not valgte:
+        return resultat
+    # Båndgrensene kan la SAMME visuelle linje slippe gjennom fra begge
+    # passene (gamle-senteret rett over grensa, nye-stripa rett under) —
+    # fjern overlappende duplikater før fletting, høyest konfidens vinner.
+    valgte.sort(key=lambda r: float(r.get("konfidens", 0)), reverse=True)
+    renset = []
+    for kandidat in valgte:
+        kb = kandidat["boks"]
+        k_areal = max((kb[2] - kb[0]) * (kb[3] - kb[1]), 1)
+        dublett = False
+        for annen in renset:
+            ab = annen["boks"]
+            ox = max(0, min(kb[2], ab[2]) - max(kb[0], ab[0]))
+            oy = max(0, min(kb[3], ab[3]) - max(kb[1], ab[1]))
+            minst = min(k_areal, max((ab[2] - ab[0]) * (ab[3] - ab[1]), 1))
+            if ox * oy / minst > 0.5:
+                dublett = True
+                break
+        if not dublett:
+            renset.append(kandidat)
+    valgte = renset
+    valgte.sort(key=lambda r: ((r["boks"][1] + r["boks"][3]) / 2, r["boks"][0]))
+    innsyn_hendelser.send(
+        "andrepass_resultat",
+        vant=any(b["valgt"] == "linjepass" for b in baand_dom),
+        ny_konfidens=round(_vektet_konfidens(nye), 3),
+        gammel_konfidens=round(gammel_konf, 3),
+        baand=baand_dom)
+    return {"tekst": flett_regioner(valgte), "regioner": valgte}
 
 
 def _les_med_norhand(regioner: list, kandidater: list) -> None:
