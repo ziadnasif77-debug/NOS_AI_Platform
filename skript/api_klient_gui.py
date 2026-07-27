@@ -1088,8 +1088,9 @@ class KontrollPanel:
     }
     STOPPER_FRIST_S = 30  # så lenge overstyrer «Stopper ...» et utdatert «Kjører»
 
-    def __init__(self, forelder, rot):
+    def __init__(self, forelder, rot, app=None):
         self.rot = rot
+        self.app = app          # for «Bruk i klienten» (fyller Server-URL)
         self._lukket = False
         self._vekk = threading.Event()      # settes for øyeblikkelig re-sjekk
         self._start_tid: dict[str, float] = {}
@@ -1132,6 +1133,8 @@ class KontrollPanel:
         tjenesteramme.pack(fill="x", **pad)
         for tjeneste in KONTROLL_TJENESTER:
             self._bygg_kort(tjenesteramme, tjeneste)
+            if tjeneste["key"] == "tunnel":
+                self._bygg_tunnel_lenke(tjenesteramme)
 
         # -- ressursgrafer --
         ressursramme = tema_rammefelt(forelder, "Ressursbruk (live, siste ~2 minutter)")
@@ -1199,9 +1202,82 @@ class KontrollPanel:
         logg_knapp.pack(side="left")
 
         self._kort[tjeneste["key"]] = {
-            "dot": dot, "status_var": status_var,
+            "dot": dot, "status_var": status_var, "rad": rad,
             "start": start_knapp, "stopp": stopp_knapp, "aapne": aapne_knapp,
         }
+
+    def _bygg_tunnel_lenke(self, forelder):
+        """Den offentlige lenken vises RETT UNDER tunnelkortet, i et felt
+        du kan markere og kopiere. Adressen er ny for hver tunnelomstart,
+        så den skal være lett å hente ut — ikke noe man må lete etter i
+        loggen. Raden er skjult til lenken finnes og er bekreftet nåbar."""
+        self.tunnel_ramme = tk.Frame(forelder, bg=BG_INNDATA,
+                                     highlightthickness=1,
+                                     highlightbackground=ORANSJE)
+        self._tunnel_rad_vist = False
+        # pakkes/skjules av _vis_alle — ingen tom ramme før tunnelen er oppe
+        tk.Label(self.tunnel_ramme,
+                 text="Offentlig lenke til API-et — bruk denne som "
+                      "Server-URL utenfra:",
+                 fg=ORANSJE, bg=BG_INNDATA, anchor="w",
+                 font=("Segoe UI", 9, "bold")).pack(fill="x", padx=8, pady=(6, 0))
+
+        rad = tk.Frame(self.tunnel_ramme, bg=BG_INNDATA)
+        rad.pack(fill="x", padx=8, pady=(3, 7))
+        self.tunnel_lenke_var = tk.StringVar(value="")
+        felt = tk.Entry(rad, textvariable=self.tunnel_lenke_var,
+                        state="readonly", readonlybackground=BG_PANEL,
+                        fg=FG_TEKST, font=("Consolas", 10), relief="flat",
+                        highlightthickness=1, highlightbackground=KANTLINJE)
+        felt.pack(side="left", fill="x", expand=True, ipady=3)
+        bind_utklippstavle(self.rot, felt)      # markér + Ctrl+C virker òg
+        self.tunnel_kopi_knapp = tema_knapp(rad, "Kopier", self._kopier_tunnel)
+        self.tunnel_kopi_knapp.pack(side="left", padx=(6, 0))
+        tema_knapp(rad, "Bruk i klienten",
+                   self._bruk_tunnel_i_klienten).pack(side="left", padx=(4, 0))
+
+        # Ærlig merking: er adressen bekreftet nåbar herfra, eller venter
+        # den fortsatt på DNS? Cloudflare sier selv «it may take some time
+        # to be reachable», og lenken kan virke utenfra før den gjør det her.
+        self.tunnel_status_var = tk.StringVar(value="")
+        self.tunnel_status_etikett = tk.Label(
+            self.tunnel_ramme, textvariable=self.tunnel_status_var,
+            fg=FG_DEMPET, bg=BG_INNDATA, anchor="w",
+            font=("Segoe UI", 8), wraplength=880, justify="left")
+        self.tunnel_status_etikett.pack(fill="x", padx=8, pady=(0, 6))
+
+    def _kopier_tunnel(self):
+        lenke = self.tunnel_lenke_var.get().strip()
+        if not lenke:
+            return
+        self.rot.clipboard_clear()
+        self.rot.clipboard_append(lenke)
+        # Kvittering i selve knappen: en dialog for hver kopiering ville
+        # vært i veien, men uten tilbakemelding vet man ikke om det virket
+        self.tunnel_kopi_knapp.config(text="Kopiert ✓")
+        self.rot.after(1500, lambda: self._tilbakestill_kopiknapp())
+
+    def _tilbakestill_kopiknapp(self):
+        try:
+            self.tunnel_kopi_knapp.config(text="Kopier")
+        except tk.TclError:
+            pass    # vinduet er lukket
+
+    def _bruk_tunnel_i_klienten(self):
+        """Setter lenken som Server-URL i de andre fanene — da slipper du
+        å kopiere den over for hånd hver gang tunnelen starter på nytt."""
+        lenke = self.tunnel_lenke_var.get().strip()
+        if not lenke or self.app is None:
+            return
+        try:
+            self.app.url_var.set(lenke)
+        except Exception:
+            return
+        messagebox.showinfo(
+            "Server-URL oppdatert",
+            f"Fanene bruker nå tunnelen:\n{lenke}\n\n"
+            "Adressen huskes til neste gang. Merk at den endrer seg hver "
+            "gang tunnelen startes på nytt.")
 
     # ---------- handlinger ----------
     def _start_tjeneste(self, tjeneste):
@@ -1353,9 +1429,14 @@ class KontrollPanel:
         """→ (status, detalj) målt utenfra: 'kjorer'/'laster'/'stoppet'."""
         if tjeneste["key"] == "tunnel":
             if self._prosess_finnes("cloudflared.exe"):
+                # Lenken vises SÅ SNART cloudflared har skrevet den — med
+                # ærlig merking av om den er bekreftet nåbar herfra. Å
+                # holde den skjult til bekreftelsen kom, var feil: tunnelen
+                # er til bruk UTENFRA, og en maskin som ikke får slått opp
+                # trycloudflare.com i DNS ville aldri fått se sin egen
+                # lenke — selv om den virker utmerket for alle andre.
                 lenke = self._finn_tunnel_lenke()
-                # Loggen kan inneholde en UTDATERT lenke fra en tidligere
-                # kjøring — vis den først når den er bekreftet nåbar.
+                self._tunnel_lenke = lenke
                 if lenke and lenke != self._tunnel_ok_lenke:
                     naa = time.monotonic()
                     if naa - self._tunnel_siste_forsok > 15:
@@ -1366,9 +1447,10 @@ class KontrollPanel:
                                 self._tunnel_ok_lenke = lenke
                         except requests.exceptions.RequestException:
                             pass
-                aktiv = lenke if lenke and lenke == self._tunnel_ok_lenke else ""
-                self._tunnel_lenke = aktiv
-                return ("kjorer", aktiv or "venter på offentlig lenke ...")
+                # selve adressen står i lenkeraden rett under kortet, der
+                # den kan markeres og kopieres — ikke som statustekst her
+                return ("kjorer", "offentlig lenke klar — se under" if lenke
+                        else "venter på offentlig lenke ...")
             self._tunnel_lenke = ""
             return ("stoppet", tjeneste["beskrivelse"])
         try:
@@ -1404,13 +1486,19 @@ class KontrollPanel:
 
     @staticmethod
     def _finn_tunnel_lenke() -> str:
+        """Lenken som hører til DENNE tunnelkjøringen. Loggen samler opp
+        flere kjøringer, så vi leser bare det som står etter siste
+        «Requesting new quick Tunnel» — ellers ville en gammel, død
+        adresse fra forrige kjøring blitt vist mens den nye lastes."""
         logg = LOGG_MAPPE / "oppstart_tunnel.log"
         try:
-            treff = _TUNNEL_LENKE_MONSTER.findall(
-                logg.read_text(encoding="utf-8", errors="replace"))
-            return treff[-1] if treff else ""
+            innhold = logg.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ""
+        start = innhold.rfind("Requesting new quick Tunnel")
+        treff = _TUNNEL_LENKE_MONSTER.findall(
+            innhold[start:] if start >= 0 else innhold)
+        return treff[-1] if treff else ""
 
     def _vis_alle(self, resultater: dict):
         if self._lukket:
@@ -1438,6 +1526,52 @@ class KontrollPanel:
                     del self._stopp_tid[nokkel]  # ga ikke etter — vis ærlig grønt
             self._status[nokkel] = status
             self._vis_kort(nokkel, status, detalj)
+        self._vis_tunnel_lenke()
+
+    def _vis_tunnel_lenke(self):
+        """Viser lenkeraden så snart tunnelen har en bekreftet nåbar
+        adresse — og skjuler den igjen når tunnelen stoppes, så det aldri
+        står en død adresse igjen som noen kan komme til å bruke."""
+        ramme = getattr(self, "tunnel_ramme", None)
+        if ramme is None:
+            return
+        # EGEN tilstandsflagg, ikke winfo_ismapped(): står brukeren i en
+        # annen fane, er hele kontrollpanelet umappet, og ismapped() ville
+        # løyet om at raden er borte — da ble den aldri skjult når
+        # tunnelen stoppet, bare tømt.
+        try:
+            lenke = self._tunnel_lenke
+            if lenke:
+                if self.tunnel_lenke_var.get() != lenke:
+                    self.tunnel_lenke_var.set(lenke)
+                if lenke == self._tunnel_ok_lenke:
+                    self.tunnel_status_var.set(
+                        "Bekreftet nåbar — API-et svarer gjennom tunnelen.")
+                    self.tunnel_status_etikett.config(fg=GRONN)
+                else:
+                    self.tunnel_status_var.set(
+                        "Ikke bekreftet herfra ennå (DNS bruker gjerne et "
+                        "minutt). Lenken kan alt virke for andre — prøv den "
+                        "gjerne. Kontrollpanelet fortsetter å sjekke.")
+                    self.tunnel_status_etikett.config(fg=ORANSJE)
+                if not self._tunnel_rad_vist:
+                    # «after» binder raden til tunnelkortet, ikke til
+                    # bunnen av rammen — den blir stående rett under
+                    # kortet selv om flere tjenester kommer til senere
+                    kort = self._kort.get("tunnel") or {}
+                    if kort.get("rad") is not None:
+                        ramme.pack(fill="x", padx=8, pady=(0, 6),
+                                   after=kort["rad"])
+                    else:
+                        ramme.pack(fill="x", padx=8, pady=(0, 6))
+                    self._tunnel_rad_vist = True
+            else:
+                self.tunnel_lenke_var.set("")
+                if self._tunnel_rad_vist:
+                    ramme.pack_forget()
+                    self._tunnel_rad_vist = False
+        except tk.TclError:
+            pass  # vinduet er i ferd med å lukkes
 
     def _vis_kort(self, nokkel: str, status: str, detalj: str):
         try:
@@ -2821,7 +2955,8 @@ class DokumentKlientApp:
         for nokkel, _tekst in FANER:
             self._fane_rammer[nokkel] = tk.Frame(fanebeholder, bg=BG_HOVED)
 
-        self.kontroll = KontrollPanel(self._fane_rammer["kontroll"], self.rot)
+        self.kontroll = KontrollPanel(self._fane_rammer["kontroll"], self.rot,
+                                      self)
         self.flytskjema = FlytskjemaPanel(self._fane_rammer["flyt"], self.rot)
         self.innsyn = InnsynPanel(self._fane_rammer["innsyn"], self.rot, self)
         self.trening = TreningPanel(self._fane_rammer["trening"], self.rot,
