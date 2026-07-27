@@ -10,6 +10,8 @@ for GPU, VRAM, CPU og RAM. Tjenester startes skjult via oppstart\-mappen
 Dekker alle endepunktene i serveren (skript/dokument_api.py) — feltnavn,
 statusverdier og feilkoder er VERIFISERT mot serverkoden, ikke gjettet:
 
+  - Dokument     POST /dokument       ETT kall med brytere (felter/struktur/
+                                      svar/skjema/korriger) — leses én gang
   - Spør         POST /spor           fil og/eller spørsmål → svar
   - Fyll skjema  POST /fyll_skjema    fil + JSON-mal → utfylte felter
   - Analyser     POST /analyser       fil → deterministisk felt-/dato-/OCR-analyse
@@ -225,6 +227,7 @@ FANER = [
     ("flyt", "Flytskjema"),
     ("innsyn", "Innsyn"),
     ("trening", "Trening"),
+    ("dokument", "Dokument"),
     ("spor", "Spør"),
     ("fyll_skjema", "Fyll skjema"),
     ("analyser", "Analyser"),
@@ -237,7 +240,7 @@ FANER = [
 # stedet for bare tunneladressen, strippes stien av igjen — begge former
 # virker, og en fane ender aldri opp med å bygge «.../spor/spor».
 KJENTE_ENDEPUNKT_SUFFIKSER = (
-    "/spor", "/analyser", "/uttrekk", "/fyll_skjema", "/jobb",
+    "/spor", "/analyser", "/uttrekk", "/fyll_skjema", "/jobb", "/dokument",
     "/hjelp", "/dokumentasjon", "/openapi.json",
 )
 
@@ -529,6 +532,16 @@ class ApiKlient:
                 filer={"fil": (pdf_sti.name, fil, "application/pdf")},
             )
 
+    def dokument_samlet(self, pdf_sti: Path, felter: dict):
+        """POST /dokument — ETT kall med brytere: felter/struktur/tekst/
+        svar/skjema/korriger (+ sporsmal/skjema_mal ved behov)."""
+        with open(pdf_sti, "rb") as fil:
+            return self._post(
+                "/dokument",
+                filer={"fil": (pdf_sti.name, fil, "application/pdf")},
+                felter=felter,
+            )
+
     def jobb_status(self, jobb_id: str):
         return self._get(f"/jobb/{jobb_id}")
 
@@ -563,8 +576,17 @@ def _lim_inn(rot, felt):
 
 
 def _kopier_markering(rot, felt):
+    # Text og Entry har ULIKT get()-API: Text.get(fra, til) tar indekser,
+    # mens Entry.get() ikke tar argumenter i det hele tatt. Kalles den med
+    # indekser, blir det en TypeError — som IKKE fanges av TclError, så
+    # Ctrl+C/Ctrl+X krasjet på alle enlinjefelter (URL, nøkkel, spørsmål).
     try:
-        tekst = felt.get("sel.first", "sel.last")
+        if isinstance(felt, tk.Text):
+            tekst = felt.get("sel.first", "sel.last")
+        else:
+            if not felt.selection_present():
+                return "break"          # ingenting markert
+            tekst = felt.get()[felt.index("sel.first"):felt.index("sel.last")]
     except tk.TclError:
         return "break"  # ingenting markert
     rot.clipboard_clear()
@@ -1505,8 +1527,10 @@ FLYT_NODER = [
 
 FLYT_DETALJER = {
     "inn": "UiPath, GUI-klienten eller ren HTTP laster opp dokumentet. Endepunkter: "
-           "/spor (spørsmål), /analyser, /uttrekk, /fyll_skjema og /jobb for store "
-           "skanninger i bakgrunnen. Bilder og Office-filer konverteres til PDF.",
+           "/dokument (SAMLET: ett kall med brytere for felter/struktur/svar/skjema/"
+           "korriger — dokumentet leses én gang), /spor (spørsmål), /analyser, "
+           "/uttrekk, /fyll_skjema og /jobb for store skanninger i bakgrunnen. "
+           "Bilder og Office-filer konverteres til PDF.",
     "lese": "Har PDF-en tekstlag, leses det direkte (raskt og eksakt). Skannede sider "
             "går til regionbasert OCR: EasyOCR/RapidOCR for trykt tekst, norhand "
             "(TrOCR, Nasjonalbiblioteket) for norsk håndskrift, pyzbar for strekkoder. "
@@ -1639,7 +1663,7 @@ class FlytskjemaPanel:
         c.create_line(xu2, midt_u, 400, midt_u, 400, midt_s, xs2, midt_s,
                       fill=GRONN, width=2, arrow=tk.LAST, arrowshape=(10, 12, 5))
         c.create_text(409, (midt_u + midt_s) // 2, angle=90,
-                      text="uten spørsmål: /analyser · /uttrekk",
+                      text="uten LLM: /analyser · /uttrekk · /dokument",
                       fill=GRONN, font=("Segoe UI", 8, "italic"))
         # B) rent spørsmål UTEN fil: rett fra inn til Borealis
         xi1, yi1, xi2, yi2 = rekt["inn"]
@@ -2712,7 +2736,7 @@ class DokumentKlientApp:
     def __init__(self, rot: tk.Tk):
         self.rot = rot
         self.rot.title("NAV dokument-API — klient (Borealis)")
-        self.rot.geometry("900x920")
+        self.rot.geometry("980x920")
         self.rot.minsize(640, 700)
         self.rot.configure(bg=BG_HOVED)
 
@@ -2802,6 +2826,7 @@ class DokumentKlientApp:
         self.innsyn = InnsynPanel(self._fane_rammer["innsyn"], self.rot, self)
         self.trening = TreningPanel(self._fane_rammer["trening"], self.rot,
                                     self.kontroll)
+        self._bygg_dokument_fane(self._fane_rammer["dokument"])
         self._bygg_spor_fane(self._fane_rammer["spor"])
         self._bygg_fyll_skjema_fane(self._fane_rammer["fyll_skjema"])
         self._bygg_analyser_fane(self._fane_rammer["analyser"])
@@ -2972,6 +2997,185 @@ class DokumentKlientApp:
     # ======================================================================
     # Fane: Spør (/spor)
     # ======================================================================
+    # ======================================================================
+    # Fane: Dokument (/dokument) — ETT kall med brytere: dokumentet leses
+    # én gang, og bare delene som er slått PÅ kjøres. Modelldelene er AV
+    # som standard, så det raske forblir raskt.
+    # ======================================================================
+    def _bygg_dokument_fane(self, forelder):
+        pad = {"padx": 12, "pady": 6}
+        self.dokument_valgt_fil: str | None = None
+
+        filramme = tema_rammefelt(forelder, "Dokument (påkrevd)")
+        filramme.pack(fill="x", **pad)
+        filrad = tk.Frame(filramme, bg=BG_PANEL)
+        filrad.pack(fill="x", padx=8, pady=8)
+        self.dokument_fil_etikett = tk.Label(
+            filrad, text="Ingen fil valgt", fg=FG_DEMPET, bg=BG_PANEL, anchor="w"
+        )
+        self.dokument_fil_etikett.pack(side="left", fill="x", expand=True)
+        tema_knapp(
+            filrad, "Bla gjennom ...",
+            lambda: self._velg_fil_til(self.dokument_fil_etikett,
+                                       self._sett_dokument_fil),
+        ).pack(side="right")
+
+        bryterramme = tema_rammefelt(
+            forelder, "Hva skal gjøres? (dokumentet leses ÉN gang uansett)")
+        bryterramme.pack(fill="x", **pad)
+        rutenett = tk.Frame(bryterramme, bg=BG_PANEL)
+        rutenett.pack(fill="x", padx=8, pady=6)
+        rutenett.columnconfigure(0, weight=1)
+        rutenett.columnconfigure(1, weight=1)
+        self.dokument_brytere = {}
+        for i, (nokkel, tekst, standard) in enumerate([
+                ("felter", "Felter + datoer (raskt, uten modell)", True),
+                ("struktur", "Strukturert uttrekk (raskt, uten modell)", False),
+                ("tekst", "Full tekst i svaret", True),
+                ("korriger", "Korriger OCR-tekst (modell — tregere)", False),
+                ("svar", "Svar på spørsmål (modell — tregere)", False),
+                ("skjema", "Fyll JSON-mal (modell — tregere)", False)]):
+            var = tk.BooleanVar(value=standard)
+            tk.Checkbutton(
+                rutenett, text=tekst, variable=var, anchor="w",
+                bg=BG_PANEL, fg=FG_TEKST, selectcolor=BG_INNDATA,
+                activebackground=BG_PANEL, activeforeground=FG_TEKST,
+                highlightthickness=0,
+            ).grid(row=i // 2, column=i % 2, sticky="w", padx=4, pady=1)
+            self.dokument_brytere[nokkel] = var
+
+        tk.Label(bryterramme,
+                 text="Skriver du spørsmål eller JSON-mal under, slås delen "
+                      "på av seg selv. Delene er uavhengige: feiler én, "
+                      "kommer resten likevel.",
+                 fg=FG_DEMPET, bg=BG_PANEL, anchor="w", wraplength=880,
+                 justify="left").pack(fill="x", padx=8, pady=(0, 6))
+
+        tk.Label(forelder, text="Spørsmål (til «Svar på spørsmål»):",
+                 fg=FG_DEMPET, bg=BG_HOVED, anchor="w").pack(fill="x", padx=12)
+        self.dokument_sporsmal_var = tk.StringVar()
+        sporsmal_felt = tema_innfelt(forelder, self.dokument_sporsmal_var)
+        sporsmal_felt.pack(fill="x", padx=12, pady=(2, 4))
+        bind_utklippstavle(self.rot, sporsmal_felt)
+
+        tk.Label(forelder, text="JSON-mal (til «Fyll JSON-mal») — "
+                                'f.eks. {"navn": "", "belop": ""}:',
+                 fg=FG_DEMPET, bg=BG_HOVED, anchor="w").pack(fill="x", padx=12)
+        self.dokument_mal_tekst = tema_tekstfelt(forelder, height=3)
+        self.dokument_mal_tekst.pack(fill="x", padx=12, pady=(2, 4))
+        bind_utklippstavle(self.rot, self.dokument_mal_tekst)
+
+        primaerknapp(forelder, "Kjør valgte deler (ett kall)",
+                     self._send_dokument).pack(fill="x", **pad)
+
+        self.dokument_panel = SvarPanel(forelder, self.rot, etikett="Dokument")
+
+    def _sett_dokument_fil(self, sti):
+        self.dokument_valgt_fil = sti
+
+    def _send_dokument(self):
+        if not self._sjekk_valgt_fil(self.dokument_valgt_fil):
+            return
+        if not self._oppdater_klient():
+            return
+        sporsmal = self.dokument_sporsmal_var.get().strip()
+        mal = self.dokument_mal_tekst.get("1.0", "end").strip()
+        # Utfylt felt = åpenbar hensikt → delen skal på (som serveren gjør).
+        # Selve bryterne flippes FØRST når alt er validert: avbrytes kallet
+        # her, skal brukeren finne panelet slik hen forlot det.
+        vil_svar = self.dokument_brytere["svar"].get() or bool(sporsmal)
+        vil_skjema = self.dokument_brytere["skjema"].get() or bool(mal)
+        if vil_svar and not sporsmal:
+            messagebox.showwarning(
+                "Mangler spørsmål",
+                "«Svar på spørsmål» er på — skriv spørsmålet først "
+                "(eller slå av bryteren).")
+            return
+        if vil_skjema:
+            if not mal:
+                messagebox.showwarning(
+                    "Mangler JSON-mal",
+                    "«Fyll JSON-mal» er på — lim inn malen først "
+                    "(eller slå av bryteren).")
+                return
+            try:
+                tolket = json.loads(mal)
+            except ValueError as exc:
+                messagebox.showwarning("Ugyldig JSON",
+                                       f"JSON-malen er ugyldig: {exc}")
+                return
+            # Samme krav som serveren, så feilen fanges her i stedet for
+            # å komme tilbake som en 400 etter at filen er lastet opp
+            if not isinstance(tolket, (dict, list)) or not tolket:
+                messagebox.showwarning(
+                    "Tom eller ugyldig mal",
+                    "JSON-malen må være et objekt (eller en liste) med "
+                    'felter, f.eks. {"navn": "", "belop": ""}.')
+                return
+
+        self.dokument_brytere["svar"].set(vil_svar)
+        self.dokument_brytere["skjema"].set(vil_skjema)
+        felter = {nokkel: ("ja" if var.get() else "nei")
+                  for nokkel, var in self.dokument_brytere.items()}
+        if sporsmal:
+            felter["sporsmal"] = sporsmal
+        if mal and self.dokument_brytere["skjema"].get():
+            felter["skjema_mal"] = mal
+
+        panel = self.dokument_panel
+        panel.nullstill("Klargjør filen ...")
+
+        def formatter(data):
+            linjer = []
+            valg = data.get("valg") or {}
+            linjer.append("Deler kjørt: "
+                          + (", ".join(n for n, p in valg.items() if p) or "ingen"))
+            sv = data.get("svar")
+            if isinstance(sv, dict):
+                linjer.append("")
+                linjer.append("Svar: " + (str(sv.get("svar"))
+                                          if sv.get("ok")
+                                          else f"FEILET — {sv.get('feil')}"))
+                if sv.get("svar_avkortet"):
+                    linjer.append("  (svaret nådde maksimal lengde og kan "
+                                  "være avkortet)")
+                if sv.get("tolket_sporsmal"):
+                    linjer.append(f"  (tolket spørsmål: {sv['tolket_sporsmal']})")
+                if sv.get("ok") and not sv.get("tall_verifisert", True):
+                    linjer.append("  (ADVARSEL: svaret har tall som ikke står "
+                                  "ordrett i dokumentet)")
+            ko = data.get("korriger")
+            if isinstance(ko, dict) and not ko.get("ok"):
+                linjer.append("")
+                linjer.append(f"Korrigering FEILET — {ko.get('feil')}")
+            sk = data.get("skjema")
+            if isinstance(sk, dict):
+                linjer.append("")
+                if sk.get("ok"):
+                    linjer.append("Utfylt skjema:")
+                    linjer.append(formater_json(sk.get("skjema") or {}))
+                else:
+                    linjer.append(f"Skjema FEILET — {sk.get('feil')}")
+            f = data.get("felter")
+            if isinstance(f, dict) and f.get("felter"):
+                linjer.append("")
+                linjer.append("Felter:")
+                for navn, verdi in f["felter"].items():
+                    linjer.append(f"  {navn}: {verdi}")
+            for adv in (data.get("kvalitet") or {}).get("advarsler") or []:
+                linjer.append(f"ADVARSEL: {adv}")
+            linjer.append("")
+            linjer.append("Fullt svar (JSON):")
+            linjer.append(formater_json(data))
+            return "\n".join(linjer)
+
+        self._kjor_foresporsel(
+            panel,
+            self._fil_foresporsel(self.dokument_valgt_fil,
+                                  lambda pdf: self.klient.dokument_samlet(pdf, felter)),
+            self._standard_suksess(panel, "Samlet svar mottatt", formatter),
+        )
+
     def _bygg_spor_fane(self, forelder):
         pad = {"padx": 12, "pady": 6}
         self.spor_valgt_fil: str | None = None

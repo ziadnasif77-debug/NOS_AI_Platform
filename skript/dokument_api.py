@@ -186,7 +186,7 @@ LS_KONFIDENS_TERSKEL = float(os.environ.get("LS_KONFIDENS_TERSKEL", "0.85"))
 AUTO_GJENNOMGANG = bool(LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY)
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
-API_VERSJON = "1.1.0"
+API_VERSJON = "1.2.0"
 PROMPT_VERSJON = "p10"
 
 _NORHAND_VERSJON = None
@@ -1681,6 +1681,45 @@ def _openapi() -> dict:
         "paths": {
             "/hjelp": {"get": {"summary": "Tjenestestatus og oversikt",
                                "responses": {"200": {"description": "Status, endepunkter, grenser, Borealis-motor"}}}},
+            "/dokument": {"post": {
+                "summary": "Samlet endepunkt: ETT kall, brytere for hva som skal gjøres",
+                "description": (
+                    "Dokumentet leses ÉN gang (delt cache), deretter kjøres bare delene som er PÅ:\n"
+                    "- felter=ja (STANDARD PÅ): deterministiske felter + datoer — raskt\n"
+                    "- struktur=ja: komplett strukturert uttrekk (som /uttrekk) — raskt\n"
+                    "- svar=ja + sporsmal: Borealis-svar med alle vaktene (som /spor)\n"
+                    "- skjema=ja + skjema_mal: JSON-malen utfylt med kodevalidering (som /fyll_skjema)\n"
+                    "- korriger=ja: LLM-korrigert OCR-tekst\n"
+                    "- tekst=nei: utelat fullteksten fra svaret\n"
+                    "Modelldelene (svar/skjema/korriger) er AV som standard og feiler uavhengig — "
+                    "én del med problem stopper aldri de andre; hver del har sitt eget "
+                    "{ok, feil}-objekt, og feilene gjentas i kvalitet.advarsler.\n"
+                    "Sender du sporsmal/skjema_mal uten bryter, slås delen på automatisk. "
+                    "Brytere tar ja/nei (også 1/0, true/false, på/av) — en UKJENT verdi gir 400, "
+                    "aldri en stille avslått del. Er BARE modelldeler bedt om mens Borealis er "
+                    "nede, svares 503 (retry-signal) i stedet for 200."),
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "properties": {"fil": fil_felt,
+                                   "felter": {"type": "string", "enum": ["ja", "nei"]},
+                                   "struktur": {"type": "string", "enum": ["ja", "nei"]},
+                                   "svar": {"type": "string", "enum": ["ja", "nei"]},
+                                   "sporsmal": {"type": "string"},
+                                   "skjema": {"type": "string", "enum": ["ja", "nei"]},
+                                   "skjema_mal": {"type": "string",
+                                                  "description": "Din JSON-mal (kreves når skjema=ja)"},
+                                   "korriger": {"type": "string", "enum": ["ja", "nei"]},
+                                   "tekst": {"type": "string", "enum": ["ja", "nei"]},
+                                   "maks_sider": {"type": "integer"}}}}}},
+                "responses": {
+                    "200": {"description":
+                        "valg, tekst, felter, struktur, svar, skjema, korriger, korrigert_tekst, "
+                        "strekkoder, handskrift, kvalitet (ocr_brukt/ocr_motorer/advarsler), "
+                        "tid_sekunder, versjon"},
+                    "400": {"description": "Ukjent bryterverdi, manglende sporsmal/skjema_mal, "
+                                           "ugyldig JSON-mal, eller JSON-mal sendt i 'skjema' "
+                                           "(bruk 'skjema_mal')"},
+                    "503": {"description": "Bare modelldeler bedt om mens Borealis er nede"}}}},
             "/spor": {"post": {
                 "summary": "Spørsmål/innhold fra dokument — eller rent spørsmål",
                 "description": (
@@ -1903,6 +1942,11 @@ class Handler(BaseHTTPRequestHandler):
                 "tjeneste": "NAV dokument-API (generelt)",
                 "dokumentasjon": "GET /dokumentasjon (Swagger UI) · GET /openapi.json (OpenAPI 3)",
                 "endepunkter": {
+                    "POST /dokument": ("ETT kall med brytere: felter=ja/nei (standard ja), "
+                                       "struktur=ja/nei, svar=ja/nei (+sporsmal), skjema=ja/nei "
+                                       "(+skjema_mal), korriger=ja/nei, tekst=ja/nei — dokumentet "
+                                       "leses ÉN gang; modelldelene er AV som standard, så det "
+                                       "raske forblir raskt"),
                     "POST /analyser": "multipart/form-data, felt 'fil' → deterministiske felter + trenger_ocr",
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
                                    "fil UTEN 'sporsmal' → hele den utleste teksten ordrett (deterministisk); "
@@ -1971,9 +2015,8 @@ class Handler(BaseHTTPRequestHandler):
     def _fyll_skjema_flyt(self, filnavn, slag, innhold, maks_ocr, mal,
                           via_spor=False, les_strekkoder=True):
         """Fyller brukerens egen JSON-mal fra dokumentet: modellen
-        fyller, KODEN validerer (rens_skjemasvar). Modellen grunnes med
-        deterministisk funnede beløp MED kontekst — så verdier havner i
-        riktige felter (kampanjepris vs produktpris osv.)."""
+        fyller, KODEN validerer (rens_skjemasvar). Selve utfyllingen bor
+        i fyll_skjema_kjerne (delt med POST /dokument)."""
         t0 = time.time()
         if _borealis["status"] != "klar":
             return self._svar(503, {"ok": False,
@@ -1989,87 +2032,10 @@ class Handler(BaseHTTPRequestHandler):
             dok = a.get("tekst", "")
             fra_cache = a.get("fra_cache", False)
 
-        # Deterministisk beløpsgrunnlag: hvert beløp med konteksten sin,
-        # så modellen ser HVA hvert tall hører til før den plasserer det
-        belop_del = ""
-        belop_liste = finn_alle_belop(dok, maks=40)
-        if belop_liste:
-            belop_del = ("\nBeløp funnet i dokumentet, med kontekst — bruk "
-                         "konteksten til å plassere hvert beløp i riktig felt:\n"
-                         + "\n".join(f"- {b['raatekst']}: «{b['kontekst']}»"
-                                     for b in belop_liste) + "\n")
-        koder_liste = finn_koder_med_kontekst(dok, maks=25)
-        if koder_liste:
-            belop_del += ("\nTall og koder funnet i dokumentet, med kontekst "
-                          "— plasser hver kode i feltet konteksten tilsier:\n"
-                          + "\n".join(f"- {k['verdi']}: «{k['kontekst']}»"
-                                      for k in koder_liste) + "\n")
-        # R53: datoene manglet i grunnlaget, selv om beløp og koder var
-        # med. På en kvittering der OCR hadde forvansket datolinjen fant
-        # modellen ingen brukbar dato og fylte feltet med søppel, mens
-        # den deterministiske parseren hadde lest «12.06.2026» riktig
-        # hele tiden. Nå får modellen de faktiske datoene å velge blant.
-        dato_liste = klassifiser_datoer(dok, maks=15)
-        if dato_liste:
-            belop_del += ("\nDatoer funnet i dokumentet (normalisert til "
-                          "dd.mm.åååå, med hva hver av dem er) — bruk en av "
-                          "disse ORDRETT i datofelter:\n"
-                          + "\n".join(
-                              f"- {d['dato']} ({d.get('etikett') or d['type']}):"
-                              f" «{d.get('kontekst', '')}»"
-                              for d in dato_liste) + "\n")
-
-        # R57: identifikatorene manglet også. På en taxikvittering står
-        # både «TLF 07550» (kortnummer i toppteksten) og «TELEFON :
-        # 97335868»; modellen plukket det første, og kodevalideringen
-        # måtte tømme feltet. Den deterministiske parseren VET hvilket
-        # av tallene som er et gyldig norsk telefonnummer — den
-        # kunnskapen skal modellen få, ikke gjette seg til.
-        merket = []
-        for etikett, verdier in (
-            ("telefonnummer", finn_alle_telefoner(dok)),
-            ("organisasjonsnummer", finn_alle_organisasjonsnummer(dok)),
-            ("fødselsnummer", finn_alle_fodselsnummer(dok)),
-            ("kontonummer", finn_alle_kontonummer(dok)),
-            ("e-postadresse", finn_alle_eposter(dok)),
-        ):
-            for verdi in verdier[:5]:
-                merket.append(f"- {verdi} er et gyldig {etikett}")
-        if merket:
-            belop_del += ("\nIdentifikatorer som er KONTROLLERT av kode "
-                          "(sjekksum/format) — bruk disse i felter som ber om "
-                          "dem, og ingen andre tall:\n" + "\n".join(merket) + "\n")
-
-        prompt = (
-            "Fyll ut JSON-malen nederst KUN med opplysninger som står "
-            "i dokumentet.\nStrenge regler:\n"
-            "- Verdier gjengis ORDRETT fra dokumentet — aldri regn eller omform\n"
-            "- Finner du ikke en opplysning, la feltet stå som tom streng \"\"\n"
-            "- ALDRI sett en verdi i et annet felt enn det den hører til i "
-            "dokumentets sammenheng — er plasseringen usikker, la feltet stå tomt\n"
-            "- Prosentsatser hører aldri hjemme i beløps- eller rabattfelter\n"
-            "- Maskeringstegn beholdes som i dokumentet («****5277», ikke «5277»)\n"
-            "- Firmanavn-felter skal ha den JURIDISKE enheten (navnet ved "
-            "Org. nr.), ikke butikk-/avdelingsnavn\n"
-            "- Behold malens struktur og nøkler NØYAKTIG\n"
-            "Svar KUN med den utfylte JSON-en.\n"
-            f"\nDokument:\n{dok[:MAKS_LLM_TEGN]}\n"
-            + belop_del +
-            f"\nJSON-mal:\n{json.dumps(mal, ensure_ascii=False, indent=1)}\n"
-            "\nUtfylt JSON:"
-        )
-        svar_tekst, _ = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
-        utfylt = _parse_json_svar(svar_tekst)
-        if utfylt is None:
-            svar_tekst, _ = _borealis_generer(
-                prompt + "\n(Husk: svar KUN med gyldig JSON, ingenting annet.)",
-                MAKS_SVAR_TOKENS)
-            utfylt = _parse_json_svar(svar_tekst)
-        if utfylt is None:
-            return self._svar(200, {"ok": False,
-                                    "feil": "Modellen ga ikke gyldig JSON etter to forsøk",
-                                    "raasvar": svar_tekst[:1500]})
-        renset, avvik = rens_skjemasvar(mal, utfylt, dok)
+        kjerne = fyll_skjema_kjerne(dok, mal)
+        if not kjerne.get("ok"):
+            return self._svar(200, kjerne)
+        renset, avvik = kjerne["skjema"], kjerne["avvik"]
         svar = {
             "ok": True, "filnavn": filnavn,
             "skjema": renset,
@@ -2088,6 +2054,7 @@ class Handler(BaseHTTPRequestHandler):
             # ingenting limes på JSON-en (det ville brutt den).
             svar["svar"] = json.dumps(renset, ensure_ascii=False, indent=2)
         return self._svar(200, svar)
+
 
     def _innsyn(self, filnavn, slag, innhold, maks_ocr):
         """POST /innsyn — starter en DIREKTEVISNINGS-økt: dokumentet
@@ -2109,6 +2076,241 @@ class Handler(BaseHTTPRequestHandler):
                          args=(okt, filnavn, slag, innhold, maks_ocr),
                          daemon=True).start()
         return self._svar(200, {"ok": True, "innsyn_id": okt_id})
+
+    def _dokument_samlet(self, filnavn, slag, innhold, maks_ocr,
+                         tekstfelter, les_strekkoder):
+        """POST /dokument — ETT kall med brytere for hva som skal gjøres.
+        Dokumentet leses ÉN gang (delt cache med /analyser//spor//uttrekk);
+        deretter kjøres BARE delene som er slått på. De raske
+        deterministiske delene er PÅ som standard; delene som koster
+        modellkall (svar/skjema/korriger) er AV til de bes om — så det
+        raske forblir raskt. Delene feiler uavhengig: én del med problem
+        stopper aldri de andre."""
+        t0 = time.time()
+        advarsler = []
+
+        # Bryterne tar både norsk og engelsk ja/nei. En UKJENT verdi
+        # avvises (400) i stedet for å bli tolket som «nei» — ellers ville
+        # «felter=yes» stille slått AV en standard-PÅ-del, og klienten
+        # fått 200 med tomt innhold uten et eneste feilsignal.
+        JA = ("ja", "1", "true", "on", "yes", "pa", "på")
+        NEI = ("nei", "0", "false", "av", "off", "no")
+        ukjente = []
+
+        def gitt(navn):
+            """Er bryteren EKSPLISITT satt? En TOM verdi teller ikke:
+            skjemaposteringer (HTML-skjema, UiPath) sender gjerne alle
+            felter — også de tomme — og «svar=» skal ikke blokkere
+            autoaktiveringen under."""
+            return bool(tekstfelter.get(navn, "").strip())
+
+        def paa(navn, standard):
+            v = tekstfelter.get(navn, "").strip().lower()
+            if not v:
+                return standard
+            if v in JA:
+                return True
+            if v in NEI:
+                return False
+            ukjente.append(f"{navn}={tekstfelter.get(navn, '')[:40]}")
+            return standard
+
+        # Kollisjonsvern: på /fyll_skjema er «skjema» selve JSON-malen,
+        # her er det en bryter. En klient som migrerer med det gamle
+        # feltnavnet skal få en TYDELIG feil — ikke en stille tapt mal.
+        skjema_bryter = tekstfelter.get("skjema", "").strip()
+        if skjema_bryter.startswith(("{", "[")):
+            return self._svar(400, {"ok": False, "feil": (
+                "På /dokument er 'skjema' en bryter (ja/nei) — legg selve "
+                "JSON-malen i feltet 'skjema_mal'")})
+
+        valg = {
+            "tekst": paa("tekst", True),
+            "felter": paa("felter", True),
+            "struktur": paa("struktur", False),
+            "svar": paa("svar", False),
+            "skjema": paa("skjema", False),
+            "korriger": paa("korriger", False),
+        }
+        if ukjente:
+            return self._svar(400, {"ok": False, "feil": (
+                "Ukjent bryterverdi: " + ", ".join(ukjente)
+                + ". Bruk ja/nei (eller 1/0, true/false).")})
+
+        sporsmal = tekstfelter.get("sporsmal", "").strip()
+        mal_raa = tekstfelter.get("skjema_mal", "").strip()
+        # Vennlighet: sender du sporsmal/skjema_mal uten å sette bryteren,
+        # er hensikten åpenbar — bryteren slås på av seg selv
+        if sporsmal and not gitt("svar"):
+            valg["svar"] = True
+        if mal_raa and not gitt("skjema"):
+            valg["skjema"] = True
+
+        if innhold is None:
+            return self._svar(400, {"ok": False,
+                                    "feil": "Ingen fil funnet (felt 'fil')"})
+        if valg["svar"] and not sporsmal:
+            return self._svar(400, {"ok": False,
+                                    "feil": "svar=ja krever feltet 'sporsmal'"})
+        # JSON-mal limt i sporsmal-feltet: /spor ruter slikt automatisk til
+        # skjemautfylling. Her finnes et eget felt for det — si fra, ellers
+        # ville malen blitt sendt som et vanlig SPØRSMÅL til modellen.
+        if valg["svar"] and sporsmal.startswith(("{", "[")):
+            if isinstance(_parse_json_svar(sporsmal), (dict, list)):
+                advarsler.append(
+                    "'sporsmal' ser ut som en JSON-mal — den behandles her "
+                    "som et vanlig spørsmål. Vil du ha den UTFYLT med "
+                    "kodevalidering, send den i 'skjema_mal' i stedet.")
+        mal = None
+        if valg["skjema"]:
+            if not mal_raa:
+                return self._svar(400, {"ok": False,
+                                        "feil": "skjema=ja krever feltet 'skjema_mal' (din JSON-mal)"})
+            try:
+                mal = json.loads(mal_raa)
+            except json.JSONDecodeError as exc:
+                return self._svar(400, {"ok": False,
+                                        "feil": f"Ugyldig JSON i 'skjema_mal': {exc}"})
+            # Lister godtas (rens_skjemasvar håndterer dem rekursivt) —
+            # samme kontrakt som /fyll_skjema, slik dokumentasjonen lover
+            if not isinstance(mal, (dict, list)) or not mal:
+                return self._svar(400, {"ok": False,
+                                        "feil": "'skjema_mal' må være et JSON-objekt (eller en liste) med felter"})
+
+        # Konsistens med /spor og /fyll_skjema: er BARE modelldeler bedt om
+        # og modellen er nede, er 503 med retry-signal riktigere enn 200
+        # der alt innholdet er feilobjekter. Er en rask del også bedt om,
+        # gjelder «delene feiler uavhengig» og vi svarer 200.
+        bare_modell = not (valg["tekst"] or valg["felter"] or valg["struktur"])
+        vil_ha_modell = valg["svar"] or valg["skjema"] or valg["korriger"]
+        if bare_modell and vil_ha_modell and _borealis["status"] != "klar":
+            return self._svar(503, {
+                "ok": False,
+                "feil": f"Borealis er ikke tilgjengelig ({_borealis['status']}) — prøv igjen senere",
+                "borealis": _borealis["status"]})
+
+        # --- les dokumentet ÉN gang ---
+        ocr_brukt, ocr_motorer, fra_cache = False, None, False
+        handskrift, strekkoder = [], []
+        if slag == "tekst":
+            raa_tekst = (innhold or "").strip()
+        else:
+            a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
+            if not a.get("ok"):
+                return self._svar(400, a)
+            raa_tekst = a.get("tekst", "")
+            strekkoder = a.get("strekkoder", [])
+            handskrift = a.get("handskrift") or []
+            ocr_motorer = a.get("ocr_motorer")
+            ocr_brukt = a.get("ocr_brukt", False)
+            fra_cache = a.get("fra_cache", False)
+            if a.get("advarsel"):
+                advarsler.append(a["advarsel"])
+            if a.get("melding"):
+                advarsler.append(a["melding"])
+
+        borealis_klar = _borealis["status"] == "klar"
+        borealis_feil = f"Borealis er ikke klar ({_borealis['status']}) — prøv igjen senere"
+        # Blankt ark: modelldelene skal IKKE kjøre. Uten dette vernet kan
+        # korriger_borealis("") få modellen til å DIKTE «korrigert» tekst
+        # fra ingenting — linjevakta slipper det gjennom fordi 0 linjer mot
+        # N linjer ikke lar seg pare (samme grunn gjelder skjemautfylling).
+        tomt_dokument = len(raa_tekst.strip()) < 5 and not strekkoder
+        tom_feil = "Fant ingen lesbar tekst i dokumentet"
+        deler = {}
+
+        def trygt(fn):
+            """Kjør én del uten at en uventet feil river med seg resten —
+            kontrakten er at delene feiler UAVHENGIG. Det realistiske
+            tilfellet er CUDA-OOM på det delte 8 GB-kortet: før dette
+            vernet ble hele kallet 500, og de allerede ferdige
+            deterministiske delene gikk tapt sammen med det."""
+            try:
+                return fn()
+            except Exception as exc:
+                return {"ok": False,
+                        "feil": f"Delen feilet ({type(exc).__name__}): {exc}"[:300]}
+
+        # --- raske deterministiske deler ---
+        if valg["felter"]:
+            deler["felter"] = trygt(lambda: {
+                "felter": utvid_entiteter(raa_tekst, {}),
+                "datoer": finn_alle_datoer(raa_tekst),
+                "datoer_detaljert": klassifiser_datoer(raa_tekst)})
+        if valg["struktur"]:
+            deler["struktur"] = trygt(lambda: strukturert_uttrekk(raa_tekst))
+
+        # --- modelldeler (kun på forespørsel) ---
+        if valg["svar"]:
+            if not borealis_klar:
+                deler["svar"] = {"ok": False, "feil": borealis_feil}
+            elif tomt_dokument:
+                deler["svar"] = {"ok": False, "feil": tom_feil}
+            else:
+                def _svar_del():
+                    kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
+                                               handskrift, strekkoder)
+                    if kjerne["tom"]:
+                        return {"ok": False, "feil": tom_feil}
+                    advarsler.extend(kjerne["advarsler"])
+                    return {"ok": True, "sporsmal": sporsmal,
+                            "svar": kjerne["svar"],
+                            "tall_verifisert": kjerne["tall_verifisert"],
+                            "tolket_sporsmal": kjerne["tolket_sporsmal"],
+                            "svar_avkortet": kjerne["svar_avkortet"]}
+                deler["svar"] = trygt(_svar_del)
+
+        if valg["skjema"]:
+            if not borealis_klar:
+                deler["skjema"] = {"ok": False, "feil": borealis_feil}
+            elif tomt_dokument:
+                deler["skjema"] = {"ok": False, "feil": tom_feil}
+            else:
+                deler["skjema"] = trygt(lambda: fyll_skjema_kjerne(raa_tekst, mal))
+
+        korrigert = None
+        if valg["korriger"]:
+            if not borealis_klar:
+                deler["korriger"] = {"ok": False, "feil": borealis_feil}
+            elif not ocr_brukt:
+                deler["korriger"] = {"ok": False, "feil": (
+                    "Dokumentet har tekstlag — ingen OCR-feil å korrigere")}
+            elif tomt_dokument:
+                deler["korriger"] = {"ok": False, "feil": tom_feil}
+            else:
+                deler["korriger"] = trygt(lambda: {
+                    "ok": True, "tekst": korriger_borealis(raa_tekst)})
+                korrigert = deler["korriger"].get("tekst")
+
+        # Feil i en del skal også være synlig for den som bare leser
+        # advarslene (GUI-et, en enkel klient) — ikke bare i deltreet
+        for navn in ("felter", "struktur", "svar", "skjema", "korriger"):
+            del_ = deler.get(navn)
+            if isinstance(del_, dict) and del_.get("ok") is False:
+                advarsler.append(f"{navn}: {del_.get('feil')}")
+
+        return self._svar(200, {
+            "ok": True, "filnavn": filnavn,
+            "valg": valg,
+            "tekst": raa_tekst if valg["tekst"] else None,
+            "antall_tegn": len(raa_tekst),
+            "felter": deler.get("felter"),
+            "struktur": deler.get("struktur"),
+            "svar": deler.get("svar"),
+            "skjema": deler.get("skjema"),
+            "korriger": deler.get("korriger"),
+            "korrigert_tekst": korrigert,
+            "strekkoder": strekkoder, "handskrift": handskrift,
+            "kvalitet": {"ocr_brukt": ocr_brukt,
+                         "ocr_motorer": ocr_motorer or {},
+                         "advarsler": advarsler},
+            "fra_cache": fra_cache,
+            "tid_sekunder": round(time.time() - t0, 1),
+            "kilde": ("borealis+deterministisk" if vil_ha_modell
+                      else "deterministisk"),
+            "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
+                        "modell": _borealis["modellfil"] or _borealis["motor"]},
+        })
 
     def do_POST(self):
         self._t0_req = time.time()
@@ -2138,8 +2340,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(409, {"ok": False, "feil": f"Jobben er allerede {jobb.get('status')}"})
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
-                       "/fyll_skjema", "/innsyn"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
+                       "/fyll_skjema", "/innsyn", "/dokument"):
+            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
         try:
             lengde = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -2208,6 +2410,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if sti == "/innsyn":
             return self._innsyn(filnavn, slag, innhold, maks_ocr)
+
+        if sti == "/dokument":
+            return self._dokument_samlet(filnavn, slag, innhold, maks_ocr,
+                                         tekstfelter, les_strekkoder)
 
         if sti == "/jobb":
             jobb_id = uuid.uuid4().hex[:12]
@@ -2437,14 +2643,9 @@ class Handler(BaseHTTPRequestHandler):
                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
             })
 
-        # Merk håndskriftregioner så Borealis kan skille dem fra trykt
-        # tekst («hvilket navn står med håndskrift?» blir svarbart)
-        if handskrift:
-            tekst += ("\n\nFølgende tekstbiter i dokumentet er HÅNDSKREVET "
-                      "(alt annet er trykt):\n"
-                      + "\n".join(f"- {t}" for t in handskrift))
-
-        if len(tekst.strip()) < 5 and not strekkoder:
+        kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
+                                   handskrift, strekkoder)
+        if kjerne["tom"]:
             return self._svar(200, {
                 "ok": True, "filnavn": filnavn, "trenger_ocr": True,
                 "ocr_brukt": ocr_brukt, "svar": None, "strekkoder": [],
@@ -2452,106 +2653,11 @@ class Handler(BaseHTTPRequestHandler):
                 "melding": ("Fant ingen lesbar tekst i dokumentet — selv med OCR. "
                             "(Rene bilder uten skrift gir ingen tekst.)"),
             })
-
-        # Strekkoder/QR legges inn i dokumentteksten så Borealis kan
-        # svare på f.eks. «hva er dokumentnummeret?»
-        if strekkoder:
-            kodelinjer = "\n".join(
-                f"- {k['type']} (side {k['side']}): {k['verdi']}" for k in strekkoder
-            )
-            tekst = ((tekst.strip() or "Dokumentet har ingen lesbar tekst.")
-                     + "\n\nStrekkoder/QR-koder funnet i dokumentet:\n" + kodelinjer)
-
-        # Store dokumenter: LLM-en leser bare begynnelsen — suppler med
-        # deterministisk uttrekk fra HELE teksten, og si det ærlig i svaret
-        if len(tekst) > MAKS_LLM_TEGN:
-            datoer_hele = finn_alle_datoer(raa_tekst, maks=60)
-            felter_hele = utvid_entiteter(raa_tekst, {})
-            tekst = (
-                tekst[:MAKS_LLM_TEGN]
-                + f"\n\n[MERK: Dokumentet fortsetter — totalt {len(raa_tekst)} tegn. "
-                + "Deterministisk uttrekk fra HELE dokumentet:\n"
-                + "Alle datoer: "
-                + (", ".join(datoer_hele) if datoer_hele else "ingen funnet")
-                + "\nFelter: " + json.dumps(felter_hele, ensure_ascii=False) + "]"
-            )
-            advarsler.append(
-                f"Stort dokument ({len(raa_tekst)} tegn): modellen leste de første "
-                f"{MAKS_LLM_TEGN} tegnene direkte, pluss deterministisk uttrekk "
-                "(alle datoer + felter) fra hele dokumentet."
-            )
-        # R40-klassifiseringen legges ALLTID ved som kontekst når
-        # dokumentet inneholder datoer — generelt, uten skjøre
-        # nøkkelordbetingelser (spørsmål kan inneholde skrivefeil)
-        klassifisert = klassifiser_datoer(raa_tekst, maks=30)
-        if klassifisert:
-            linjer = "\n".join(
-                f"- {d['dato']}"
-                + (f" (side {d['side']})" if d["side"] else "")
-                + f": {d['type']} — {d['begrunnelse']}"
-                for d in klassifisert)
-            tekst += ("\n\n[Datoer funnet i dokumentet, automatisk "
-                      "klassifisert og normalisert (deterministisk). Bruk "
-                      "denne listen ved spørsmål om datoer:]\n" + linjer)
-
-        svar, svar_avkortet = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
-
-        # R41 (kode): «Finnes ikke»-svar kan skyldes skrivefeil i selve
-        # SPØRSMÅLET. Da normaliseres spørsmålet til korrekt norsk og
-        # prøves én gang til — og svaret deklarerer tolkningen ærlig.
-        tolket_sporsmal = None
-        if svar.strip().lower().startswith("finnes ikke") and len(sporsmal) <= 200:
-            normalisert, _ = _borealis_generer(
-                "Spørsmålet under inneholder trolig tastefeil. Rett KUN "
-                "de åpenbare tastefeilene — endre så lite som mulig, og "
-                "behold ordvalg og mening (eksempel: «vha koser» → «hva "
-                "koster»). Svar KUN med det rettede spørsmålet:\n"
-                + sporsmal, 64)
-            normalisert = normalisert.strip().strip('"«»')
-            if normalisert and normalisert.lower() != sporsmal.strip().lower():
-                svar2, avkortet2 = spor_borealis(tekst, normalisert, fra_ocr=ocr_brukt)
-                if not svar2.strip().lower().startswith("finnes ikke"):
-                    svar, svar_avkortet = svar2, avkortet2
-                    tolket_sporsmal = normalisert
-
-        # R48: «uten X»-begrensninger i spørsmålet håndheves — én streng
-        # ny runde ved brudd, deretter ærlig varsling
-        brutt = eksklusjoner_brutt(sporsmal, svar)
-        if brutt:
-            svar2, avkortet2 = spor_borealis(
-                tekst,
-                sporsmal + " (VIKTIG: svaret skal IKKE inneholde "
-                + ", ".join(brutt) + " — utelat dette helt)",
-                fra_ocr=ocr_brukt)
-            if not eksklusjoner_brutt(sporsmal, svar2):
-                svar, svar_avkortet, brutt = svar2, avkortet2, []
-        if brutt:
-            advarsler.append(
-                "Spørsmålet ba om svar uten " + ", ".join(brutt)
-                + ", men modellen tok det likevel med — kontroller svaret")
-
-        # Tallvakt: inneholder svaret tall som ikke står i dokumentet,
-        # prøves én streng ny runde — hjelper ikke det, flagges svaret
-        mangler = uverifiserte_tall(svar, tekst)
-        if mangler:
-            svar2, avkortet2 = spor_borealis(
-                tekst,
-                sporsmal + " (VIKTIG: gjengi tallet NØYAKTIG slik det står "
-                           "i dokumentet — ikke regn eller summer)",
-                fra_ocr=ocr_brukt)
-            if not uverifiserte_tall(svar2, tekst):
-                svar, mangler, svar_avkortet = svar2, [], avkortet2
-        tall_verifisert = not mangler
-        if mangler:
-            advarsler.append(
-                "Svaret inneholder tall som ikke står ordrett i dokumentet ("
-                + ", ".join(mangler)
-                + ") — sannsynligvis utregnet av modellen. Kontroller mot kilden.")
-        if svar_avkortet:
-            advarsler.append(
-                f"Svaret nådde maksimal lengde ({MAKS_SVAR_TOKENS} tokens) og "
-                "kan være avkortet — hele dokumentteksten finnes alltid "
-                "uavkortet i /analyser-feltet 'tekst'.")
+        advarsler.extend(kjerne["advarsler"])
+        svar = kjerne["svar"]
+        tall_verifisert = kjerne["tall_verifisert"]
+        tolket_sporsmal = kjerne["tolket_sporsmal"]
+        svar_avkortet = kjerne["svar_avkortet"]
         advarsel = "; ".join(advarsler) if advarsler else None
 
         # Valgfri OCR-korrigering (multipart-felt korriger=ja) — egen
@@ -2685,6 +2791,222 @@ def _innsyn_arbeider(okt, filnavn, slag, innhold, maks_ocr):
         innsyn_hendelser.send("feil", melding=okt["feil"])
     finally:
         innsyn_hendelser.deaktiver()
+
+
+def fyll_skjema_kjerne(dok: str, mal: dict) -> dict:
+    """Felles kjerne for /fyll_skjema og /dokument: fyller brukerens
+    JSON-mal fra dokumentteksten. Modellen fyller, KODEN validerer
+    (rens_skjemasvar). Modellen grunnes med deterministisk funnede beløp
+    MED kontekst — så verdier havner i riktige felter (kampanjepris vs
+    produktpris osv.). Returnerer {"ok": True, "skjema": ..., "avvik":
+    [...]} eller {"ok": False, "feil": ..., "raasvar": ...}."""
+    # Deterministisk beløpsgrunnlag: hvert beløp med konteksten sin,
+    # så modellen ser HVA hvert tall hører til før den plasserer det
+    belop_del = ""
+    belop_liste = finn_alle_belop(dok, maks=40)
+    if belop_liste:
+        belop_del = ("\nBeløp funnet i dokumentet, med kontekst — bruk "
+                     "konteksten til å plassere hvert beløp i riktig felt:\n"
+                     + "\n".join(f"- {b['raatekst']}: «{b['kontekst']}»"
+                                 for b in belop_liste) + "\n")
+    koder_liste = finn_koder_med_kontekst(dok, maks=25)
+    if koder_liste:
+        belop_del += ("\nTall og koder funnet i dokumentet, med kontekst "
+                      "— plasser hver kode i feltet konteksten tilsier:\n"
+                      + "\n".join(f"- {k['verdi']}: «{k['kontekst']}»"
+                                  for k in koder_liste) + "\n")
+    # R53: datoene manglet i grunnlaget, selv om beløp og koder var
+    # med. På en kvittering der OCR hadde forvansket datolinjen fant
+    # modellen ingen brukbar dato og fylte feltet med søppel, mens
+    # den deterministiske parseren hadde lest «12.06.2026» riktig
+    # hele tiden. Nå får modellen de faktiske datoene å velge blant.
+    dato_liste = klassifiser_datoer(dok, maks=15)
+    if dato_liste:
+        belop_del += ("\nDatoer funnet i dokumentet (normalisert til "
+                      "dd.mm.åååå, med hva hver av dem er) — bruk en av "
+                      "disse ORDRETT i datofelter:\n"
+                      + "\n".join(
+                          f"- {d['dato']} ({d.get('etikett') or d['type']}):"
+                          f" «{d.get('kontekst', '')}»"
+                          for d in dato_liste) + "\n")
+
+    # R57: identifikatorene manglet også. På en taxikvittering står
+    # både «TLF 07550» (kortnummer i toppteksten) og «TELEFON :
+    # 97335868»; modellen plukket det første, og kodevalideringen
+    # måtte tømme feltet. Den deterministiske parseren VET hvilket
+    # av tallene som er et gyldig norsk telefonnummer — den
+    # kunnskapen skal modellen få, ikke gjette seg til.
+    merket = []
+    for etikett, verdier in (
+        ("telefonnummer", finn_alle_telefoner(dok)),
+        ("organisasjonsnummer", finn_alle_organisasjonsnummer(dok)),
+        ("fødselsnummer", finn_alle_fodselsnummer(dok)),
+        ("kontonummer", finn_alle_kontonummer(dok)),
+        ("e-postadresse", finn_alle_eposter(dok)),
+    ):
+        for verdi in verdier[:5]:
+            merket.append(f"- {verdi} er et gyldig {etikett}")
+    if merket:
+        belop_del += ("\nIdentifikatorer som er KONTROLLERT av kode "
+                      "(sjekksum/format) — bruk disse i felter som ber om "
+                      "dem, og ingen andre tall:\n" + "\n".join(merket) + "\n")
+
+    prompt = (
+        "Fyll ut JSON-malen nederst KUN med opplysninger som står "
+        "i dokumentet.\nStrenge regler:\n"
+        "- Verdier gjengis ORDRETT fra dokumentet — aldri regn eller omform\n"
+        "- Finner du ikke en opplysning, la feltet stå som tom streng \"\"\n"
+        "- ALDRI sett en verdi i et annet felt enn det den hører til i "
+        "dokumentets sammenheng — er plasseringen usikker, la feltet stå tomt\n"
+        "- Prosentsatser hører aldri hjemme i beløps- eller rabattfelter\n"
+        "- Maskeringstegn beholdes som i dokumentet («****5277», ikke «5277»)\n"
+        "- Firmanavn-felter skal ha den JURIDISKE enheten (navnet ved "
+        "Org. nr.), ikke butikk-/avdelingsnavn\n"
+        "- Behold malens struktur og nøkler NØYAKTIG\n"
+        "Svar KUN med den utfylte JSON-en.\n"
+        f"\nDokument:\n{dok[:MAKS_LLM_TEGN]}\n"
+        + belop_del +
+        f"\nJSON-mal:\n{json.dumps(mal, ensure_ascii=False, indent=1)}\n"
+        "\nUtfylt JSON:"
+    )
+    svar_tekst, _ = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
+    utfylt = _parse_json_svar(svar_tekst)
+    if utfylt is None:
+        svar_tekst, _ = _borealis_generer(
+            prompt + "\n(Husk: svar KUN med gyldig JSON, ingenting annet.)",
+            MAKS_SVAR_TOKENS)
+        utfylt = _parse_json_svar(svar_tekst)
+    if utfylt is None:
+        return {"ok": False,
+                "feil": "Modellen ga ikke gyldig JSON etter to forsøk",
+                "raasvar": svar_tekst[:1500]}
+    renset, avvik = rens_skjemasvar(mal, utfylt, dok)
+    return {"ok": True, "skjema": renset, "avvik": avvik}
+
+
+def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
+                      handskrift: list, strekkoder: list) -> dict:
+    """Felles kjerne for /spor og /dokument: beriker dokumentteksten
+    (håndskriftmerking, strekkoder, stort-dokument-supplement,
+    datoklassifisering), spør Borealis og kjører ALLE vaktene
+    (tastefeilrunde, eksklusjonsvakt, tallvakt). Returnerer
+    {"tom": True} når dokumentet mangler lesbar tekst, ellers
+    {"tom": False, "svar", "tall_verifisert", "tolket_sporsmal",
+     "svar_avkortet", "advarsler"}."""
+    advarsler = []
+    tekst = raa_tekst
+    # Merk håndskriftregioner så Borealis kan skille dem fra trykt
+    # tekst («hvilket navn står med håndskrift?» blir svarbart)
+    if handskrift:
+        tekst += ("\n\nFølgende tekstbiter i dokumentet er HÅNDSKREVET "
+                  "(alt annet er trykt):\n"
+                  + "\n".join(f"- {t}" for t in handskrift))
+
+    if len(tekst.strip()) < 5 and not strekkoder:
+        return {"tom": True}
+
+    # Strekkoder/QR legges inn i dokumentteksten så Borealis kan
+    # svare på f.eks. «hva er dokumentnummeret?»
+    if strekkoder:
+        kodelinjer = "\n".join(
+            f"- {k['type']} (side {k['side']}): {k['verdi']}" for k in strekkoder
+        )
+        tekst = ((tekst.strip() or "Dokumentet har ingen lesbar tekst.")
+                 + "\n\nStrekkoder/QR-koder funnet i dokumentet:\n" + kodelinjer)
+
+    # Store dokumenter: LLM-en leser bare begynnelsen — suppler med
+    # deterministisk uttrekk fra HELE teksten, og si det ærlig i svaret
+    if len(tekst) > MAKS_LLM_TEGN:
+        datoer_hele = finn_alle_datoer(raa_tekst, maks=60)
+        felter_hele = utvid_entiteter(raa_tekst, {})
+        tekst = (
+            tekst[:MAKS_LLM_TEGN]
+            + f"\n\n[MERK: Dokumentet fortsetter — totalt {len(raa_tekst)} tegn. "
+            + "Deterministisk uttrekk fra HELE dokumentet:\n"
+            + "Alle datoer: "
+            + (", ".join(datoer_hele) if datoer_hele else "ingen funnet")
+            + "\nFelter: " + json.dumps(felter_hele, ensure_ascii=False) + "]"
+        )
+        advarsler.append(
+            f"Stort dokument ({len(raa_tekst)} tegn): modellen leste de første "
+            f"{MAKS_LLM_TEGN} tegnene direkte, pluss deterministisk uttrekk "
+            "(alle datoer + felter) fra hele dokumentet."
+        )
+    # R40-klassifiseringen legges ALLTID ved som kontekst når
+    # dokumentet inneholder datoer — generelt, uten skjøre
+    # nøkkelordbetingelser (spørsmål kan inneholde skrivefeil)
+    klassifisert = klassifiser_datoer(raa_tekst, maks=30)
+    if klassifisert:
+        linjer = "\n".join(
+            f"- {d['dato']}"
+            + (f" (side {d['side']})" if d["side"] else "")
+            + f": {d['type']} — {d['begrunnelse']}"
+            for d in klassifisert)
+        tekst += ("\n\n[Datoer funnet i dokumentet, automatisk "
+                  "klassifisert og normalisert (deterministisk). Bruk "
+                  "denne listen ved spørsmål om datoer:]\n" + linjer)
+
+    svar, svar_avkortet = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
+
+    # R41 (kode): «Finnes ikke»-svar kan skyldes skrivefeil i selve
+    # SPØRSMÅLET. Da normaliseres spørsmålet til korrekt norsk og
+    # prøves én gang til — og svaret deklarerer tolkningen ærlig.
+    tolket_sporsmal = None
+    if svar.strip().lower().startswith("finnes ikke") and len(sporsmal) <= 200:
+        normalisert, _ = _borealis_generer(
+            "Spørsmålet under inneholder trolig tastefeil. Rett KUN "
+            "de åpenbare tastefeilene — endre så lite som mulig, og "
+            "behold ordvalg og mening (eksempel: «vha koser» → «hva "
+            "koster»). Svar KUN med det rettede spørsmålet:\n"
+            + sporsmal, 64)
+        normalisert = normalisert.strip().strip('"«»')
+        if normalisert and normalisert.lower() != sporsmal.strip().lower():
+            svar2, avkortet2 = spor_borealis(tekst, normalisert, fra_ocr=ocr_brukt)
+            if not svar2.strip().lower().startswith("finnes ikke"):
+                svar, svar_avkortet = svar2, avkortet2
+                tolket_sporsmal = normalisert
+
+    # R48: «uten X»-begrensninger i spørsmålet håndheves — én streng
+    # ny runde ved brudd, deretter ærlig varsling
+    brutt = eksklusjoner_brutt(sporsmal, svar)
+    if brutt:
+        svar2, avkortet2 = spor_borealis(
+            tekst,
+            sporsmal + " (VIKTIG: svaret skal IKKE inneholde "
+            + ", ".join(brutt) + " — utelat dette helt)",
+            fra_ocr=ocr_brukt)
+        if not eksklusjoner_brutt(sporsmal, svar2):
+            svar, svar_avkortet, brutt = svar2, avkortet2, []
+    if brutt:
+        advarsler.append(
+            "Spørsmålet ba om svar uten " + ", ".join(brutt)
+            + ", men modellen tok det likevel med — kontroller svaret")
+
+    # Tallvakt: inneholder svaret tall som ikke står i dokumentet,
+    # prøves én streng ny runde — hjelper ikke det, flagges svaret
+    mangler = uverifiserte_tall(svar, tekst)
+    if mangler:
+        svar2, avkortet2 = spor_borealis(
+            tekst,
+            sporsmal + " (VIKTIG: gjengi tallet NØYAKTIG slik det står "
+                       "i dokumentet — ikke regn eller summer)",
+            fra_ocr=ocr_brukt)
+        if not uverifiserte_tall(svar2, tekst):
+            svar, mangler, svar_avkortet = svar2, [], avkortet2
+    tall_verifisert = not mangler
+    if mangler:
+        advarsler.append(
+            "Svaret inneholder tall som ikke står ordrett i dokumentet ("
+            + ", ".join(mangler)
+            + ") — sannsynligvis utregnet av modellen. Kontroller mot kilden.")
+    if svar_avkortet:
+        advarsler.append(
+            f"Svaret nådde maksimal lengde ({MAKS_SVAR_TOKENS} tokens) og "
+            "kan være avkortet — hele dokumentteksten finnes alltid "
+            "uavkortet i /analyser-feltet 'tekst'.")
+    return {"tom": False, "svar": svar, "tall_verifisert": tall_verifisert,
+            "tolket_sporsmal": tolket_sporsmal,
+            "svar_avkortet": svar_avkortet, "advarsler": advarsler}
 
 
 def _varm_opp_ocr():
