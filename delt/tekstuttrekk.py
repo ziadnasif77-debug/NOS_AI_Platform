@@ -312,6 +312,64 @@ def sett_dato_roller(datoer: list) -> list:
     return datoer
 
 
+def _til_dato(dato_str):
+    """«dd.mm.åååå» → date, eller None hvis den ikke lar seg lese."""
+    try:
+        d, m, a = (int(x) for x in str(dato_str).split("."))
+        return date(a, m, d)
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def dokumentets_periode(datoer: list) -> dict:
+    """FRA og TIL for dokumentets EGNE datoer — dokumentets datospenn.
+
+    Et enkelt brev har én dato: da er fra == til. En flersidig fil er
+    ofte en BUNKE selvstendige dokumenter (saksmappe, vedleggssamling)
+    med hver sin dato — da forteller fra/til hvilken periode filen som
+    helhet dekker. Datoene i innholdet (frister, perioder, fødselsdatoer)
+    holdes utenfor: dette er dokumentenes egne datoer.
+
+    Returnerer {fra, til, antall, per_side, flere_dokumenter} — eller
+    None når ingen dato kan knyttes til dokumentet selv."""
+    egne = []
+    for d in datoer or []:
+        if not isinstance(d, dict) or not d.get("dato"):
+            continue
+        if rolle_for_type(d.get("type")) != ROLLE_DOKUMENT:
+            continue
+        parset = _til_dato(d["dato"])
+        if parset:
+            egne.append((parset, d))
+    if not egne:
+        return None
+
+    egne.sort(key=lambda p: p[0])
+    fra, til = egne[0][1]["dato"], egne[-1][1]["dato"]
+    # én oppføring per side: den FØRSTE dokumentdatoen på siden. Flere
+    # datoer på samme side er som regel brevhode + signatur i samme brev.
+    per_side, sett_sider = [], set()
+    for parset, d in egne:
+        side = d.get("side")
+        if side in sett_sider:
+            continue
+        sett_sider.add(side)
+        per_side.append({"side": side, "dato": d["dato"], "type": d.get("type")})
+    per_side.sort(key=lambda p: (p["side"] if p["side"] else 0))
+
+    ulike_datoer = {p[1]["dato"] for p in egne}
+    ulike_sider = {p[1].get("side") for p in egne if p[1].get("side")}
+    return {
+        "fra": fra,
+        "til": til,
+        "antall": len(ulike_datoer),
+        "per_side": per_side,
+        # flere daterte dokumenter i samme fil: ulike datoer på ulike
+        # sider. Da er «dokumentets dato» egentlig et SPENN, ikke ett punkt.
+        "flere_dokumenter": len(ulike_datoer) > 1 and len(ulike_sider) > 1,
+    }
+
+
 def dokumentets_alder(dato_str, i_dag=None) -> dict:
     """Hvor GAMMELT dokumentet er, regnet fra dokumentdatoen.
 
@@ -320,12 +378,8 @@ def dokumentets_alder(dato_str, i_dag=None) -> dict:
     ligger fram i tid: da er enten datoen feillest, eller dokumentet
     forhåndsdatert — begge deler skal fram, ikke skjules bak et
     negativt tall."""
-    if not dato_str:
-        return None
-    try:
-        d, m, a = (int(x) for x in str(dato_str).split("."))
-        dokdato = date(a, m, d)
-    except (ValueError, TypeError):
+    dokdato = _til_dato(dato_str)
+    if dokdato is None:
         return None
     i_dag = i_dag or date.today()
     dager = (i_dag - dokdato).days
@@ -385,7 +439,7 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
                             "signaturblokk nederst eller PDF-metadata. "
                             "Datoene i dokumentet hører til innholdet."),
             "side": None, "alternativer": [], "advarsel": None,
-            "alder": None,
+            "periode": None,
         }
 
     kandidater.sort(key=lambda k: (k[0], k[1], k[2]))
@@ -410,13 +464,23 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
     alder = dokumentets_alder(beste["dato"])
     if alder and alder["fremtidig"]:
         advarsler.append(
-            f"dokumentdatoen ligger FRAM I TID ({abs(alder['dager'])} dager) "
-            "— enten er datoen feillest, eller dokumentet er forhåndsdatert")
+            "dokumentdatoen ligger FRAM I TID — enten er datoen feillest, "
+            "eller dokumentet er forhåndsdatert")
+
+    # Datospennet: ett brev gir fra == til, en bunke gir en periode
+    periode = dokumentets_periode(datoer)
+    if periode and periode["flere_dokumenter"]:
+        advarsler.append(
+            f"filen inneholder flere daterte dokumenter ({periode['fra']}–"
+            f"{periode['til']}) — «dokumentets dato» er her et SPENN, og "
+            f"{beste['dato']} er dokumentet på side {beste.get('side') or 1}")
 
     # Uenighet på SAMME rang er et ekte varsel: to like sterke bevis som
-    # peker på ulike datoer skal et menneske se på, ikke skjules.
+    # peker på ulike datoer skal et menneske se på, ikke skjules. I en
+    # BUNKE er uenigheten derimot forventet — hvert dokument har sin egen
+    # dato — og forklares allerede av spenn-advarselen over.
     samme_rang = {k[4]["dato"] for k in kandidater if k[0] == rang}
-    if len(samme_rang) > 1:
+    if len(samme_rang) > 1 and not (periode and periode["flere_dokumenter"]):
         advarsler.append(
             "flere like sterke kandidater med ULIKE datoer ("
             + ", ".join(sorted(samme_rang)) + ") — kontroller mot dokumentet")
@@ -428,7 +492,9 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
         "konfidens": konfidens,
         "begrunnelse": begrunnelse,
         "side": beste.get("side"),
-        "alder": alder,
+        # dokumentets datospenn: fra–til. Ett brev gir fra == til; en
+        # flersidig bunke gir perioden filen som helhet dekker.
+        "periode": periode,
         "alternativer": [
             {"dato": k[4]["dato"], "type": k[4].get("type"),
              "konfidens": _RANG_KONFIDENS.get(k[0], "lav")}
@@ -522,16 +588,36 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
     def _linjenr(pos: int) -> int:
         return bisect.bisect_left(nylinjer, pos)
 
-    # «Nederst i dokumentet» = siste 20 % eller siste 600 tegn (det
-    # romsligste), men aldri mer enn siste halvdel — ellers ville midten
-    # av et kort dokument regnes som signaturblokk. Under 200 tegn er
-    # sonen slått helt av; da gjelder brevhode-regelen alene.
-    _slutt_grense = (max(len(tekst) - max(600, int(len(tekst) * 0.20)),
-                         int(len(tekst) * 0.5))
-                     if len(tekst) >= 200 else len(tekst) + 1)
+    # «Øverst» og «nederst» måles PER SIDE, ikke for hele filen. En
+    # flersidig fil er ofte en bunke selvstendige dokumenter: brevhodet på
+    # side 4 er øverst på SIN side, og signaturen på side 2 er nederst på
+    # sin — målt mot hele filen ville ingen av dem blitt funnet.
+    _sidestart = [m.start() for m in re.finditer(r"\[Side \d+ av \d+\]", tekst)]
+    if not _sidestart or _sidestart[0] != 0:
+        _sidestart = [0] + _sidestart
+
+    def _sideomraade(pos: int):
+        i = bisect.bisect_right(_sidestart, pos) - 1
+        start = _sidestart[max(i, 0)]
+        slutt = _sidestart[i + 1] if i + 1 < len(_sidestart) else len(tekst)
+        return start, slutt
+
+    def _linjenr_i_side(pos: int) -> int:
+        start, _ = _sideomraade(pos)
+        return _linjenr(pos) - _linjenr(start)
 
     def _naer_slutten(pos: int) -> bool:
-        return pos >= _slutt_grense
+        """Nederste del av SIN side: siste 20 % eller siste 600 tegn (det
+        romsligste), men aldri mer enn siste halvdel — ellers ville midten
+        av en kort side regnes som signaturblokk. Sider under 200 tegn har
+        ingen slutt-sone; da gjelder brevhode-regelen alene."""
+        start, slutt = _sideomraade(pos)
+        lengde = slutt - start
+        if lengde < 200:
+            return False
+        grense = max(slutt - max(600, int(lengde * 0.20)),
+                     start + int(lengde * 0.5))
+        return pos >= grense
 
     resultater = []
     for i, (start, slutt, raatekst, dato, aar_antatt) in enumerate(treff[:maks]):
@@ -592,13 +678,16 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
         # 3b) Brevdato: øverst i dokumentet på egen kort linje. Måles i
         #     LINJER, ikke tegn: et brevhode med avsender- og mottakerblokk
         #     skyver lett datoen forbi en tegngrense, og da forsvant den.
-        #     «not _naer_slutten» er nødvendig i KORTE dokumenter, der de
+        #     Gjelder øverst på HVER side (en bunke har flere brevhoder).
+        #     «not _naer_slutten» er nødvendig på KORTE sider, der de
         #     første 14 linjene også er de siste: uten den fikk en dato ved
         #     underskriften begrunnelsen «øverst i dokumentet».
-        if dtype is None and _side_for(start) == 1 and not _naer_slutten(start) \
-                and _linjenr(start) < 14 and len(linje.strip()) <= 40:
+        if dtype is None and not _naer_slutten(start) \
+                and _linjenr_i_side(start) < 14 and len(linje.strip()) <= 40:
             dtype = "brevdato_sannsynlig"
-            begrunnelse = ("øverst i dokumentet på egen kort linje — "
+            side_ord = ("øverst i dokumentet" if _side_for(start) == 1
+                        else f"øverst på side {_side_for(start)}")
+            begrunnelse = (f"{side_ord} på egen kort linje — "
                            "typisk brev-/utstedelsesdato")
 
         # 3c) Datoen ALENE på sin egen linje nederst, uten signaturord.

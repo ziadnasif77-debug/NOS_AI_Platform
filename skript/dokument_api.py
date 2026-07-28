@@ -1766,7 +1766,8 @@ def _openapi() -> dict:
                 "responses": {"200": {"description":
                     "felter, datoer, datoer_detaljert (hver med «rolle»: dokument/innhold/"
                     "behandling/ukjent), dokumentdato (dokumentets EGEN dato med kilde, "
-                    "konfidens, begrunnelse og alternativer), strekkoder, handskrift, tekst, "
+                    "konfidens, begrunnelse, alternativer og «periode» = datospennet "
+                    "fra–til med dato per side), strekkoder, handskrift, tekst, "
                     "antall_tegn, ocr_brukt/ocr_motorer, advarsel"}}}},
             "/uttrekk": {"post": {
                 "summary": "Komplett strukturert totaluttrekk (fast skjema, alle nøkler alltid til stede)",
@@ -1987,8 +1988,11 @@ class Handler(BaseHTTPRequestHandler):
                            "innholdet: hver dato får en «rolle» (dokument/innhold/behandling/"
                            "ukjent), og dokumentdatoen velges deterministisk etter styrken på "
                            "beviset — etikett (vedtaksdato/utstedt/datert) > dato øverst på "
-                           "side 1 > PDF-metadata. Finnes ingen, sies det ærlig i stedet for å "
-                           "gjette. Egne etiketter: egne_etiketter.txt («ord = type = rolle»)"),
+                           "en side eller ved en signaturblokk > PDF-metadata. dokumentdato."
+                           "periode gir datospennet FRA–TIL med dato per side: én dato for et "
+                           "enkelt brev, en periode når filen er en bunke daterte dokumenter. "
+                           "Finnes ingen, sies det ærlig i stedet for å gjette. Egne "
+                           "etiketter: egne_etiketter.txt («ord = type = rolle»)"),
                 "filtyper": "PDF, bilder (JPG/PNG/TIFF/BMP/WEBP — OCR-es), DOCX, XLSX/XLSM, CSV, TXT",
                 "ocr": ("regionbasert ruting når PDF-en mangler tekstlag: EasyOCR (trykt) + "
                         "norhand (norsk håndskrift) per region, flettet i leserekkefølge"),
@@ -2982,13 +2986,29 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                 f"utstedt/fattet): {dd['dato']}"
                 + (f" — {dd['type']}, {dd['begrunnelse']}" if dd.get("type") else "")
                 + f" (sikkerhet: {dd['konfidens']})."
-                + (f" DOKUMENTETS ALDER: {dd['alder']['tekst']} "
-                   f"({dd['alder']['dager']} dager)."
-                   if dd.get("alder") else "")
                 + (f" MERK: {dd['advarsel']}." if dd.get("advarsel") else "")
-                + " Spørsmål om NÅR DOKUMENTET ER FRA eller HVOR GAMMELT det"
-                  " er — «datert», «skrevet», «utstedt», «hvor gammelt» —"
-                  " besvares med NØYAKTIG disse opplysningene.]")
+                + " Spørsmål om NÅR DOKUMENTET ER FRA — «datert», «skrevet»,"
+                  " «utstedt», «hvilken dato er brevet» — besvares med"
+                  " NØYAKTIG denne datoen.]")
+        per = dd.get("periode")
+        if per and per.get("flere_dokumenter"):
+            # Bunke: «dokumentets dato» er et SPENN. Uten dette svarte
+            # modellen med datoen på side 1 som om den gjaldt hele filen.
+            sider = "; ".join(
+                f"side {s['side']}: {s['dato']}" for s in per["per_side"])
+            tekst += (
+                f"\n\n[FILEN INNEHOLDER FLERE DATERTE DOKUMENTER. "
+                f"DOKUMENTENES DATOSPENN: FRA {per['fra']} TIL {per['til']}. "
+                f"Datert dokument per side — {sider}.\n"
+                f"ALLE disse spørsmålene besvares med «fra {per['fra']} til "
+                f"{per['til']}»: «fra hvilken dato til hvilken dato er "
+                f"dokumentene», «hvilken periode dekker filen», «hvor gamle "
+                f"er dokumentene», «hvilket tidsrom».\n"
+                f"ADVARSEL: perioder som står i INNHOLDET (ytelsesperioder, "
+                f"ansettelsesperioder, «for perioden … til …») er IKKE "
+                f"dokumentenes datospenn — de hører til det dokumentene "
+                f"HANDLER OM. Bruk KUN {per['fra']}–{per['til']} når "
+                f"spørsmålet gjelder DOKUMENTENE eller FILEN.]")
         else:
             tekst += ("\n\n[DOKUMENTETS EGEN DATO: ikke funnet. Ingen av "
                       "datoene under kan knyttes til dokumentet selv — de "

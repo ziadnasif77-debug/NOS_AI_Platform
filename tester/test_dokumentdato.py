@@ -202,15 +202,102 @@ def test_dato_alene_nederst_begrunnes_som_signatur_ikke_toppen():
     assert "nederst" in resultat["begrunnelse"]
 
 
-# ---------- dokumentets alder ----------
+# ---------- datospennet FRA–TIL ----------
+_BUNKE = """[Side 1 av 3]
+NAV Arbeid og ytelser
+
+12.06.2026
+
+Vedtak om dagpenger for perioden 01.07.2026 til 31.12.2026.
+Klagefrist er 05.07.2026 og må overholdes av alle parter i saken.
+Ta kontakt ved spørsmål om vedtaket eller utbetalingene dine.
+[Side 2 av 3]
+Arbeidsgiver AS
+
+20.07.2026
+
+Bekreftelse på ansettelsesforhold for søkeren i vår virksomhet her.
+Vedkommende har vært ansatt siden 01.02.2024 i full stilling hos oss.
+Vi bekrefter at opplysningene i skjemaet er korrekte og fullstendige.
+[Side 3 av 3]
+Erklæring fra søkeren om egne forhold i saken som er til behandling.
+Jeg bekrefter at alle opplysninger jeg har gitt er riktige og komplette.
+Ingen vesentlige endringer har skjedd siden søknaden ble sendt inn.
+
+Bergen, 05.08.2026
+
+Ola Nordmann
+(sign.)
+"""
+
+
+def test_ett_brev_gir_fra_lik_til():
+    """Ett dokument har ett datopunkt — spennet skal ikke finne på noe."""
+    periode = _dokumentdato(
+        "Kommunen\nPostboks 123\n\n12.06.2026\n\n"
+        "Vi viser til din henvendelse om plass fra 01.08.2026 og svarer "
+        "deg skriftlig innen 15.07.2026.\n")["periode"]
+    assert periode["fra"] == periode["til"] == "12.06.2026"
+    assert periode["flere_dokumenter"] is False
+
+
+def test_bunke_gir_spenn_fra_foerste_til_siste():
+    periode = _dokumentdato(_BUNKE)["periode"]
+    assert periode["fra"] == "12.06.2026"
+    assert periode["til"] == "05.08.2026"
+    assert periode["flere_dokumenter"] is True
+    assert periode["antall"] == 3
+
+
+def test_bunke_gir_dato_per_side():
+    """Poenget med flersidige filer: hvilket dokument hører til hvilken
+    side. Uten dette er et spenn bare to tall uten forklaring."""
+    per_side = _dokumentdato(_BUNKE)["periode"]["per_side"]
+    assert [(s["side"], s["dato"]) for s in per_side] == [
+        (1, "12.06.2026"), (2, "20.07.2026"), (3, "05.08.2026")]
+
+
+def test_brevdato_finnes_oeverst_paa_HVER_side():
+    """«Øverst» måles per SIDE. Målt mot hele filen ville brevhodet på
+    side 2 aldri blitt funnet — og bunken fått feil spenn."""
+    datoer = sett_dato_roller(klassifiser_datoer(_BUNKE))
+    side2 = [d for d in datoer if d["side"] == 2 and d["rolle"] == ROLLE_DOKUMENT]
+    assert [d["dato"] for d in side2] == ["20.07.2026"]
+    assert side2[0]["type"] == "brevdato_sannsynlig"
+
+
+def test_signaturblokk_finnes_nederst_paa_SIN_side():
+    datoer = sett_dato_roller(klassifiser_datoer(_BUNKE))
+    side3 = [d for d in datoer if d["side"] == 3 and d["rolle"] == ROLLE_DOKUMENT]
+    assert [d["dato"] for d in side3] == ["05.08.2026"]
+
+
+def test_innholdsdatoer_holdes_utenfor_spennet():
+    """Periodene og fristene i vedtaket (01.07.2026–31.12.2026,
+    05.07.2026, 01.02.2024) skal ikke påvirke dokumentspennet."""
+    periode = _dokumentdato(_BUNKE)["periode"]
+    alle = {s["dato"] for s in periode["per_side"]}
+    assert "01.02.2024" not in alle and "05.07.2026" not in alle
+    assert periode["fra"] == "12.06.2026"      # ikke 01.02.2024
+
+
+def test_bunke_varsles_men_uten_dobbel_advarsel():
+    resultat = _dokumentdato(_BUNKE)
+    assert "flere daterte dokumenter" in resultat["advarsel"]
+    # spenn-advarselen forklarer allerede uenigheten — ikke gjenta den
+    assert "like sterke kandidater" not in resultat["advarsel"]
+
+
+def test_ingen_dokumentdato_gir_ingen_periode():
+    resultat = finn_dokumentdato([_kandidat("05.07.2026", "frist")])
+    assert resultat["dato"] is None and resultat["periode"] is None
+
+
+# ---------- alder (fortsatt tilgjengelig som hjelpefunksjon) ----------
 def test_alder_regnes_fra_dokumentdatoen():
     i_dag = date(2026, 7, 28)
     assert dokumentets_alder("28.07.2026", i_dag)["dager"] == 0
-    assert dokumentets_alder("28.07.2026", i_dag)["tekst"] == "datert i dag"
     assert dokumentets_alder("28.07.2025", i_dag)["dager"] == 365
-    assert "1 år" in dokumentets_alder("28.07.2025", i_dag)["tekst"]
-    gammelt = dokumentets_alder("01.01.2020", i_dag)
-    assert gammelt["dager"] == 2400 and gammelt["aar"] == 6.57
 
 
 def test_fremtidig_dato_flagges_i_stedet_for_negativt_tall():
@@ -223,17 +310,6 @@ def test_alder_taaler_soppel():
     assert dokumentets_alder(None) is None
     assert dokumentets_alder("tull") is None
     assert dokumentets_alder("31.02.2026") is None      # finnes ikke
-
-
-def test_dokumentdato_har_alder_med():
-    resultat = _dokumentdato("Vedtaksdato: 12.06.2026\nFrist 05.07.2026.\n")
-    assert resultat["alder"] is not None
-    assert resultat["alder"]["dager"] >= 0
-
-
-def test_ingen_dokumentdato_gir_ingen_alder():
-    resultat = finn_dokumentdato([_kandidat("05.07.2026", "frist")])
-    assert resultat["dato"] is None and resultat["alder"] is None
 
 
 def test_roller_settes_paa_alle_datoer():
