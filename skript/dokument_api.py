@@ -60,8 +60,9 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_kontonummer,
                                finn_alle_organisasjonsnummer,
                                finn_alle_telefoner, finn_dato,
-                               finn_koder_med_kontekst,
-                               klassifiser_datoer, strukturert_uttrekk,
+                               finn_dokumentdato, finn_koder_med_kontekst,
+                               klassifiser_datoer, sett_dato_roller,
+                               strukturert_uttrekk,
                                utvid_entiteter, UTTREKK_REGEL_VERSJON)
 
 # UTF-8-trygg utskrift: norsk (æøå) skal ikke krasje når stdout er en fil/
@@ -649,6 +650,13 @@ def analyser_med_cache(filnavn: str, data: bytes, ocr_maks_sider=None,
     return {**resultat, "fra_cache": False}
 
 
+def dokumentdato_av(tekst: str, ocr_brukt: bool = False) -> dict:
+    """Dokumentets egen dato utledet fra ren tekst (uten PDF-metadata).
+    Brukes der vi bare har teksten: DOCX/TXT og /dokument-stien."""
+    return finn_dokumentdato(
+        sett_dato_roller(klassifiser_datoer(tekst or "")), ocr_brukt=ocr_brukt)
+
+
 def _pdf_metadata_datoer(meta: dict) -> list:
     """Datoer fra PDF-filens egne metadata (opprettet/endret) — usynlige
     i dokumentteksten, men ofte selve «utstedelsesdatoen» teknisk sett."""
@@ -787,6 +795,11 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             if any(dd["raatekst"] in h for h in ocr_res["handskrift"]):
                 dd["skrevet_for_hand"] = True
                 dd["begrunnelse"] += "; står i en håndskrevet region"
+        # Rolle på hver dato + dokumentets EGEN dato. ocr_brukt=True her,
+        # så PDF-metadata nedgraderes: på et skannet dokument er
+        # opprettelsesdatoen skannedatoen, ikke dokumentets dato.
+        sett_dato_roller(datoer_detaljert)
+        dokumentdato = finn_dokumentdato(datoer_detaljert, ocr_brukt=True)
         felter_ut = utvid_entiteter(ocr_tekst, {})
         # Leste vi dette dårlig? → automatisk til Label Studio (bakgrunn)
         sendt = _kanskje_send_til_gjennomgang(filnavn, data, ocr_res, felter_ut)
@@ -800,6 +813,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "felter": felter_ut,
             "datoer": finn_alle_datoer(ocr_tekst),
             "datoer_detaljert": datoer_detaljert,
+            "dokumentdato": dokumentdato,
             "strekkoder": strekkoder,
             "tekst": ocr_tekst.strip(),
             "antall_tegn": len(ocr_tekst.strip()),
@@ -813,6 +827,8 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "advarsel": ocr_advarsel,
         }
 
+    tekstlag_datoer = sett_dato_roller(
+        klassifiser_datoer(full_tekst) + _pdf_metadata_datoer(pdf_meta))
     return {
         "ok": True,
         "filnavn": filnavn,
@@ -822,8 +838,10 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
         "kilde": "deterministisk_tekstlag",
         "felter": felter,
         "datoer": finn_alle_datoer(full_tekst),
-        "datoer_detaljert": (klassifiser_datoer(full_tekst)
-                             + _pdf_metadata_datoer(pdf_meta)),
+        "datoer_detaljert": tekstlag_datoer,
+        # Tekstlag = digitalt født dokument: da er PDF-metadata filens
+        # ekte opprettelsesdato, ikke en skannedato (ocr_brukt=False)
+        "dokumentdato": finn_dokumentdato(tekstlag_datoer, ocr_brukt=False),
         "strekkoder": strekkoder,
         "per_side": sider,
         "tekst": full_tekst,
@@ -1746,8 +1764,10 @@ def _openapi() -> dict:
                     "properties": {"fil": fil_felt,
                                    "maks_sider": {"type": "integer"}}}}}},
                 "responses": {"200": {"description":
-                    "felter, datoer, datoer_detaljert, strekkoder, handskrift, tekst, antall_tegn, "
-                    "ocr_brukt/ocr_motorer, advarsel"}}}},
+                    "felter, datoer, datoer_detaljert (hver med «rolle»: dokument/innhold/"
+                    "behandling/ukjent), dokumentdato (dokumentets EGEN dato med kilde, "
+                    "konfidens, begrunnelse og alternativer), strekkoder, handskrift, tekst, "
+                    "antall_tegn, ocr_brukt/ocr_motorer, advarsel"}}}},
             "/uttrekk": {"post": {
                 "summary": "Komplett strukturert totaluttrekk (fast skjema, alle nøkler alltid til stede)",
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
@@ -1963,6 +1983,12 @@ class Handler(BaseHTTPRequestHandler):
                     "GET /jobb/<id>/tekst": "hele den utlestne teksten når jobben er ferdig",
                     "POST /jobb/<id>/avbryt": "stopp en kø/pågående jobb",
                 },
+                "datoer": ("dokumentets EGEN dato (dokumentdato) skilles fra datoene i "
+                           "innholdet: hver dato får en «rolle» (dokument/innhold/behandling/"
+                           "ukjent), og dokumentdatoen velges deterministisk etter styrken på "
+                           "beviset — etikett (vedtaksdato/utstedt/datert) > dato øverst på "
+                           "side 1 > PDF-metadata. Finnes ingen, sies det ærlig i stedet for å "
+                           "gjette. Egne etiketter: egne_etiketter.txt («ord = type = rolle»)"),
                 "filtyper": "PDF, bilder (JPG/PNG/TIFF/BMP/WEBP — OCR-es), DOCX, XLSX/XLSM, CSV, TXT",
                 "ocr": ("regionbasert ruting når PDF-en mangler tekstlag: EasyOCR (trykt) + "
                         "norhand (norsk håndskrift) per region, flettet i leserekkefølge"),
@@ -2236,7 +2262,10 @@ class Handler(BaseHTTPRequestHandler):
             deler["felter"] = trygt(lambda: {
                 "felter": utvid_entiteter(raa_tekst, {}),
                 "datoer": finn_alle_datoer(raa_tekst),
-                "datoer_detaljert": klassifiser_datoer(raa_tekst)})
+                "datoer_detaljert": sett_dato_roller(
+                    klassifiser_datoer(raa_tekst)),
+                # dokumentets egen dato, skilt fra datoene i innholdet
+                "dokumentdato": dokumentdato_av(raa_tekst, ocr_brukt)})
         if valg["struktur"]:
             deler["struktur"] = trygt(lambda: strukturert_uttrekk(raa_tekst))
 
@@ -2469,6 +2498,10 @@ class Handler(BaseHTTPRequestHandler):
                     "antall_sider": a.get("antall_sider", 1),
                     "antall_tegn": len(a.get("tekst", "")),
                     "kilde": a.get("kilde", ""),
+                    # dokumentets EGEN dato hører til dokumentet, ikke til
+                    # datolista — der ligger datoene det handler om
+                    "dokumentdato": a.get("dokumentdato") or dokumentdato_av(
+                        a.get("tekst", "")),
                     **s["dokument"],
                 },
                 "identifikatorer": s["identifikatorer"],
@@ -2500,7 +2533,8 @@ class Handler(BaseHTTPRequestHandler):
                     "ocr_brukt": False, "kilde": "direkte_tekst",
                     "felter": utvid_entiteter(tekst, {}),
                     "datoer": finn_alle_datoer(tekst),
-                    "datoer_detaljert": klassifiser_datoer(tekst),
+                    "datoer_detaljert": sett_dato_roller(klassifiser_datoer(tekst)),
+                    "dokumentdato": dokumentdato_av(tekst),
                     "strekkoder": [],
                     "tekst": tekst, "antall_tegn": len(tekst),
                 })
@@ -2935,16 +2969,54 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     # R40-klassifiseringen legges ALLTID ved som kontekst når
     # dokumentet inneholder datoer — generelt, uten skjøre
     # nøkkelordbetingelser (spørsmål kan inneholde skrivefeil)
-    klassifisert = klassifiser_datoer(raa_tekst, maks=30)
+    klassifisert = sett_dato_roller(klassifiser_datoer(raa_tekst, maks=30))
     if klassifisert:
-        linjer = "\n".join(
-            f"- {d['dato']}"
-            + (f" (side {d['side']})" if d["side"] else "")
-            + f": {d['type']} — {d['begrunnelse']}"
-            for d in klassifisert)
-        tekst += ("\n\n[Datoer funnet i dokumentet, automatisk "
-                  "klassifisert og normalisert (deterministisk). Bruk "
-                  "denne listen ved spørsmål om datoer:]\n" + linjer)
+        # DOKUMENTETS EGEN DATO skilles ut i sitt eget avsnitt. Uten dette
+        # svarte modellen «01.07.2026» på «når er brevet fra?» fordi det
+        # var fristen som tilfeldigvis sto nærmest — den kan ikke vite at
+        # en frist er noe dokumentet HANDLER OM, ikke dokumentets dato.
+        dd = finn_dokumentdato(klassifisert, ocr_brukt=ocr_brukt)
+        if dd.get("dato"):
+            tekst += (
+                "\n\n[DOKUMENTETS EGEN DATO (da dokumentet ble skrevet/"
+                f"utstedt/fattet): {dd['dato']}"
+                + (f" — {dd['type']}, {dd['begrunnelse']}" if dd.get("type") else "")
+                + f" (sikkerhet: {dd['konfidens']})."
+                + (f" MERK: {dd['advarsel']}." if dd.get("advarsel") else "")
+                + " Spørsmål om NÅR DOKUMENTET ER FRA — «datert», «skrevet»,"
+                  " «utstedt», «hvilken dato er brevet» — besvares med"
+                  " NØYAKTIG denne datoen.]")
+        else:
+            tekst += ("\n\n[DOKUMENTETS EGEN DATO: ikke funnet. Ingen av "
+                      "datoene under kan knyttes til dokumentet selv — de "
+                      "hører til innholdet. Spørres det om når dokumentet "
+                      "er fra, SI at det ikke står i dokumentet; ikke velg "
+                      "en dato fra listen under.]")
+
+        etter_rolle = {}
+        for d in klassifisert:
+            if d["dato"] == dd.get("dato") and d.get("rolle") == "dokument":
+                continue          # allerede oppgitt som dokumentdato over
+            etter_rolle.setdefault(d.get("rolle") or "ukjent", []).append(d)
+
+        overskrifter = {
+            "innhold": "Datoer i INNHOLDET (noe dokumentet handler om — "
+                       "IKKE dokumentets egen dato)",
+            "behandling": "Datoer om HÅNDTERINGEN av dokumentet (mottatt/"
+                          "arkivert — ikke dokumentets egen dato)",
+            "dokument": "Andre kandidater til dokumentdato (svakere bevis)",
+            "ukjent": "Datoer uten tydelig rolle — vær forsiktig",
+        }
+        for rolle in ("innhold", "behandling", "dokument", "ukjent"):
+            gruppe = etter_rolle.get(rolle)
+            if not gruppe:
+                continue
+            linjer = "\n".join(
+                f"- {d['dato']}"
+                + (f" (side {d['side']})" if d["side"] else "")
+                + f": {d['type']} — {d['begrunnelse']}"
+                for d in gruppe)
+            tekst += f"\n\n[{overskrifter[rolle]}:]\n" + linjer
 
     svar, svar_avkortet = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
 

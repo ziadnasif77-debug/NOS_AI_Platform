@@ -198,6 +198,9 @@ _DATO_ETIKETTER = [
     (r"mottatt", "mottatt"),
     (r"sendt", "sendt"),
     (r"utstedt|utstedelsesdato", "utstedt"),
+    # eksplisitt merking av DOKUMENTETS egen dato («Brevet er datert ...»).
+    # Står etter søknadsdato, så «søknad datert» fortsatt blir søknadsdato.
+    (r"dokumentdato|brevdato|datert", "dokumentdato"),
     (r"gyldig\s+til|utl[øo]per|utl[øo]psdato", "utlop"),
     (r"gyldig\s+fra", "gyldig_fra"),
     (r"avreise", "avreise"),
@@ -211,36 +214,211 @@ _DATO_ETIKETTER = [
 ]
 
 
+# ------------------------------------------------------------------ #
+#  Dokumentets EGEN dato kontra datoer i innholdet
+# ------------------------------------------------------------------ #
+# Et dokument har én dato som er DOKUMENTETS (da det ble skrevet, fattet,
+# signert, utstedt). Alle andre datoer er noe dokumentet HANDLER OM: en
+# frist, en periode, en fødselsdato. Blandes de sammen, svarer systemet
+# «01.07.2026» på «når er brevet fra?» fordi det var fristen som sto der.
+# Derfor får hver dato en ROLLE, og dokumentdatoen velges deterministisk
+# etter en rangstige — aldri av modellen.
+ROLLE_DOKUMENT = "dokument"      # dokumentets egen dato
+ROLLE_INNHOLD = "innhold"        # noe dokumentet handler om
+ROLLE_BEHANDLING = "behandling"  # håndteringen AV dokumentet (mottatt/arkivert)
+ROLLE_UKJENT = "ukjent"
+
+_ROLLER = {
+    # dokumentets egen dato
+    "dokumentdato": ROLLE_DOKUMENT,
+    "vedtaksdato": ROLLE_DOKUMENT,
+    "utstedt": ROLLE_DOKUMENT,
+    "signaturdato": ROLLE_DOKUMENT,
+    "soknadsdato": ROLLE_DOKUMENT,
+    "brevdato_sannsynlig": ROLLE_DOKUMENT,
+    "sendt": ROLLE_DOKUMENT,
+    "merket_dato": ROLLE_DOKUMENT,
+    "pdf_opprettet": ROLLE_DOKUMENT,
+    "pdf_endret": ROLLE_DOKUMENT,
+    # håndtering: sier når NOEN GJORDE noe med dokumentet, ikke når det ble til
+    "mottatt": ROLLE_BEHANDLING,
+    "arkivert": ROLLE_BEHANDLING,
+    # innhold: noe dokumentet forteller om
+    "fodselsdato": ROLLE_INNHOLD,
+    "fodselsdato_fra_fnr": ROLLE_INNHOLD,
+    "frist": ROLLE_INNHOLD,
+    "utlop": ROLLE_INNHOLD,
+    "gyldig_fra": ROLLE_INNHOLD,
+    "avreise": ROLLE_INNHOLD,
+    "ankomst": ROLLE_INNHOLD,
+    "periode_start": ROLLE_INNHOLD,
+    "periode_slutt": ROLLE_INNHOLD,
+    "utbetalingsdato": ROLLE_INNHOLD,
+    "i_lopende_tekst": ROLLE_INNHOLD,
+    "ukjent": ROLLE_UKJENT,
+}
+
+# Rangstige for dokumentdatoen: lavere tall vinner. En EKSPLISITT etikett
+# («Vedtaksdato:») slår alltid en posisjonsgjetning, som igjen slår
+# PDF-metadata — metadata er filens dato, ikke nødvendigvis dokumentets.
+_DOKUMENTDATO_RANG = {
+    "dokumentdato": (1, "etikett"),
+    "vedtaksdato": (1, "etikett"),
+    "utstedt": (1, "etikett"),
+    "signaturdato": (1, "etikett"),
+    "soknadsdato": (1, "etikett"),
+    "sendt": (2, "etikett"),
+    "brevdato_sannsynlig": (2, "posisjon"),
+    "merket_dato": (3, "etikett"),
+    "pdf_opprettet": (4, "pdf_metadata"),
+    "pdf_endret": (5, "pdf_metadata"),
+}
+_RANG_KONFIDENS = {1: "hoy", 2: "middels", 3: "middels", 4: "lav", 5: "lav"}
+
+
+def rolle_for_type(dtype) -> str:
+    """Rollen til en datotype. Ukjente typer (egne etiketter uten oppgitt
+    rolle) regnes som INNHOLD — en ny etikett navngir nesten alltid noe
+    dokumentet handler om, og å gjette «dokumentdato» ville vært å la en
+    tilfeldig etikett kuppe selve dokumentdatoen."""
+    if not dtype:
+        return ROLLE_UKJENT
+    return _ROLLER.get(dtype, _egne_roller().get(dtype, ROLLE_INNHOLD))
+
+
+def sett_dato_roller(datoer: list) -> list:
+    """Merker hver klassifiserte dato med «rolle». Muterer og returnerer
+    lista (praktisk i kjeder)."""
+    for d in datoer:
+        if isinstance(d, dict):
+            d["rolle"] = rolle_for_type(d.get("type"))
+    return datoer
+
+
+def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
+    """Velger DOKUMENTETS EGEN dato blant de klassifiserte datoene.
+
+    Deterministisk, aldri modellbasert: bare datoer med rolle «dokument»
+    er kandidater, og de rangeres etter hvor sterkt beviset er. Finnes
+    ingen slik dato, sies det ÆRLIG (dato=None) i stedet for å plukke en
+    tilfeldig dato fra innholdet.
+
+    Returnerer {dato, type, kilde, konfidens, begrunnelse, side,
+    alternativer, advarsel}."""
+    kandidater = []
+    for i, d in enumerate(datoer or []):
+        if not isinstance(d, dict) or not d.get("dato"):
+            continue
+        if rolle_for_type(d.get("type")) != ROLLE_DOKUMENT:
+            continue
+        rang, kilde = _DOKUMENTDATO_RANG.get(d["type"], (6, "etikett"))
+        # side 1 foretrekkes ved lik rang: brevhodet står på første side
+        kandidater.append((rang, 0 if (d.get("side") or 1) == 1 else 1, i,
+                           kilde, d))
+    if not kandidater:
+        return {
+            "dato": None, "type": None, "kilde": None, "konfidens": "ingen",
+            "begrunnelse": ("Fant ingen dato som kan knyttes til dokumentet "
+                            "selv — verken etikett (vedtaksdato/utstedt/"
+                            "signert), dato øverst på side 1 eller "
+                            "PDF-metadata. Datoene i dokumentet hører til "
+                            "innholdet."),
+            "side": None, "alternativer": [], "advarsel": None,
+        }
+
+    kandidater.sort(key=lambda k: (k[0], k[1], k[2]))
+    rang, _, _, kilde, beste = kandidater[0]
+    konfidens = _RANG_KONFIDENS.get(rang, "lav")
+    begrunnelse = beste.get("begrunnelse") or ""
+    advarsler = []
+
+    # PDF-metadata på et SKANNET dokument er skannedatoen, ikke dokumentets
+    if kilde == "pdf_metadata" and ocr_brukt:
+        konfidens = "lav"
+        advarsler.append(
+            "Dokumentet er skannet, og datoen kommer fra PDF-filens "
+            "metadata — det er trolig SKANNEDATOEN, ikke dokumentets dato")
+    # håndskrevet dato er mindre pålitelig lest enn trykt
+    if beste.get("skrevet_for_hand"):
+        konfidens = "middels" if konfidens == "hoy" else "lav"
+        advarsler.append("datoen er håndskrevet — kontroller lesingen")
+    if beste.get("aar_antatt"):
+        advarsler.append("tosifret årstall i kilden — århundret er antatt")
+
+    # Uenighet på SAMME rang er et ekte varsel: to like sterke bevis som
+    # peker på ulike datoer skal et menneske se på, ikke skjules.
+    samme_rang = {k[4]["dato"] for k in kandidater if k[0] == rang}
+    if len(samme_rang) > 1:
+        advarsler.append(
+            "flere like sterke kandidater med ULIKE datoer ("
+            + ", ".join(sorted(samme_rang)) + ") — kontroller mot dokumentet")
+
+    return {
+        "dato": beste["dato"],
+        "type": beste.get("type"),
+        "kilde": kilde,
+        "konfidens": konfidens,
+        "begrunnelse": begrunnelse,
+        "side": beste.get("side"),
+        "alternativer": [
+            {"dato": k[4]["dato"], "type": k[4].get("type"),
+             "konfidens": _RANG_KONFIDENS.get(k[0], "lav")}
+            for k in kandidater[1:6]],
+        "advarsel": "; ".join(advarsler) if advarsler else None,
+    }
+
+
 # Brukerdefinerte etiketter fra egne_etiketter.txt i prosjektroten:
-# «ord = type» per linje. Nye dokumenttyper med nye ord krever dermed
-# ALDRI kodeendring — én linje i en tekstfil, uten omstart.
+# «ord = type» per linje — eller «ord = type = rolle» når etiketten er
+# dokumentets EGEN dato (rolle: dokument/innhold/behandling). Nye
+# dokumenttyper med nye ord krever dermed ALDRI kodeendring — én linje i
+# en tekstfil, uten omstart.
 _EGNE_ETIKETTER_STI = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "egne_etiketter.txt")
-_egne_etiketter_cache = {"mtime": None, "liste": []}
+_egne_etiketter_cache = {"mtime": None, "liste": [], "roller": {}}
+_GYLDIGE_ROLLER = (ROLLE_DOKUMENT, ROLLE_INNHOLD, ROLLE_BEHANDLING)
 
 
-def _egne_dato_etiketter() -> list:
+def _les_egne_etiketter() -> None:
+    """Leser egne_etiketter.txt på nytt hvis fila er endret."""
     try:
         mtime = os.path.getmtime(_EGNE_ETIKETTER_STI)
     except OSError:
-        return []
-    if _egne_etiketter_cache["mtime"] != mtime:
-        liste = []
-        try:
-            with open(_EGNE_ETIKETTER_STI, encoding="utf-8") as f:
-                for linje in f:
-                    linje = linje.strip()
-                    if not linje or linje.startswith("#") or "=" not in linje:
-                        continue
-                    ordet, typen = (d.strip() for d in linje.split("=", 1))
-                    if ordet and typen:
-                        liste.append((re.escape(ordet),
-                                      re.sub(r"[^\wæøå]", "_", typen.lower())))
-        except OSError:
-            return _egne_etiketter_cache["liste"]
-        _egne_etiketter_cache.update(mtime=mtime, liste=liste)
+        _egne_etiketter_cache.update(mtime=None, liste=[], roller={})
+        return
+    if _egne_etiketter_cache["mtime"] == mtime:
+        return
+    liste, roller = [], {}
+    try:
+        with open(_EGNE_ETIKETTER_STI, encoding="utf-8") as f:
+            for linje in f:
+                linje = linje.strip()
+                if not linje or linje.startswith("#") or "=" not in linje:
+                    continue
+                deler = [d.strip() for d in linje.split("=")]
+                ordet, typen = deler[0], deler[1] if len(deler) > 1 else ""
+                if not (ordet and typen):
+                    continue
+                typen = re.sub(r"[^\wæøå]", "_", typen.lower())
+                liste.append((re.escape(ordet), typen))
+                # valgfri tredje del: rollen. Ugyldig rolle ignoreres i
+                # stillhet — da gjelder standarden (innhold), som er trygt
+                if len(deler) > 2 and deler[2].strip().lower() in _GYLDIGE_ROLLER:
+                    roller[typen] = deler[2].strip().lower()
+    except OSError:
+        return          # behold forrige (gyldige) innhold
+    _egne_etiketter_cache.update(mtime=mtime, liste=liste, roller=roller)
+
+
+def _egne_dato_etiketter() -> list:
+    _les_egne_etiketter()
     return _egne_etiketter_cache["liste"]
+
+
+def _egne_roller() -> dict:
+    _les_egne_etiketter()
+    return _egne_etiketter_cache["roller"]
 
 
 def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
