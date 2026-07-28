@@ -99,6 +99,31 @@ CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "").strip()
 # skraping/misbruk på et eksponert endepunkt). 0 = av. Bak en tunnel/gateway
 # er socket-IP-en localhost, så den videresendte klient-IP-en brukes.
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
+
+# --- Samtidighetsvakt -------------------------------------------------
+# OCR og språkmodellen deler ETT skjermkort og serialiseres uansett på
+# GPU-låsen. Flere enn noen få tunge forespørsler samtidig gir derfor
+# ingen gjennomstrømning — bare kostnader. Målt med 10 samtidige skannede
+# sider mot 1 om gangen: samme 10 dokumenter, men 78 tråder, 8,5 GB RSS og
+# 76 s vegg-tid (median 42 s per klient) mot 7,6 s per dokument alene.
+# Resultatene var korrekte hele veien; problemet er ressursbruk og at en
+# klient kan bli stående uten å vite at den står i kø.
+#
+# To vakter, begge med ÆRLIG 503 + Retry-After i stedet for taus venting:
+#   1) hvor mange tunge forespørsler som behandles samtidig
+#   2) hvor mange opplastede byte som ligger i minnet samtidig — hele
+#      kroppen leses inn før parsing, så N × MAKS_BYTES er det virkelige
+#      minnetaket uten denne
+MAKS_SAMTIDIGE_TUNGE = int(os.environ.get("MAKS_SAMTIDIGE_TUNGE", "4"))
+KOE_VENT_S = float(os.environ.get("KOE_VENT_S", "180"))
+MAKS_SAMTIDIGE_MB = int(os.environ.get("MAKS_SAMTIDIGE_MB", "400"))
+_tung_semafor = threading.BoundedSemaphore(MAKS_SAMTIDIGE_TUNGE)
+_i_flukt_bytes = {"n": 0}
+_i_flukt_las = threading.Lock()
+# Endepunkter som gjør tungt arbeid SYNKRONT. /jobb er utelatt med vilje:
+# den svarer 202 med en gang og har allerede én arbeidstråd som grense.
+# /innsyn svarer også med en gang (arbeidet skjer i egen tråd).
+_TUNGE_STIER = ("/analyser", "/spor", "/uttrekk", "/fyll_skjema", "/dokument")
 _rate_lock = threading.Lock()
 _rate_teller = {}   # klient-ip -> [vindu_minutt, antall]
 
@@ -1892,7 +1917,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def _svar(self, kode, data):
+    def _svar(self, kode, data, hoder: dict = None):
         # R39/§4: berik versjon-blokken med full proveniens (modell/regel/
         # terskel) i ÉTT punkt. Additivt — eksisterende nøkler (api, prompt,
         # modell) beholdes, så ingen klient brytes.
@@ -1902,11 +1927,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(kode)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        for navn, verdi in (hoder or {}).items():
+            self.send_header(navn, str(verdi))
         opphav = self._cors_origin()
         if opphav:
             self.send_header("Access-Control-Allow-Origin", opphav)
         self.end_headers()
         self.wfile.write(payload)
+
+    def _tapp_kropp(self, lengde: int) -> None:
+        """Les og forkast kroppen i biter. Uten dette blir en AVVIST
+        forespørsels kropp liggende i socket-bufferet og tolkes som starten
+        på neste forespørsel på samme (keep-alive) tilkobling."""
+        igjen = max(0, lengde)
+        while igjen > 0:
+            bit = self.rfile.read(min(65536, igjen))
+            if not bit:
+                break
+            igjen -= len(bit)
 
     def _html(self, innhold: str):
         payload = innhold.encode("utf-8")
@@ -2014,6 +2052,14 @@ class Handler(BaseHTTPRequestHandler):
                     "llm_tegn_direkte": f"{MAKS_LLM_TEGN} + deterministisk uttrekk fra hele dokumentet",
                 },
                 "strekkoder": "Code128/EAN/QR m.fl. dekodes automatisk (pyzbar) og legges ved svaret",
+                "samtidighet": (
+                    f"maks {MAKS_SAMTIDIGE_TUNGE} tunge forespørsler samtidig "
+                    f"(kø inntil {int(KOE_VENT_S)} s, deretter 503 med Retry-After) "
+                    f"og maks {MAKS_SAMTIDIGE_MB} MB opplasting i minnet samtidig. "
+                    "OCR og språkmodellen deler ett skjermkort og serialiseres "
+                    "uansett — for mange samtidige gir ikke mer gjennomstrømning. "
+                    "Skal mange klienter kjøre parallelt: bruk POST /jobb "
+                    "(svarer 202 med en gang, arbeider i bakgrunnen)"),
                 "sikkerhet": ("X-API-Key kreves på alle endepunkter" if API_NOKKEL else
                               "ÅPEN — sett miljøvariabelen API_NOKKEL for å kreve X-API-Key"),
                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
@@ -2364,6 +2410,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._do_post_intern()
         except Exception as exc:
             return self._serverfeil(exc)
+        finally:
+            # slipp køplassen uansett hvordan forespørselen endte
+            if getattr(self, "_har_koeplass", False):
+                self._har_koeplass = False
+                _tung_semafor.release()
+
+    def _ta_koeplass(self, sti: str) -> bool:
+        """Sikrer en av de MAKS_SAMTIDIGE_TUNGE plassene for tungt arbeid.
+        Får vi ingen innen fristen, svarer vi ÆRLIG 503 med Retry-After —
+        bedre enn å la klienten henge i minutter uten å vite hvorfor."""
+        if sti not in _TUNGE_STIER:
+            return True
+        if _tung_semafor.acquire(timeout=KOE_VENT_S):
+            self._har_koeplass = True
+            return True
+        self._svar(503, {
+            "ok": False,
+            "feil": (f"Serveren er opptatt: mer enn {MAKS_SAMTIDIGE_TUNGE} "
+                     f"forespørsler ble behandlet samtidig, og køen ble ikke "
+                     f"ledig innen {int(KOE_VENT_S)} s. Prøv igjen, eller bruk "
+                     "POST /jobb for store dokumenter (svarer med en gang og "
+                     "arbeider i bakgrunnen)."),
+            "opptatt": True,
+        }, hoder={"Retry-After": "30"})
+        return False
 
     def _do_post_intern(self):
         sti = self._sti()
@@ -2386,6 +2457,16 @@ class Handler(BaseHTTPRequestHandler):
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
                        "/fyll_skjema", "/innsyn", "/dokument"):
             return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
+
+        # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
+        # tråd allerede hele opplastingen (og den normaliserte PDF-en) i
+        # minnet mens den står i kø — målt: vakten alene endret hverken RAM
+        # (8,1 GB) eller trådtall. Nå holdes dataene i klientens
+        # socket-buffer i stedet, og bare de som faktisk arbeider bruker
+        # minne. Ruting, rate-limit og auth over skjer uten køplass, så en
+        # feilformet forespørsel aldri opptar en.
+        if not self._ta_koeplass(sti):
+            return
         try:
             lengde = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -2394,7 +2475,28 @@ class Handler(BaseHTTPRequestHandler):
         # omgå størrelsesgrensen — avvis eksplisitt
         if lengde < 0 or lengde > MAKS_BYTES:
             return self._svar(413, {"ok": False, "feil": f"Ugyldig eller for stor forespørsel (maks {MAKS_BYTES//1024//1024} MB)"})
-        body = self.rfile.read(lengde) if lengde else b""
+
+        # Minnevakt FØR innlesing: hele kroppen leses inn i minnet, så uten
+        # denne er taket N samtidige × MAKS_BYTES. Avvis ærlig i stedet.
+        with _i_flukt_las:
+            if (_i_flukt_bytes["n"] + lengde) > MAKS_SAMTIDIGE_MB * 1024 * 1024:
+                for_mye = True
+            else:
+                _i_flukt_bytes["n"] += lengde
+                for_mye = False
+        if for_mye:
+            self._tapp_kropp(lengde)      # tøm kroppen så tilkoblingen er ren
+            return self._svar(503, {
+                "ok": False,
+                "feil": ("Serveren tar imot for mye data samtidig akkurat nå "
+                         f"(grense {MAKS_SAMTIDIGE_MB} MB). Prøv igjen om litt, "
+                         "eller bruk POST /jobb for store dokumenter."),
+            }, hoder={"Retry-After": "20"})
+        try:
+            body = self.rfile.read(lengde) if lengde else b""
+        finally:
+            with _i_flukt_las:
+                _i_flukt_bytes["n"] -= lengde
         ct = self.headers.get("Content-Type", "")
 
         tekstfelter = {}
