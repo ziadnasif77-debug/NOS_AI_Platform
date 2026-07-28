@@ -1603,6 +1603,8 @@ def _jobb_arbeider() -> None:
                 jobb.update(
                     status="ferdig", tekst=t, antall_tegn=len(t),
                     felter=utvid_entiteter(t, {}), datoer=finn_alle_datoer(t),
+                    # tekstlag = digitalt født, ingen OCR (ocr_brukt=False)
+                    dokumentdato=dokumentdato_av(t, ocr_brukt=False),
                     strekkoder=les_strekkoder_bytes(data), handskrift=[],
                     ocr_motorer={}, sider_ferdig=jobb["sider_totalt"],
                 )
@@ -1659,6 +1661,10 @@ def _jobb_arbeider() -> None:
                     status="ferdig", tekst=tekst, antall_tegn=len(tekst),
                     felter=utvid_entiteter(tekst, {}),
                     datoer=finn_alle_datoer(tekst),
+                    # Store skannede bunker går HIT, ikke gjennom /analyser
+                    # — og det er nettopp her datospennet per side betyr
+                    # mest. Sidemerkene over gjør per-side-logikken riktig.
+                    dokumentdato=dokumentdato_av(tekst, ocr_brukt=True),
                     strekkoder=strekkoder, handskrift=handskrift,
                     ocr_motorer=motorer,
                 )
@@ -1792,7 +1798,10 @@ def _openapi() -> dict:
                 "responses": {"202": {"description": "jobb_id — følg med på GET /jobb/{id}"}}}},
             "/jobb/{id}": {"get": {"summary": "Jobbstatus og fremdrift",
                 "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
-                "responses": {"200": {"description": "status, sider_ferdig/sider_totalt, tidsestimat, felter m.m."}}}},
+                "responses": {"200": {"description":
+                    "status, sider_ferdig/sider_totalt, tidsestimat, felter, datoer og "
+                    "dokumentdato (med «periode»: datospennet fra–til og dato per side — "
+                    "særlig nyttig her, siden store skannede bunker går via bakgrunnsjobber)"}}}},
             "/jobb/{id}/tekst": {"get": {"summary": "Hele den utleste teksten fra en ferdig jobb",
                 "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "responses": {"200": {"description": "tekst, antall_tegn"}}}},
@@ -1980,7 +1989,9 @@ class Handler(BaseHTTPRequestHandler):
                     "POST /jobb": "felt 'fil' → jobb_id med en gang; OCR av HELE dokumentet kjører i bakgrunnen",
                     "POST /innsyn": ("felt 'fil' → innsyn_id; direktevisning av lesingen — "
                                      "poll GET /innsyn/<id>?fra=N for hendelsesstrømmen"),
-                    "GET /jobb/<id>": "status + fremdrift (sider_ferdig/sider_totalt, tidsestimat)",
+                    "GET /jobb/<id>": ("status + fremdrift (sider_ferdig/sider_totalt, "
+                                       "tidsestimat); når jobben er ferdig også felter, "
+                                       "datoer og dokumentdato med datospenn per side"),
                     "GET /jobb/<id>/tekst": "hele den utlestne teksten når jobben er ferdig",
                     "POST /jobb/<id>/avbryt": "stopp en kø/pågående jobb",
                 },
@@ -2457,13 +2468,16 @@ class Handler(BaseHTTPRequestHandler):
                     "sider_ferdig": 0, "sider_totalt": None,
                     "sekunder_brukt": 0, "sekunder_igjen_estimat": None,
                     "tekst": "", "antall_tegn": 0, "felter": {}, "datoer": [],
+                    "dokumentdato": None,
                     "strekkoder": [], "handskrift": [], "ocr_motorer": {},
                     "opprettet": time.strftime("%Y-%m-%d %H:%M:%S")}
             if slag == "tekst":
                 t = innhold.strip()
                 jobb.update(status="ferdig", tekst=t, antall_tegn=len(t),
                             felter=utvid_entiteter(t, {}),
-                            datoer=finn_alle_datoer(t), strekkoder=[],
+                            datoer=finn_alle_datoer(t),
+                            dokumentdato=dokumentdato_av(t),
+                            strekkoder=[],
                             handskrift=[], ocr_motorer={})
                 _jobber[jobb_id] = jobb
                 _jobb_lagre(jobb)
