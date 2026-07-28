@@ -13,11 +13,13 @@ eksakt:
   4) PDF-metadata på et SKANNET dokument er skannedatoen, og merkes sånn
 """
 import sys
+from datetime import date
 
 sys.path.insert(0, ".")
 
 from delt.tekstuttrekk import (ROLLE_BEHANDLING, ROLLE_DOKUMENT,
-                               ROLLE_INNHOLD, finn_dokumentdato,
+                               ROLLE_INNHOLD, dokumentets_alder,
+                               finn_dokumentdato,
                                klassifiser_datoer, rolle_for_type,
                                sett_dato_roller)
 
@@ -139,6 +141,99 @@ def test_soknad_datert_forblir_soknadsdato():
     datoer = sett_dato_roller(
         klassifiser_datoer("Vi har mottatt din søknad datert 01.05.2026."))
     assert datoer[0]["type"] == "soknadsdato"
+
+
+# ---------- naken dato uten etikett: øverst og ved signaturen ----------
+_ERKLARING = """Egenerklæring om sykefravær
+
+Jeg bekrefter at opplysningene er riktige. Fraværet gjaldt perioden
+01.03.2026 til 10.03.2026. Jeg ble sykmeldt av lege den 02.03.2026.
+Erklæringen leveres til arbeidsgiver snarest mulig etter fraværet.
+Ytterligere dokumentasjon ettersendes ved behov innen fristen 20.03.2026.
+
+Oslo, 15.03.2026
+
+Ola Nordmann
+(sign.)
+"""
+
+
+def test_signaturblokk_nederst_blir_dokumentdato():
+    """«Oslo, 15.03.2026 … (sign.)» nederst ER dokumentets dato — mens
+    sykefraværsperioden og fristen over hører til innholdet."""
+    resultat = _dokumentdato(_ERKLARING)
+    assert resultat["dato"] == "15.03.2026"
+    assert resultat["type"] == "signaturdato_sannsynlig"
+    assert resultat["kilde"] == "posisjon"
+
+
+def test_sted_komma_dato_gjenkjennes_uten_etikett():
+    resultat = _dokumentdato(_ERKLARING)
+    assert "stedsnavn" in resultat["begrunnelse"].lower()
+
+
+def test_naken_dato_oeverst_uten_etikett():
+    """Brevhode med avsender- OG mottakerblokk: datoen kommer langt uti
+    teksten, men fortsatt på en av de første LINJENE. Tegnbasert grense
+    (den gamle) mistet den; linjebasert finner den."""
+    resultat = _dokumentdato(
+        "Kommunen\nPostboks 123\n0150 OSLO\n\n"
+        "Ola Nordmann\nStorgata 1\n0155 OSLO\n\n"
+        "24.02.2026\n\n"
+        "Vedrørende din henvendelse om barnehageplass fra 01.08.2026.\n"
+        "Vi behandler saken snarest og svarer deg skriftlig innen "
+        "15.04.2026 uansett.\n")
+    assert resultat["dato"] == "24.02.2026"
+    assert resultat["type"] == "brevdato_sannsynlig"
+
+
+def test_dato_alene_nederst_begrunnes_som_signatur_ikke_toppen():
+    """I et KORT dokument er de første 14 linjene også de siste. Uten
+    vernet fikk en dato ved underskriften begrunnelsen «øverst i
+    dokumentet» — riktig dato, men usann forklaring."""
+    resultat = _dokumentdato(
+        "Rapport om aktiviteten\n\n"
+        "I perioden 01.01.2026 til 31.01.2026 ble det gjennomført tolv\n"
+        "møter med deltakerne. Neste evaluering er planlagt til 15.06.2026\n"
+        "og skal omfatte hele tiltaket. Rapporten sendes til partene.\n\n"
+        "10.02.2026\n")
+    assert resultat["dato"] == "10.02.2026"
+    assert resultat["type"] == "signaturdato_sannsynlig"
+    assert "nederst" in resultat["begrunnelse"]
+
+
+# ---------- dokumentets alder ----------
+def test_alder_regnes_fra_dokumentdatoen():
+    i_dag = date(2026, 7, 28)
+    assert dokumentets_alder("28.07.2026", i_dag)["dager"] == 0
+    assert dokumentets_alder("28.07.2026", i_dag)["tekst"] == "datert i dag"
+    assert dokumentets_alder("28.07.2025", i_dag)["dager"] == 365
+    assert "1 år" in dokumentets_alder("28.07.2025", i_dag)["tekst"]
+    gammelt = dokumentets_alder("01.01.2020", i_dag)
+    assert gammelt["dager"] == 2400 and gammelt["aar"] == 6.57
+
+
+def test_fremtidig_dato_flagges_i_stedet_for_negativt_tall():
+    alder = dokumentets_alder("01.12.2026", date(2026, 7, 28))
+    assert alder["fremtidig"] is True
+    assert "FRAM I TID" in alder["tekst"]
+
+
+def test_alder_taaler_soppel():
+    assert dokumentets_alder(None) is None
+    assert dokumentets_alder("tull") is None
+    assert dokumentets_alder("31.02.2026") is None      # finnes ikke
+
+
+def test_dokumentdato_har_alder_med():
+    resultat = _dokumentdato("Vedtaksdato: 12.06.2026\nFrist 05.07.2026.\n")
+    assert resultat["alder"] is not None
+    assert resultat["alder"]["dager"] >= 0
+
+
+def test_ingen_dokumentdato_gir_ingen_alder():
+    resultat = finn_dokumentdato([_kandidat("05.07.2026", "frist")])
+    assert resultat["dato"] is None and resultat["alder"] is None
 
 
 def test_roller_settes_paa_alle_datoer():

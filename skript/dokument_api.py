@@ -2982,10 +2982,13 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                 f"utstedt/fattet): {dd['dato']}"
                 + (f" — {dd['type']}, {dd['begrunnelse']}" if dd.get("type") else "")
                 + f" (sikkerhet: {dd['konfidens']})."
+                + (f" DOKUMENTETS ALDER: {dd['alder']['tekst']} "
+                   f"({dd['alder']['dager']} dager)."
+                   if dd.get("alder") else "")
                 + (f" MERK: {dd['advarsel']}." if dd.get("advarsel") else "")
-                + " Spørsmål om NÅR DOKUMENTET ER FRA — «datert», «skrevet»,"
-                  " «utstedt», «hvilken dato er brevet» — besvares med"
-                  " NØYAKTIG denne datoen.]")
+                + " Spørsmål om NÅR DOKUMENTET ER FRA eller HVOR GAMMELT det"
+                  " er — «datert», «skrevet», «utstedt», «hvor gammelt» —"
+                  " besvares med NØYAKTIG disse opplysningene.]")
         else:
             tekst += ("\n\n[DOKUMENTETS EGEN DATO: ikke funnet. Ingen av "
                       "datoene under kan knyttes til dokumentet selv — de "

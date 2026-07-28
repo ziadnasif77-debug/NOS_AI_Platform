@@ -9,9 +9,10 @@ Brukes av NLPWorker som et lag OVER modell-uttrekket:
 Deterministiske treff vinner for strukturerte felter; modellene vinner
 for navn (fritekst uten fast mønster).
 """
+import bisect
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 
@@ -236,6 +237,7 @@ _ROLLER = {
     "signaturdato": ROLLE_DOKUMENT,
     "soknadsdato": ROLLE_DOKUMENT,
     "brevdato_sannsynlig": ROLLE_DOKUMENT,
+    "signaturdato_sannsynlig": ROLLE_DOKUMENT,
     "sendt": ROLLE_DOKUMENT,
     "merket_dato": ROLLE_DOKUMENT,
     "pdf_opprettet": ROLLE_DOKUMENT,
@@ -269,10 +271,25 @@ _DOKUMENTDATO_RANG = {
     "soknadsdato": (1, "etikett"),
     "sendt": (2, "etikett"),
     "brevdato_sannsynlig": (2, "posisjon"),
+    "signaturdato_sannsynlig": (2, "posisjon"),
     "merket_dato": (3, "etikett"),
     "pdf_opprettet": (4, "pdf_metadata"),
     "pdf_endret": (5, "pdf_metadata"),
 }
+
+# Ord som røper en SIGNATURBLOKK. De står typisk RUNDT eller ETTER datoen
+# («Oslo, 12.06.2026 … Ola Nordmann (sign.)»), og fanges derfor ikke av
+# etikettsøket, som bare ser 35 tegn FORAN datoen.
+_SIGNATUR_ORD = re.compile(
+    r"\(?\bsign\b\.?\)?|signatur|underskrift|underskrevet|underteg|"
+    r"med\s+vennlig\s+hilsen|\bmvh\b|vennlig\s+hilsen|"
+    r"sted\s*[/og]{1,2}\s*dato|dato\s*[/og]{1,2}\s*sted",
+    re.IGNORECASE)
+
+# «Oslo, 12.06.2026» — norsk konvensjon i både brevhode og signaturblokk.
+# Stedsnavnet rett før datoen er i seg selv et sterkt signal om at datoen
+# gjelder DOKUMENTET, ikke noe det handler om.
+_STED_FORAN_DATO = re.compile(r"[A-ZÆØÅ][a-zæøåA-ZÆØÅ\- ]{1,25},\s*$")
 _RANG_KONFIDENS = {1: "hoy", 2: "middels", 3: "middels", 4: "lav", 5: "lav"}
 
 
@@ -293,6 +310,50 @@ def sett_dato_roller(datoer: list) -> list:
         if isinstance(d, dict):
             d["rolle"] = rolle_for_type(d.get("type"))
     return datoer
+
+
+def dokumentets_alder(dato_str, i_dag=None) -> dict:
+    """Hvor GAMMELT dokumentet er, regnet fra dokumentdatoen.
+
+    Returnerer {dager, aar, tekst, fremtidig} — eller None hvis datoen
+    mangler/ikke lar seg lese. «fremtidig» settes når dokumentdatoen
+    ligger fram i tid: da er enten datoen feillest, eller dokumentet
+    forhåndsdatert — begge deler skal fram, ikke skjules bak et
+    negativt tall."""
+    if not dato_str:
+        return None
+    try:
+        d, m, a = (int(x) for x in str(dato_str).split("."))
+        dokdato = date(a, m, d)
+    except (ValueError, TypeError):
+        return None
+    i_dag = i_dag or date.today()
+    dager = (i_dag - dokdato).days
+
+    absolutt = abs(dager)
+    aar, rest = divmod(absolutt, 365)
+    maaneder = rest // 30
+    if absolutt == 0:
+        tekst = "datert i dag"
+    elif aar and maaneder:
+        tekst = f"{aar} år og {maaneder} måned{'er' if maaneder > 1 else ''}"
+    elif aar:
+        tekst = f"{aar} år"
+    elif maaneder:
+        tekst = f"{maaneder} måned{'er' if maaneder > 1 else ''}"
+    else:
+        tekst = f"{absolutt} dag{'er' if absolutt > 1 else ''}"
+
+    if dager < 0:
+        tekst = f"datert {tekst} FRAM I TID"
+    elif absolutt > 0:
+        tekst += " gammelt"
+    return {
+        "dager": dager,
+        "aar": round(dager / 365.25, 2),
+        "tekst": tekst,
+        "fremtidig": dager < 0,
+    }
 
 
 def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
@@ -320,10 +381,11 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
             "dato": None, "type": None, "kilde": None, "konfidens": "ingen",
             "begrunnelse": ("Fant ingen dato som kan knyttes til dokumentet "
                             "selv — verken etikett (vedtaksdato/utstedt/"
-                            "signert), dato øverst på side 1 eller "
-                            "PDF-metadata. Datoene i dokumentet hører til "
-                            "innholdet."),
+                            "signert), dato øverst på side 1, dato ved en "
+                            "signaturblokk nederst eller PDF-metadata. "
+                            "Datoene i dokumentet hører til innholdet."),
             "side": None, "alternativer": [], "advarsel": None,
+            "alder": None,
         }
 
     kandidater.sort(key=lambda k: (k[0], k[1], k[2]))
@@ -345,6 +407,12 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
     if beste.get("aar_antatt"):
         advarsler.append("tosifret årstall i kilden — århundret er antatt")
 
+    alder = dokumentets_alder(beste["dato"])
+    if alder and alder["fremtidig"]:
+        advarsler.append(
+            f"dokumentdatoen ligger FRAM I TID ({abs(alder['dager'])} dager) "
+            "— enten er datoen feillest, eller dokumentet er forhåndsdatert")
+
     # Uenighet på SAMME rang er et ekte varsel: to like sterke bevis som
     # peker på ulike datoer skal et menneske se på, ikke skjules.
     samme_rang = {k[4]["dato"] for k in kandidater if k[0] == rang}
@@ -360,6 +428,7 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
         "konfidens": konfidens,
         "begrunnelse": begrunnelse,
         "side": beste.get("side"),
+        "alder": alder,
         "alternativer": [
             {"dato": k[4]["dato"], "type": k[4].get("type"),
              "konfidens": _RANG_KONFIDENS.get(k[0], "lav")}
@@ -446,6 +515,24 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
                 break
         return side
 
+    # Linjenummer via forhåndsberegnede linjeskift: å telle «\n» på nytt
+    # per dato ville blitt O(tekst × datoer) på et hundresiders dokument.
+    nylinjer = [m.start() for m in re.finditer("\n", tekst)]
+
+    def _linjenr(pos: int) -> int:
+        return bisect.bisect_left(nylinjer, pos)
+
+    # «Nederst i dokumentet» = siste 20 % eller siste 600 tegn (det
+    # romsligste), men aldri mer enn siste halvdel — ellers ville midten
+    # av et kort dokument regnes som signaturblokk. Under 200 tegn er
+    # sonen slått helt av; da gjelder brevhode-regelen alene.
+    _slutt_grense = (max(len(tekst) - max(600, int(len(tekst) * 0.20)),
+                         int(len(tekst) * 0.5))
+                     if len(tekst) >= 200 else len(tekst) + 1)
+
+    def _naer_slutten(pos: int) -> bool:
+        return pos >= _slutt_grense
+
     resultater = []
     for i, (start, slutt, raatekst, dato, aar_antatt) in enumerate(treff[:maks]):
         linje_start = tekst.rfind("\n", 0, start) + 1
@@ -481,12 +568,49 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
                     begrunnelse = f"etiketten «{etikett}» står rett før datoen"
                     break
 
-        # 3) Brev-/utstedelsesdato: øverst i dokumentet på egen kort linje
-        if dtype is None and _side_for(start) == 1 and start < 300 \
-                and len(linje.strip()) <= 40:
+        # 2b) «Oslo, 12.06.2026» — stedsnavn rett foran datoen. Norsk
+        #     konvensjon i brevhoder og signaturblokker, og et sterkt
+        #     signal om at datoen gjelder DOKUMENTET. Slår an uansett
+        #     hvor i dokumentet den står (brevhode øverst, signatur nederst).
+        if dtype is None and _STED_FORAN_DATO.search(
+                tekst[linje_start:start]) and len(linje.strip()) <= 60:
+            dtype = ("signaturdato_sannsynlig" if _naer_slutten(start)
+                     else "brevdato_sannsynlig")
+            begrunnelse = ("stedsnavn rett foran datoen («Sted, dato») — "
+                           "norsk konvensjon for dokumentets egen dato")
+
+        # 3a) Signaturblokk: dato nederst i dokumentet, på kort linje, med
+        #     signaturord i nærheten. Her står dokumentets dato i skjemaer
+        #     og erklæringer — den signerte datoen ER dokumentets dato.
+        if dtype is None and _naer_slutten(start) and len(linje.strip()) <= 60 \
+                and _SIGNATUR_ORD.search(
+                    tekst[max(0, start - 120):min(len(tekst), slutt + 200)]):
+            dtype = "signaturdato_sannsynlig"
+            begrunnelse = ("nederst i dokumentet ved signaturord "
+                           "(sign./underskrift/hilsen) — typisk signaturdato")
+
+        # 3b) Brevdato: øverst i dokumentet på egen kort linje. Måles i
+        #     LINJER, ikke tegn: et brevhode med avsender- og mottakerblokk
+        #     skyver lett datoen forbi en tegngrense, og da forsvant den.
+        #     «not _naer_slutten» er nødvendig i KORTE dokumenter, der de
+        #     første 14 linjene også er de siste: uten den fikk en dato ved
+        #     underskriften begrunnelsen «øverst i dokumentet».
+        if dtype is None and _side_for(start) == 1 and not _naer_slutten(start) \
+                and _linjenr(start) < 14 and len(linje.strip()) <= 40:
             dtype = "brevdato_sannsynlig"
             begrunnelse = ("øverst i dokumentet på egen kort linje — "
                            "typisk brev-/utstedelsesdato")
+
+        # 3c) Datoen ALENE på sin egen linje nederst, uten signaturord.
+        #     Svakere signal, men i praksis dateringen ved underskriften.
+        #     Kravet om at linja ikke inneholder ANNET enn datoen holder
+        #     tabeller og datolister ute.
+        if dtype is None and _naer_slutten(start) and re.fullmatch(
+                r"[\s.,;:\-–—]*" + re.escape(raatekst) + r"[\s.,;:\-–—]*",
+                linje):
+            dtype = "signaturdato_sannsynlig"
+            begrunnelse = ("alene på egen linje nederst i dokumentet — "
+                           "typisk dateringen ved underskriften")
 
         # 4) Løpende tekst eller ærlig ukjent
         i_lopende = len(linje.strip()) > 60
