@@ -114,12 +114,171 @@ RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
 #   2) hvor mange opplastede byte som ligger i minnet samtidig — hele
 #      kroppen leses inn før parsing, så N × MAKS_BYTES er det virkelige
 #      minnetaket uten denne
-MAKS_SAMTIDIGE_TUNGE = int(os.environ.get("MAKS_SAMTIDIGE_TUNGE", "4"))
+# Grensen er MÅLT, ikke fast: serveren skal ta imot flere klienter av seg
+# selv når den får flere kort, mer minne og flere kjerner — uten at noe
+# stilles om. Måles på nytt med jevne mellomrom, så en oppgradering (eller
+# et annet program som slipper minne) slår inn mens serveren kjører.
+# MAKS_SAMTIDIGE_TUNGE overstyrer manuelt hvis den settes.
 KOE_VENT_S = float(os.environ.get("KOE_VENT_S", "180"))
 MAKS_SAMTIDIGE_MB = int(os.environ.get("MAKS_SAMTIDIGE_MB", "400"))
-_tung_semafor = threading.BoundedSemaphore(MAKS_SAMTIDIGE_TUNGE)
+# Hvor mange som får stå inne per kort. OCR serialiseres uansett per kort,
+# så poenget er å holde kortet mettet — ikke å kjøre alt samtidig.
+SAMTIDIGE_PER_GPU = int(os.environ.get("SAMTIDIGE_PER_GPU", "4"))
+SAMTIDIGE_UTEN_GPU = int(os.environ.get("SAMTIDIGE_UTEN_GPU", "2"))
+# Minne en forespørsel legger beslag på mens den behandles. Målt: 10
+# samtidige skannede sider løftet serveren fra 7,0 til 8,1 GB ≈ 110 MB
+# hver; 300 gir romslig margin for større dokumenter.
+RAM_PER_JOBB_MB = int(os.environ.get("RAM_PER_JOBB_MB", "300"))
+VRAM_PER_JOBB_MB = int(os.environ.get("VRAM_PER_JOBB_MB", "700"))
+MIN_SAMTIDIGE = int(os.environ.get("MIN_SAMTIDIGE", "2"))
+MAKS_SAMTIDIGE_TAK = int(os.environ.get("MAKS_SAMTIDIGE_TAK", "64"))
+KAPASITET_MAAL_S = float(os.environ.get("KAPASITET_MAAL_S", "30"))
 _i_flukt_bytes = {"n": 0}
 _i_flukt_las = threading.Lock()
+
+
+def _gpu_ressurser() -> tuple:
+    """(antall kort, samlet ledig VRAM i MiB). (0, 0) uten CUDA."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return 0, 0.0
+        antall = torch.cuda.device_count()
+        ledig = 0.0
+        for i in range(antall):
+            try:
+                ledig += torch.cuda.mem_get_info(i)[0] / (1024 * 1024)
+            except Exception:
+                continue
+        return antall, ledig
+    except Exception:
+        return 0, 0.0
+
+
+def _ledig_ram_mb() -> float:
+    """Ledig systemminne i MiB. psutil hvis den finnes, ellers Windows-API."""
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        import ctypes
+
+        class _MINNE(ctypes.Structure):
+            _fields_ = [("lengde", ctypes.c_uint32),
+                        ("minne_last", ctypes.c_uint32),
+                        ("total_fys", ctypes.c_uint64),
+                        ("ledig_fys", ctypes.c_uint64),
+                        ("total_side", ctypes.c_uint64),
+                        ("ledig_side", ctypes.c_uint64),
+                        ("total_virt", ctypes.c_uint64),
+                        ("ledig_virt", ctypes.c_uint64),
+                        ("ledig_utvidet", ctypes.c_uint64)]
+
+        m = _MINNE()
+        m.lengde = ctypes.sizeof(_MINNE)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+            return m.ledig_fys / (1024 * 1024)
+    except Exception:
+        pass
+    return 4096.0        # ukjent maskin: anta beskjedent, aldri ubegrenset
+
+
+def mal_kapasitet() -> dict:
+    """Måler maskinen og regner ut hvor mange tunge forespørsler den tåler
+    SAMTIDIG akkurat nå. Den knappeste ressursen bestemmer — å slippe inn
+    flere enn den tåler gir ikke gjennomstrømning, bare minnepress og
+    lengre kø for alle.
+
+    Returnerer måling, grense og hvilken ressurs som binder, så tallet
+    kan begrunnes i /hjelp i stedet for å være magisk."""
+    manuell = os.environ.get("MAKS_SAMTIDIGE_TUNGE", "").strip()
+    kjerner = os.cpu_count() or 4
+    gpuer, vram_mb = _gpu_ressurser()
+    ram_mb = _ledig_ram_mb()
+
+    if gpuer:
+        # per kort: en fast kvote for å holde kortet mettet, men aldri
+        # flere enn det ledige VRAM-et faktisk bærer
+        fra_gpu = min(gpuer * SAMTIDIGE_PER_GPU,
+                      max(1, int(vram_mb // VRAM_PER_JOBB_MB)))
+    else:
+        fra_gpu = SAMTIDIGE_UTEN_GPU * max(1, kjerner // 4)
+    fra_cpu = max(1, kjerner // 2)
+    fra_ram = max(1, int(ram_mb // RAM_PER_JOBB_MB))
+
+    kilder = {"gpu": fra_gpu, "cpu": fra_cpu, "ram": fra_ram}
+    raa = min(kilder.values())
+    grense = max(MIN_SAMTIDIGE, min(raa, MAKS_SAMTIDIGE_TAK))
+    binder = min(kilder, key=kilder.get)
+
+    if manuell.isdigit() and int(manuell) > 0:
+        grense, binder = int(manuell), "manuell (MAKS_SAMTIDIGE_TUNGE)"
+
+    return {
+        "grense": grense,
+        "binder": binder,
+        "maalt": {
+            "gpu_kort": gpuer,
+            "gpu_ledig_mb": round(vram_mb),
+            "cpu_kjerner": kjerner,
+            "ram_ledig_mb": round(ram_mb),
+        },
+        "fra": kilder,
+    }
+
+
+class _Kapasitetsport:
+    """Slipper inn så mange samtidige tunge forespørsler som maskinen
+    faktisk bærer NÅ. Grensen måles på nytt hvert KAPASITET_MAAL_S, så en
+    server som får flere kort, mer minne eller flere kjerner tar imot
+    flere klienter av seg selv — uten omstart og uten at noe stilles om.
+
+    En vanlig Semaphore duger ikke: den låser antallet ved oppstart."""
+
+    def __init__(self):
+        self._las = threading.Condition()
+        self._inne = 0
+        self._kapasitet = None
+        self._maalt_ved = 0.0
+
+    def _gjeldende(self) -> dict:
+        """Kalles med _las holdt."""
+        naa = time.monotonic()
+        if (self._kapasitet is None
+                or naa - self._maalt_ved >= KAPASITET_MAAL_S):
+            self._maalt_ved = naa
+            self._kapasitet = mal_kapasitet()
+        return self._kapasitet
+
+    def status(self) -> dict:
+        with self._las:
+            kap = dict(self._gjeldende())
+            kap["i_arbeid"] = self._inne
+            return kap
+
+    def ta(self, frist: float) -> bool:
+        slutt = time.monotonic() + frist
+        with self._las:
+            while True:
+                if self._inne < self._gjeldende()["grense"]:
+                    self._inne += 1
+                    return True
+                igjen = slutt - time.monotonic()
+                if igjen <= 0:
+                    return False
+                # maks 1 s om gangen: da fanges en NY måling opp med en
+                # gang kapasiteten vokser, uten at noen står og venter
+                self._las.wait(min(igjen, 1.0))
+
+    def slipp(self) -> None:
+        with self._las:
+            self._inne = max(0, self._inne - 1)
+            self._las.notify()
+
+
+_kapasitet_port = _Kapasitetsport()
 # Endepunkter som gjør tungt arbeid SYNKRONT. /jobb er utelatt med vilje:
 # den svarer 202 med en gang og har allerede én arbeidstråd som grense.
 # /innsyn svarer også med en gang (arbeidet skjer i egen tråd).
@@ -2052,14 +2211,21 @@ class Handler(BaseHTTPRequestHandler):
                     "llm_tegn_direkte": f"{MAKS_LLM_TEGN} + deterministisk uttrekk fra hele dokumentet",
                 },
                 "strekkoder": "Code128/EAN/QR m.fl. dekodes automatisk (pyzbar) og legges ved svaret",
-                "samtidighet": (
-                    f"maks {MAKS_SAMTIDIGE_TUNGE} tunge forespørsler samtidig "
-                    f"(kø inntil {int(KOE_VENT_S)} s, deretter 503 med Retry-After) "
-                    f"og maks {MAKS_SAMTIDIGE_MB} MB opplasting i minnet samtidig. "
-                    "OCR og språkmodellen deler ett skjermkort og serialiseres "
-                    "uansett — for mange samtidige gir ikke mer gjennomstrømning. "
-                    "Skal mange klienter kjøre parallelt: bruk POST /jobb "
-                    "(svarer 202 med en gang, arbeider i bakgrunnen)"),
+                "kapasitet": {
+                    **_kapasitet_port.status(),
+                    "koe_vent_s": KOE_VENT_S,
+                    "opplasting_i_minnet_mb": MAKS_SAMTIDIGE_MB,
+                    "forklaring": (
+                        "Grensen er MÅLT på denne maskinen, ikke fast: flere kort, "
+                        "mer ledig minne eller flere kjerner gir automatisk plass til "
+                        "flere samtidige klienter (måles på nytt hvert "
+                        f"{int(KAPASITET_MAAL_S)}. sekund, uten omstart). «binder» "
+                        "sier hvilken ressurs som holder tallet nede. Overstyr med "
+                        "MAKS_SAMTIDIGE_TUNGE. MERK: OCR kjører fortsatt én side om "
+                        "gangen per kort — flere kort hever grensen og lar "
+                        "språkmodellen og OCR jobbe side om side, men full "
+                        "parallell OCR krever én modellinstans per kort."),
+                },
                 "sikkerhet": ("X-API-Key kreves på alle endepunkter" if API_NOKKEL else
                               "ÅPEN — sett miljøvariabelen API_NOKKEL for å kreve X-API-Key"),
                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},
@@ -2414,25 +2580,28 @@ class Handler(BaseHTTPRequestHandler):
             # slipp køplassen uansett hvordan forespørselen endte
             if getattr(self, "_har_koeplass", False):
                 self._har_koeplass = False
-                _tung_semafor.release()
+                _kapasitet_port.slipp()
 
     def _ta_koeplass(self, sti: str) -> bool:
-        """Sikrer en av de MAKS_SAMTIDIGE_TUNGE plassene for tungt arbeid.
-        Får vi ingen innen fristen, svarer vi ÆRLIG 503 med Retry-After —
-        bedre enn å la klienten henge i minutter uten å vite hvorfor."""
+        """Sikrer en plass i den MÅLTE kapasiteten. Får vi ingen innen
+        fristen, svarer vi ÆRLIG 503 med Retry-After — bedre enn å la
+        klienten henge i minutter uten å vite hvorfor."""
         if sti not in _TUNGE_STIER:
             return True
-        if _tung_semafor.acquire(timeout=KOE_VENT_S):
+        if _kapasitet_port.ta(KOE_VENT_S):
             self._har_koeplass = True
             return True
+        kap = _kapasitet_port.status()
         self._svar(503, {
             "ok": False,
-            "feil": (f"Serveren er opptatt: mer enn {MAKS_SAMTIDIGE_TUNGE} "
-                     f"forespørsler ble behandlet samtidig, og køen ble ikke "
-                     f"ledig innen {int(KOE_VENT_S)} s. Prøv igjen, eller bruk "
-                     "POST /jobb for store dokumenter (svarer med en gang og "
-                     "arbeider i bakgrunnen)."),
+            "feil": (f"Serveren er opptatt: den bærer {kap['grense']} "
+                     f"forespørsler samtidig på denne maskinen (begrenset av "
+                     f"{kap['binder']}), og køen ble ikke ledig innen "
+                     f"{int(KOE_VENT_S)} s. Prøv igjen, eller bruk POST /jobb "
+                     "for store dokumenter (svarer med en gang og arbeider i "
+                     "bakgrunnen)."),
             "opptatt": True,
+            "kapasitet": kap,
         }, hoder={"Retry-After": "30"})
         return False
 
