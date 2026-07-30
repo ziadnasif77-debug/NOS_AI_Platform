@@ -158,5 +158,27 @@ def kjor() -> None:
         print("Ferdig.")
 
 
+_HJELP = """Kjører hele treningsløkken: eksport fra Label Studio →
+finjustering av norhand (kandidat) → kvalitetsport (CER) → promotering
+bare hvis kandidaten er minst like god som live.
+
+  python skript/kjor_treningslop.py            kjør løpet
+  python skript/kjor_treningslop.py --hjelp    vis denne teksten
+
+MERK: løpet laster modeller på GPU-en og kan ta flere minutter. Stopp
+API-serveren først hvis kortet er lite (den holder Borealis residerende).
+"""
+
 if __name__ == "__main__":
+    # Argumentene ble tidligere IGNORERT: «--hjelp» startet et ekte
+    # treningsløp på GPU-en. Et løp skal aldri være noe man utløser ved
+    # å be om hjelp — ukjente flagg avvises nå i stedet.
+    _flagg = [a for a in sys.argv[1:] if a.startswith("-")]
+    if any(a in ("--hjelp", "-h", "--help", "/?") for a in sys.argv[1:]):
+        print(_HJELP)
+        sys.exit(0)
+    if _flagg:
+        print(f"Ukjent flagg: {' '.join(_flagg)}\n")
+        print(_HJELP)
+        sys.exit(2)
     kjor()

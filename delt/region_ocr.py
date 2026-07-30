@@ -21,6 +21,15 @@ import os
 import threading
 import time
 
+# numpy ble bare importert LOKALT inne i _norhand_les_batch, mens
+# _les_regioner brukte np.asarray i RapidOCR-grenen. Der var navnet
+# udefinert → NameError, som den brede «except Exception: pass» rett
+# under svelget i stillhet. Resultat: RapidOCR lastet modellene sine og
+# feilet så på HVER side, hvorpå EasyOCR overtok — på CPU når kortet er
+# fullt, altså 6–8 s/side i stedet for RapidOCRs 1,1 s. Hele
+# CPU-fallbacken har med andre ord aldri virket etter hensikten.
+import numpy as np
+
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NORHAND_STI = os.path.join(ROT, "modeller", "norhand")
 

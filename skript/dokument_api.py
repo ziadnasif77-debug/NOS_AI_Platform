@@ -38,6 +38,7 @@ import re
 import sys
 import tempfile
 import logging
+import socket
 import threading
 import time
 import uuid
@@ -53,6 +54,45 @@ if __name__ == "__main__" and hasattr(sys.stdout, "buffer"):
 
 ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROT)
+
+
+def _last_env_fil(sti: str = None) -> list:
+    """Leser .env i prosjektroten inn i miljøet.
+
+    SIKKERHETSFIKS: fila fantes og hadde API_NOKKEL satt, men INGEN kode
+    leste den — så serveren kjørte helt åpen mens operatøren trodde
+    nøkkel var påkrevd. Med tunnelen oppe betyr det at et dokument-API
+    med personopplysninger sto fritt tilgjengelig på internett.
+
+    Ekte miljøvariabler VINNER over fila, så en launcher eller
+    `set API_NOKKEL=` fortsatt kan overstyre. Returnerer navnene som
+    faktisk ble satt herfra, så oppstarten kan si det høyt."""
+    sti = sti or os.path.join(ROT, ".env")
+    satt = []
+    try:
+        with open(sti, encoding="utf-8", errors="replace") as f:
+            for linje in f:
+                linje = linje.strip()
+                if not linje or linje.startswith("#") or "=" not in linje:
+                    continue
+                navn, verdi = linje.split("=", 1)
+                navn, verdi = navn.strip(), verdi.strip().strip('"').strip("'")
+                # tomme verdier skal ikke overskrive noe, og et ekte
+                # miljø (launcher/tjeneste) har alltid forrang
+                if navn and verdi and not os.environ.get(navn):
+                    os.environ[navn] = verdi
+                    satt.append(navn)
+    except OSError:
+        pass
+    return satt
+
+
+# Bare når fila kjøres SOM SERVER. Å laste .env ved import ville vært en
+# bivirkning som rammer alle som importerer modulen — testene kjørte
+# plutselig med Label Studio-token og skrudde på auto-gjennomgang av seg
+# selv. Samme forbehold som stdout-innpakningen over. Dette må stå FØR
+# konstantene under, som leses fra miljøet.
+_ENV_SATT = _last_env_fil() if __name__ == "__main__" else []
 
 from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_belop, finn_alle_datoer,
@@ -2015,6 +2055,29 @@ SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui",
 # ------------------------------------------------------------------ #
 
 class Handler(BaseHTTPRequestHandler):
+    # Frist på selve socketen. socketserver kaller connection.settimeout()
+    # BARE når dette attributtet ikke er None — og standarden er None, så
+    # rfile.read() blokkerte i det uendelige.
+    #
+    # Det gjorde samtidighetsvakten om til en angrepsflate: køplassen tas
+    # før kroppen leses, så en klient som sender «Content-Length:
+    # 200000000» og deretter ingenting, holdt plassen for alltid. Med den
+    # målte grensen (gulvet 2 på et fullt 8 GB-kort) var TO slike nok til
+    # å låse /analyser, /spor, /uttrekk, /fyll_skjema og /dokument
+    # permanent — do_POST sin finally-blokk nås jo aldri. Det skjer også
+    # utilsiktet: et mobilnett som dropper midt i en stor opplasting.
+    # Nå avbrytes lesingen, unntaket propagerer, og plassen frigjøres.
+    timeout = float(os.environ.get("SOCKET_TIDSAVBRUDD_S", "120"))
+
+    def handle_one_request(self):
+        """Som standard, men en socket-frist skal gi en ryddig avslutning
+        av tilkoblingen — ikke en traceback i loggen for hver klient som
+        mister nettet."""
+        try:
+            return super().handle_one_request()
+        except (TimeoutError, socket.timeout):
+            self.close_connection = True
+
     def _autorisert(self) -> bool:
         """R38: er API_NOKKEL satt, kreves matchende X-API-Key-header.
         Tom nøkkel = åpen modus (kun for lokal testing uten sensitive data)."""
@@ -3475,6 +3538,21 @@ def main():
     print(f"  Felter (deterministisk): POST http://<din-ip>:{PORT}/analyser   (felt: fil)")
     print(f"  Fritt spørsmål (LLM):    POST http://<din-ip>:{PORT}/spor       (felter: fil + sporsmal)")
     print("  Alle endepunkter: GET /hjelp. Borealis laster i bakgrunnen.")
+    if _ENV_SATT:
+        print(f"  Leste fra .env: {', '.join(sorted(_ENV_SATT))}")
+    # Sikkerheten skal ALDRI være noe man må gjette seg til. Står serveren
+    # åpen samtidig som tunnelen er oppe, er dokumenter med
+    # personopplysninger fritt tilgjengelige på internett — det skal stå
+    # med store bokstaver i oppstarten, ikke gjemmes i GET /hjelp.
+    if API_NOKKEL:
+        print("  Sikkerhet: X-API-Key KREVES (API_NOKKEL er satt).")
+    else:
+        print("  " + "!" * 60)
+        print("  ADVARSEL: API-et er ÅPENT — hvem som helst som når porten")
+        print("  kan sende inn og lese ut dokumenter. Kjører du tunnelen,")
+        print("  gjelder det HELE INTERNETT. Sett API_NOKKEL i .env (eller")
+        print("  som miljøvariabel) og start på nytt for å kreve X-API-Key.")
+        print("  " + "!" * 60)
     print("  Avslutt med Ctrl+C.")
     print(strek + "\n")
     try:

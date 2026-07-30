@@ -1937,9 +1937,26 @@ TRENING_RESULTATER = {
 
 
 def _les_lokal_env() -> dict:
-    """Leser oppstart\\lokal_env.bat (set \"K=V\"-linjer) — gir GUI-en samme
-    hemmeligheter som launcherne (Label Studio-token m.m.)."""
+    """Leser oppstart\\lokal_env.bat (set \"K=V\"-linjer) OG .env i
+    prosjektroten — gir GUI-en samme hemmeligheter som serveren
+    (Label Studio-token, API_NOKKEL m.m.).
+
+    .env leses FØRST, så lokal_env.bat kan overstyre den: launcheren er
+    den som faktisk starter tjenestene. Uten .env her ville GUI-en blitt
+    låst ute med 401 i det øyeblikket API_NOKKEL begynte å virke."""
     miljo = {}
+    try:
+        for linje in (PROSJEKT_ROT / ".env").read_text(
+                encoding="utf-8", errors="replace").splitlines():
+            linje = linje.strip()
+            if not linje or linje.startswith("#") or "=" not in linje:
+                continue
+            navn, verdi = linje.split("=", 1)
+            verdi = verdi.strip().strip('"').strip("'")
+            if navn.strip() and verdi:
+                miljo[navn.strip()] = verdi
+    except OSError:
+        pass
     try:
         for linje in (OPPSTART_MAPPE / "lokal_env.bat").read_text(
                 encoding="ascii", errors="replace").splitlines():
@@ -2881,7 +2898,11 @@ class DokumentKlientApp:
 
         konfig = les_konfig()
         self._lagret_url = konfig.get("base_url") or STANDARD_URL
-        self._lagret_nokkel = konfig.get("api_nokkel") or ""
+        # Har brukeren ikke lagret en nøkkel selv, hentes serverens egen
+        # (.env / lokal_env.bat). Da virker GUI-en videre i det øyeblikket
+        # API_NOKKEL slår inn, i stedet for å møte 401 uten forklaring.
+        self._lagret_nokkel = (konfig.get("api_nokkel")
+                               or _les_lokal_env().get("API_NOKKEL", ""))
 
         self._bygg_ui()
         self.rot.protocol("WM_DELETE_WINDOW", self._ved_lukking)

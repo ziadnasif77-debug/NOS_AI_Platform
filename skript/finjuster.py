@@ -154,8 +154,34 @@ def finjuster_norhand() -> int | None:
     return len(korreksjoner)
 
 
+_HJELP = f"""Finjusterer norhand (TrOCR) på de menneskerettede
+korreksjonene og lagrer resultatet som KANDIDAT — live-modellen røres
+ikke. Krever minst {MIN_EKSEMPLER} korreksjoner.
+
+  python skript/finjuster.py            tren en kandidat
+  python skript/finjuster.py --hjelp    vis denne teksten
+
+MERK: treningen laster modeller på GPU-en og tar flere minutter.
+"""
+
 if __name__ == "__main__":
-    finjuster_norhand()
-    print("Kandidat klar. Kjør 'python skript/valider_modell.py' for å "
-          "sjekke den mot live før promotering (eller 'make trening' som "
-          "gjør alt i ett).")
+    # Argumentene ble IGNORERT: «--hjelp» startet en ekte GPU-trening.
+    if any(a in ("--hjelp", "-h", "--help", "/?") for a in sys.argv[1:]):
+        print(_HJELP)
+        sys.exit(0)
+    _flagg = [a for a in sys.argv[1:] if a.startswith("-")]
+    if _flagg:
+        print(f"Ukjent flagg: {' '.join(_flagg)}\n\n{_HJELP}")
+        sys.exit(2)
+
+    # Meldingen sto UTENFOR resultatsjekken og påsto «Kandidat klar» også
+    # når treningen stoppet tidlig (for få korreksjoner) og ingen kandidat
+    # fantes — så neste steg, valider_modell, ble kjørt på tomt grunnlag.
+    if finjuster_norhand():
+        print("Kandidat klar. Kjør 'python skript/valider_modell.py' for å "
+              "sjekke den mot live før promotering (eller 'make trening' som "
+              "gjør alt i ett).")
+    else:
+        print("Ingen kandidat ble trent — se meldingen over. "
+              "Live-modellen står urørt.")
+        sys.exit(1)

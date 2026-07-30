@@ -813,6 +813,16 @@ def finn_postnummer_sted(tekst: str):
 # sifre før tallet tolkes.
 _BELOP_TALL = r"\d+(?:[ .][\dOo]{3})*(?:,\d{2}|,-)?"
 
+# Beløp der valutaordet står ETTER tallet: «12 500 kroner», «15 000 kr»,
+# «500 NOK». Dette er den vanligste skrivemåten i norske vedtaksbrev, og
+# den falt mellom alle mønstrene: uten valutaord FORAN og uten desimaler
+# traff verken prefiks-regelen eller tusenskille-med-desimaler-regelen.
+# Målt før fiksen: «Du får utbetalt 12 500 kroner» ga INGEN beløp — og
+# skjemautfyllingen mistet dermed grunnlaget sitt på nettopp de beløpene
+# som betyr mest. Valutaordet er ankeret, akkurat som i prefiks-regelen,
+# så årstall, saksnummer og telefonnumre fortsatt ikke kan bli beløp.
+_BELOP_ETTER = r"\b(" + _BELOP_TALL + r")\s?(?:kr\.?|kroner|NOK)\b"
+
 
 def _o_til_null(tall: str) -> str:
     """Gjør OCR-ens bokstav-O om til sifferet 0 i et beløp som allerede
@@ -824,12 +834,14 @@ def finn_belop(tekst: str):
     """Kronebeløp: «kr 12 345,50», «NOK 5000», «12.345,-»."""
     treff = re.search(
         r"(?:kr\.?|NOK)\s?(" + _BELOP_TALL + r")|"
-        r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))",
+        r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))|"
+        + _BELOP_ETTER,
         tekst, re.IGNORECASE,
     )
     if not treff:
         return None
-    raa = _o_til_null((treff.group(1) or treff.group(2)).strip())
+    raa = _o_til_null(
+        (treff.group(1) or treff.group(2) or treff.group(3)).strip())
     normalisert = raa.replace(" ", "").replace(".", "").replace(",-", "").replace(",", ".")
     try:
         return float(normalisert)
@@ -947,10 +959,49 @@ def _unike(verdier) -> list:
     return ut
 
 
+_opptatt_cache = {"nokkel": None, "omraader": ()}
+
+
+def _opptatte_omraader(tekst: str) -> tuple:
+    """Tegnområder som ALLEREDE er tolket som noe annet enn en
+    identifikator: datoer og kronebeløp. Brukes til å hindre at
+    sifferskanningen limer nabotall sammen over en slik grense.
+
+    Enkelt-nivås buffer: strukturert_uttrekk kaller fire
+    identifikatorfunksjoner på samme tekst, og alle trenger det samme."""
+    nokkel = (len(tekst), hash(tekst))
+    if _opptatt_cache["nokkel"] != nokkel:
+        omraader = [(s, sl) for s, sl, *_ in _alle_datotreff(tekst)]
+        for m in re.finditer(
+                r"(?:kr\.?|NOK)\s?(?:" + _BELOP_TALL + r")|"
+                r"\b[\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-)|"
+                + _BELOP_ETTER, tekst, re.IGNORECASE):
+            omraader.append((m.start(), m.end()))
+        _opptatt_cache.update(nokkel=nokkel, omraader=tuple(omraader))
+    return _opptatt_cache["omraader"]
+
+
 def _tallkandidater(tekst: str, lengde: int):
     """Alle sifferstrenger av gitt lengde uansett gruppering — «180527
-    422 30», «1805.27.44230» og «18052744230» er samme kandidat."""
+    422 30», «1805.27.44230» og «18052744230» er samme kandidat.
+
+    VAKT: kandidaten forkastes hvis den overlapper en DATO eller et
+    BELØP. Mønsteret tillater et skilletegn mellom hvert sifferpar og
+    skilte derfor ikke mellom sifre i SAMME tall og to NABOTALL:
+    «Vedtak datert 01.01.2024 114 kroner» ble limt til «01012024114»,
+    som består mod11 — og ble rapportert som et gyldig FØDSELSNUMMER.
+    Det oppdiktede nummeret gikk videre inn i prompten merket
+    «KONTROLLERT av kode (sjekksum/format)» og havnet i fnr-feltet i
+    skjemautfyllingen, der nettopp den merkingen desarmerer den
+    menneskelige kontrollen. Tilsvarende ble «kr 103 456 789» til et
+    «organisasjonsnummer». Entallsvarianten finn_fodselsnummer har alltid
+    hatt det stramme mønsteret (6+5) og fant ingen av delene — dette var
+    en inkonsistens, ikke et bevisst design."""
+    opptatt = _opptatte_omraader(tekst)
     for treff in re.finditer(r"(?<!\d)\d(?:[ .]?\d)+(?!\d)", tekst):
+        if any(treff.start() < slutt and start < treff.end()
+               for start, slutt in opptatt):
+            continue
         kompakt = re.sub(r"[ .]", "", treff.group(0))
         if len(kompakt) == lengde:
             yield kompakt
@@ -1006,11 +1057,13 @@ def finn_alle_belop(tekst: str, maks: int = 100) -> list:
     for treff in re.finditer(
         r"(?:kr\.?|NOK)\s?(" + _BELOP_TALL + r")|"
         r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))|"
-        r"\b(\d{1,6},\d{2})\b",
+        r"\b(\d{1,6},\d{2})\b|"
+        + _BELOP_ETTER,
         tekst, re.IGNORECASE,
     ):
         raa = _o_til_null(
-            (treff.group(1) or treff.group(2) or treff.group(3)).strip())
+            (treff.group(1) or treff.group(2) or treff.group(3)
+             or treff.group(4)).strip())
         normalisert = (raa.replace(" ", "").replace(".", "")
                        .replace(",-", "").replace(",", "."))
         try:

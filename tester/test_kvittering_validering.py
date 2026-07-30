@@ -67,6 +67,41 @@ def test_bokstaver_alene_blir_ikke_belop(tekst):
     assert finn_belop(tekst) is None
 
 
+@pytest.mark.parametrize("tekst,forventet", [
+    # Funnet i systemrevisjonen: den VANLIGSTE norske skrivemåten manglet.
+    # Uten valutaord FORAN og uten desimaler traff verken prefiks-regelen
+    # eller tusenskille-med-desimaler-regelen — «12 500 kroner» ga INGEN
+    # beløp, og skjemautfyllingen mistet grunnlaget sitt.
+    ("Du får utbetalt 12 500 kroner i måneden", 12500.0),
+    ("Beløpet er 15 000 kr", 15000.0),
+    ("Sum 500 NOK", 500.0),
+    ("Totalt 1 250 000 kroner", 1250000.0),
+    ("Egenandel 250 kroner", 250.0),
+    ("Beløp 1 234,50 kroner", 1234.50),
+    ("Du skylder 12 500kr", 12500.0),          # uten mellomrom
+])
+def test_valutaord_ETTER_belopet(tekst, forventet):
+    assert finn_belop(tekst) == forventet
+    assert finn_alle_belop(tekst)[0]["verdi"] == forventet
+
+
+@pytest.mark.parametrize("tekst", [
+    # Suffiks-regelen må ikke gjøre løpende tall til beløp: valutaordet
+    # er ankeret, akkurat som i prefiks-regelen.
+    "Saksnummer 900123 i systemet",
+    "Telefon 97335868",
+    "Året 2026 var bra",
+    "Postnummer 0150 OSLO",
+    "Født 03.04.1985",
+    "Vedtaksdato 12.06.2026",
+    "Org.nr 923609016",
+    "Side 3 av 12",
+])
+def test_tall_uten_valutaord_blir_ikke_belop(tekst):
+    assert finn_belop(tekst) is None
+    assert finn_alle_belop(tekst) == []
+
+
 def test_alle_belop_paa_kvitteringstekst():
     """Hele kvitteringslinjene slik OCR faktisk leste dem: ingen av
     kronebeløpene skal blåses opp med en faktor hundre."""

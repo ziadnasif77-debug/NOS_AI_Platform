@@ -208,7 +208,26 @@ def eksporter():
     return len(trocr_data)
 
 
+_HJELP = """Henter ferdig annoterte korreksjoner fra Label Studio og
+klargjør dem som treningsdata i data/finjustering. Inkrementell: bare
+oppgaver som ikke er hentet før.
+
+  python skript/eksporter_fra_label_studio.py            hent nye
+  python skript/eksporter_fra_label_studio.py --hjelp    vis denne teksten
+
+Krever at Label Studio kjører og at API-nøkkelen er satt
+(oppstart/lokal_env.bat).
+"""
+
 if __name__ == "__main__":
+    # Argumentene ble IGNORERT — «--hjelp» kjørte en ekte eksport.
+    if any(a in ("--hjelp", "-h", "--help", "/?") for a in sys.argv[1:]):
+        print(_HJELP)
+        sys.exit(0)
+    _flagg = [a for a in sys.argv[1:] if a.startswith("-")]
+    if _flagg:
+        print(f"Ukjent flagg: {' '.join(_flagg)}\n\n{_HJELP}")
+        sys.exit(2)
     totalt = eksporter()
     if totalt > 0:
         print("\nEtter finjustering: start serveren på nytt for å ta den "

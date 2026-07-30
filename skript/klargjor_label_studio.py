@@ -176,5 +176,22 @@ def main() -> int:
     return 0
 
 
+_HJELP = """Setter opp Label Studio-prosjektet for OCR-korreksjon:
+oppretter prosjektet hvis det mangler, legger inn oppsettet med
+forhåndsmerkede bokser, kobler lokal lagring og skriver prosjekt-ID til
+oppstart/lokal_env.bat. Idempotent — trygg å kjøre flere ganger.
+
+  python skript/klargjor_label_studio.py            sett opp
+  python skript/klargjor_label_studio.py --hjelp    vis denne teksten
+"""
+
 if __name__ == "__main__":
+    # Argumentene ble IGNORERT — «--hjelp» kjørte hele oppsettet.
+    if any(a in ("--hjelp", "-h", "--help", "/?") for a in sys.argv[1:]):
+        print(_HJELP)
+        sys.exit(0)
+    _flagg = [a for a in sys.argv[1:] if a.startswith("-")]
+    if _flagg:
+        print(f"Ukjent flagg: {' '.join(_flagg)}\n\n{_HJELP}")
+        sys.exit(2)
     sys.exit(main())
