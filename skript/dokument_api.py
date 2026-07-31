@@ -2633,6 +2633,45 @@ class Handler(BaseHTTPRequestHandler):
                          daemon=True).start()
         return self._svar(200, {"ok": True, "innsyn_id": okt_id})
 
+    def _ekko(self, body, ct):
+        """POST /ekko — diagnose: svarer med NØYAKTIG hva klienten sendte.
+        «raa_deler» viser hver multipart-dels Content-Disposition slik den
+        FAKTISK kom, og «parser_ser» hva parseren fikk ut. Slik ser vi om en
+        klient (f.eks. UiPath) faktisk sender tekstfeltene, og med hvilket
+        feltnavn — uten å gjette."""
+        filnavn, filbytes, tekstfelter = None, None, {}
+        if "multipart/form-data" in ct:
+            filnavn, filbytes, tekstfelter = _parse_multipart(body, ct)
+        deler = []
+        if "boundary=" in ct:
+            boundary = ct.split("boundary=", 1)[1].strip().strip('"')
+            skille = ("--" + boundary).encode()
+            for d in body.split(skille):
+                if b"\r\n\r\n" not in d:
+                    continue
+                hoder, _, innhold = d.partition(b"\r\n\r\n")
+                innhold = innhold.rstrip(b"\r\n")
+                deler.append({
+                    "content_disposition":
+                        hoder.decode("utf-8", "replace").strip()[:300],
+                    "innhold_lengde": len(innhold),
+                    "innhold_start": innhold[:80].decode("utf-8", "replace"),
+                })
+        return self._svar(200, {
+            "ok": True,
+            "melding": "Ekko: dette er hva serveren MOTTOK fra deg.",
+            "content_type": ct,
+            "body_lengde": len(body),
+            "antall_deler": len(deler),
+            "parser_ser": {
+                "fil": filnavn,
+                "fil_bytes": len(filbytes) if filbytes else 0,
+                "tekstfelt_navn": sorted(tekstfelter.keys()),
+                "tekstfelter": {k: v[:200] for k, v in tekstfelter.items()},
+            },
+            "raa_deler": deler,
+        })
+
     def _les_dokument(self, filnavn, slag, innhold, maks_ocr, les_strekkoder):
         """Leser dokumentet ÉN gang og pakker det i en DokumentKontekst —
         delt av bryter-veien OG operasjoner-veien, så begge leser likt.
@@ -3136,7 +3175,7 @@ class Handler(BaseHTTPRequestHandler):
                 "status": jobb.get("status")})
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
-                       "/fyll_skjema", "/innsyn", "/dokument"):
+                       "/fyll_skjema", "/innsyn", "/dokument", "/ekko"):
             return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
@@ -3179,6 +3218,13 @@ class Handler(BaseHTTPRequestHandler):
             with _i_flukt_las:
                 _i_flukt_bytes["n"] -= lengde
         ct = self.headers.get("Content-Type", "")
+
+        # Diagnose: /ekko svarer med NØYAKTIG hva klienten sendte (rå
+        # multipart-deler + hva parseren ser). Til feilsøking av klienter
+        # (UiPath o.l.) der tekstfelter «forsvinner» — vi ser da om delene
+        # faktisk kom, og med hvilket Content-Disposition-navn.
+        if sti == "/ekko":
+            return self._ekko(body, ct)
 
         tekstfelter = {}
         if "multipart/form-data" in ct:
