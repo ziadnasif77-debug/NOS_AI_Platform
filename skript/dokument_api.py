@@ -2852,25 +2852,19 @@ class Handler(BaseHTTPRequestHandler):
                 "feil": f"Borealis er ikke tilgjengelig ({_borealis['status']}) — prøv igjen senere",
                 "borealis": _borealis["status"]})
 
-        # --- les dokumentet ÉN gang ---
-        ocr_brukt, ocr_motorer, fra_cache = False, None, False
-        handskrift, strekkoder = [], []
-        if slag == "tekst":
-            raa_tekst = (innhold or "").strip()
-        else:
-            a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
-            if not a.get("ok"):
-                return self._svar(400, a)
-            raa_tekst = a.get("tekst", "")
-            strekkoder = a.get("strekkoder", [])
-            handskrift = a.get("handskrift") or []
-            ocr_motorer = a.get("ocr_motorer")
-            ocr_brukt = a.get("ocr_brukt", False)
-            fra_cache = a.get("fra_cache", False)
-            if a.get("advarsel"):
-                advarsler.append(a["advarsel"])
-            if a.get("melding"):
-                advarsler.append(a["melding"])
+        # --- les dokumentet ÉN gang (delt _les_dokument med operasjoner-
+        # veien, så begge leser og cacher likt) ---
+        ktx, les_advarsler, feil = self._les_dokument(
+            filnavn, slag, innhold, maks_ocr, les_strekkoder)
+        if feil:
+            return self._svar(*feil)
+        advarsler.extend(les_advarsler)
+        raa_tekst = ktx.tekst
+        ocr_brukt = ktx.ocr_brukt
+        ocr_motorer = ktx.ocr_motorer
+        fra_cache = ktx.fra_cache
+        handskrift = ktx.handskrift
+        strekkoder = ktx.strekkoder
 
         borealis_klar = _borealis["status"] == "klar"
         borealis_feil = f"Borealis er ikke klar ({_borealis['status']}) — prøv igjen senere"
@@ -2895,16 +2889,15 @@ class Handler(BaseHTTPRequestHandler):
                         "feil": f"Delen feilet ({type(exc).__name__}): {exc}"[:300]}
 
         # --- raske deterministiske deler ---
+        # Bygges via motoren mot DEN SAMME konteksten (ktx), så den flate
+        # bryter-responsen og operasjoner-veien deler nøyaktig samme
+        # utregning. FelterOperasjon/StrukturOperasjon pakker svaret i
+        # {type, ok, data}; her plukkes «data» ut for å beholde den flate
+        # formen bryter-klientene alt får (uendret respons).
         if valg["felter"]:
-            deler["felter"] = trygt(lambda: {
-                "felter": utvid_entiteter(raa_tekst, {}),
-                "datoer": finn_alle_datoer(raa_tekst),
-                "datoer_detaljert": sett_dato_roller(
-                    klassifiser_datoer(raa_tekst)),
-                # dokumentets egen dato, skilt fra datoene i innholdet
-                "dokumentdato": dokumentdato_av(raa_tekst, ocr_brukt)})
+            deler["felter"] = trygt(lambda: FelterOperasjon().utfor(ktx)["data"])
         if valg["struktur"]:
-            deler["struktur"] = trygt(lambda: strukturert_uttrekk(raa_tekst))
+            deler["struktur"] = trygt(lambda: StrukturOperasjon().utfor(ktx)["data"])
 
         # --- modelldeler (kun på forespørsel) ---
         if valg["svar"]:

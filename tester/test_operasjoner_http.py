@@ -33,6 +33,7 @@ def _lag_handler():
         MAKS_OPERASJONER = H.MAKS_OPERASJONER
         _les_dokument = H._les_dokument
         _dokument_operasjoner = H._dokument_operasjoner
+        _dokument_samlet = H._dokument_samlet
 
         def __init__(self):
             self.svar = None
@@ -152,3 +153,56 @@ def test_rask_del_med_gir_200_selv_om_borealis_nede(monkeypatch):
     typer = {r["type"]: r for r in data["resultater"]}
     assert typer["felter"]["ok"] is True
     assert typer["svar"]["ok"] is False and "Borealis" in typer["svar"]["feil"]
+
+
+# ------------------------------------------------------------------ #
+#  Bryter-veien: den FLATE responsen skal være uendret etter at de    #
+#  deterministiske delene nå bygges via motoren (samme ktx).          #
+# ------------------------------------------------------------------ #
+
+def _kjor_brytere(tekstfelter, innhold=DOK):
+    f = _lag_handler()
+    f._dokument_samlet("dok.txt", "tekst", innhold, None, tekstfelter, True)
+    return f.svar
+
+
+def test_bryter_felter_beholder_flat_form():
+    """felter-delen skal fortsatt være det FLATE objektet (felter/datoer/
+    datoer_detaljert/dokumentdato) — ikke pakket i {type, data}."""
+    kode, data = _kjor_brytere({})
+    assert kode == 200 and data["valg"]["felter"] is True
+    felt = data["felter"]
+    assert set(felt.keys()) == {"felter", "datoer", "datoer_detaljert",
+                                "dokumentdato"}
+    assert "type" not in felt and "data" not in felt
+    assert felt["felter"]["telefon"] == "76118610"
+
+
+def test_bryter_felter_av_gir_null():
+    kode, data = _kjor_brytere({"felter": "nei"})
+    assert kode == 200 and data["felter"] is None
+
+
+def test_bryter_tekst_med_og_uten():
+    kode, data = _kjor_brytere({})
+    assert data["tekst"] == DOK.strip()  # tekst=ja er standard (teksten trimmes)
+    kode, data = _kjor_brytere({"tekst": "nei"})
+    assert data["tekst"] is None
+
+
+def test_bryter_skjema_felter_motor_beholder_skjema_nokkel():
+    """skjema-delen bruker nøkkelen «skjema» for utfyllingen (ikke «data»)
+    og har ingen «type» — uendret bryter-form."""
+    kode, data = _kjor_brytere({
+        "skjema": "ja", "skjema_motor": "felter",
+        "skjema_mal": '{"tlf":"{telefon}","stonad":"{ytelse}"}'})
+    assert kode == 200
+    sk = data["skjema"]
+    assert sk["ok"] is True and sk["motor"] == "felter"
+    assert "skjema" in sk and "type" not in sk and "data" not in sk
+    assert sk["skjema"] == {"tlf": "76118610", "stonad": "barnetrygd"}
+
+
+def test_bryter_ukjent_verdi_gir_400():
+    kode, data = _kjor_brytere({"felter": "kanskje"})
+    assert kode == 400 and "Ukjent bryterverdi" in data["feil"]
