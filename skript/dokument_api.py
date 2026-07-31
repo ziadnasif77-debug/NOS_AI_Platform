@@ -2047,7 +2047,11 @@ def _openapi() -> dict:
                     "Sender du sporsmal/skjema_mal uten bryter, slås delen på automatisk. "
                     "Brytere tar ja/nei (også 1/0, true/false, på/av) — en UKJENT verdi gir 400, "
                     "aldri en stille avslått del. Er BARE modelldeler bedt om mens Borealis er "
-                    "nede, svares 503 (retry-signal) i stedet for 200."),
+                    "nede, svares 503 (retry-signal) i stedet for 200.\n"
+                    "ALTERNATIVT KONTRAKT: sender du feltet 'operasjoner' (en JSON-liste av "
+                    "{type, …}), kjøres dokumentet gjennom operasjonsmotoren og svaret blir "
+                    "{ok, resultater:[{type, ok, …}]}. Samme motor, uniform og utvidbar form; "
+                    "bryterne over er den korte veien for de vanligste tilfellene."),
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object", "required": ["fil"],
                     "properties": {"fil": fil_felt,
@@ -2063,6 +2067,8 @@ def _openapi() -> dict:
                                                     "description": "modell=Borealis fyller alt (standard); felter=deterministisk fletting av {feltnavn}-plassholdere (rask, uten modell); auto=hybrid: deterministisk der regelen kan bevise, modell for resten (navn o.l.) med tallvakt"},
                                    "korriger": {"type": "string", "enum": ["ja", "nei"]},
                                    "tekst": {"type": "string", "enum": ["ja", "nei"]},
+                                   "operasjoner": {"type": "string",
+                                                   "description": "ALTERNATIV til bryterne: en JSON-liste av operasjoner, f.eks. [{\"type\":\"felter\"},{\"type\":\"skjema\",\"motor\":\"auto\",\"mal\":{...}}]. Gyldige typer: tekst, felter, struktur, svar (+sporsmal), skjema (+mal, +motor felter/modell/auto), korriger. Svar: {ok, resultater:[{type, ok, ...}]}. Maks 20 per kall"},
                                    "maks_sider": {"type": "integer"}}}}}},
                 "responses": {
                     "200": {"description":
@@ -2419,9 +2425,12 @@ class Handler(BaseHTTPRequestHandler):
                 "endepunkter": {
                     "POST /dokument": ("ETT kall med brytere: felter=ja/nei (standard ja), "
                                        "struktur=ja/nei, svar=ja/nei (+sporsmal), skjema=ja/nei "
-                                       "(+skjema_mal), korriger=ja/nei, tekst=ja/nei — dokumentet "
+                                       "(+skjema_mal, +skjema_motor felter/modell/auto), "
+                                       "korriger=ja/nei, tekst=ja/nei — dokumentet "
                                        "leses ÉN gang; modelldelene er AV som standard, så det "
-                                       "raske forblir raskt"),
+                                       "raske forblir raskt. ALTERNATIVT: felt 'operasjoner' "
+                                       "(JSON-liste av {type,…}) → {ok, resultater:[…]} via "
+                                       "operasjonsmotoren (uniform, utvidbar form)"),
                     "POST /analyser": "multipart/form-data, felt 'fil' → deterministiske felter + trenger_ocr",
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
                                    "fil UTEN 'sporsmal' → hele den utleste teksten ordrett (deterministisk); "
