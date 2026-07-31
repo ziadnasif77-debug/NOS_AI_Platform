@@ -1487,17 +1487,42 @@ def _flett_streng(verdi: str, flat: dict, ukjente: list):
     return _PLASSHOLDER.sub(_bytt, verdi)
 
 
-def flett_mal(mal, tekst: str, ocr_brukt: bool = False):
+def refererte_felt(mal) -> list:
+    """Alle feltnavn en mal peker på via {feltnavn} — også de som er
+    vevd inn i tekst («Ring {telefon}»). Brukes av den hybride motoren
+    til å se HVILKE felter malen faktisk trenger, så bare de manglende
+    sendes videre til modellen."""
+    navn: set = set()
+
+    def _gaa(node):
+        if isinstance(node, dict):
+            for v in node.values():
+                _gaa(v)
+        elif isinstance(node, list):
+            for v in node:
+                _gaa(v)
+        elif isinstance(node, str):
+            for m in _PLASSHOLDER.finditer(node):
+                navn.add(m.group(1).strip())
+
+    _gaa(mal)
+    return sorted(navn)
+
+
+def flett_mal(mal, tekst: str = None, ocr_brukt: bool = False, flat: dict = None):
     """Fyller en klients JSON-mal deterministisk fra dokumentteksten.
 
     «mal» kan være et objekt eller en liste (vilkårlig nøstet). Hver
     strengverdi tolkes av _flett_streng: «{feltnavn}» byttes mot den
     deterministiske verdien. Andre typer (tall, bool, null) beholdes.
 
-    Returnerer (utfylt, rapport) der rapport har «ukjente_felter» (navn
-    i malen som ikke finnes) og «tilgjengelige_felter» (alle gyldige
-    navn), så klienten raskt ser hva som kan flettes."""
-    flat = felter_flatt(tekst, ocr_brukt=ocr_brukt)
+    «flat» kan gis ferdig (f.eks. beriket av den hybride motoren med
+    modellfunnede felter); ellers bygges den fra teksten. Returnerer
+    (utfylt, rapport) der rapport har «ukjente_felter» (navn i malen som
+    ikke finnes) og «tilgjengelige_felter» (alle gyldige navn), så
+    klienten raskt ser hva som kan flettes."""
+    if flat is None:
+        flat = felter_flatt(tekst, ocr_brukt=ocr_brukt)
     ukjente: list = []
 
     def _gaa(node):

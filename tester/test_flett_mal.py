@@ -13,7 +13,7 @@ sys.path.insert(0, ".")
 
 import pytest
 
-from delt.tekstuttrekk import felter_flatt, flett_mal
+from delt.tekstuttrekk import felter_flatt, flett_mal, refererte_felt
 
 
 # En realistisk dokumenttekst med flere deterministiske felter.
@@ -142,4 +142,38 @@ def test_mellomrom_i_plassholder_taales():
     mal = {"a": "{ telefon }"}
     utfylt, rapport = flett_mal(mal, DOK)
     assert utfylt["a"] == "76118610"
+    assert rapport["ukjente_felter"] == []
+
+
+# ------------------------------------------------------------------ #
+#  refererte_felt: hvilke felter en mal trenger                       #
+# ------------------------------------------------------------------ #
+
+def test_refererte_felt_finner_alle_navn():
+    mal = {"a": "{telefon}", "b": {"c": "{poststed}"},
+           "d": ["{ytelse}", "konstant"], "e": "Ring {telefon} nå"}
+    assert refererte_felt(mal) == ["poststed", "telefon", "ytelse"]
+
+
+def test_refererte_felt_tom_uten_plassholdere():
+    assert refererte_felt({"a": "konstant", "b": 5}) == []
+
+
+def test_refererte_felt_tar_med_ukjent_konsept():
+    """Et navn uten deterministisk regel (som «navn») skal også telles —
+    det er nettopp disse den hybride motoren sender til modellen."""
+    assert "navn" in refererte_felt({"kunde": "{navn}"})
+
+
+# ------------------------------------------------------------------ #
+#  flat-overstyring: hybrid-motoren beriker tabellen selv             #
+# ------------------------------------------------------------------ #
+
+def test_flett_med_ferdig_flat():
+    """Gis flat direkte, brukes den — teksten leses ikke på nytt. Slik
+    setter hybrid-motoren inn modellfunnede felter (som «navn»)."""
+    flat = {"telefon": "99887766", "navn": "Terje Karlsen"}
+    utfylt, rapport = flett_mal({"tlf": "{telefon}", "kunde": "{navn}"},
+                                flat=flat)
+    assert utfylt == {"tlf": "99887766", "kunde": "Terje Karlsen"}
     assert rapport["ukjente_felter"] == []

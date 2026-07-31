@@ -101,7 +101,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_organisasjonsnummer,
                                finn_alle_telefoner, finn_dato,
                                finn_dokumentdato, finn_koder_med_kontekst,
-                               flett_mal, klassifiser_datoer, sett_dato_roller,
+                               felter_flatt, flett_mal, klassifiser_datoer,
+                               refererte_felt, sett_dato_roller,
                                strukturert_uttrekk,
                                utvid_entiteter, FLETT_REGEL_VERSJON,
                                UTTREKK_REGEL_VERSJON)
@@ -2033,7 +2034,11 @@ def _openapi() -> dict:
                     "- skjema=ja + skjema_mal: JSON-malen din utfylt. skjema_motor=modell "
                     "(standard): Borealis fyller med kodevalidering (som /fyll_skjema). "
                     "skjema_motor=felter: deterministisk fletting av {feltnavn}-plassholdere "
-                    "i malen — raskt, uten modell, virker når Borealis er nede\n"
+                    "i malen — raskt, uten modell, virker når Borealis er nede. "
+                    "skjema_motor=auto: HYBRID — regelen fyller alt den kan BEVISE "
+                    "(sjekksum/mønster/kontekst), og bare feltene den ikke fant (navn o.l. "
+                    "uten fast form) sendes til modellen med tallvakt. kilde_per_felt viser "
+                    "for hvert felt om verdien kom fra 'deterministisk' eller 'modell'\n"
                     "- korriger=ja: LLM-korrigert OCR-tekst\n"
                     "- tekst=nei: utelat fullteksten fra svaret\n"
                     "Modelldelene (svar/skjema/korriger) er AV som standard og feiler uavhengig — "
@@ -2054,8 +2059,8 @@ def _openapi() -> dict:
                                    "skjema_mal": {"type": "string",
                                                   "description": "Din JSON-mal (kreves når skjema=ja)"},
                                    "skjema_motor": {"type": "string",
-                                                    "enum": ["modell", "felter"],
-                                                    "description": "modell=Borealis fyller (standard); felter=deterministisk fletting av {feltnavn}-plassholdere (rask, uten modell)"},
+                                                    "enum": ["modell", "felter", "auto"],
+                                                    "description": "modell=Borealis fyller alt (standard); felter=deterministisk fletting av {feltnavn}-plassholdere (rask, uten modell); auto=hybrid: deterministisk der regelen kan bevise, modell for resten (navn o.l.) med tallvakt"},
                                    "korriger": {"type": "string", "enum": ["ja", "nei"]},
                                    "tekst": {"type": "string", "enum": ["ja", "nei"]},
                                    "maks_sider": {"type": "integer"}}}}}},
@@ -2699,18 +2704,21 @@ class Handler(BaseHTTPRequestHandler):
                     "feil": "'skjema_mal' må være et JSON-objekt (eller en liste) med felter",
                     "felter_feil": [{"pointer": "/skjema_mal",
                                      "message": "Må være et ikke-tomt objekt eller liste"}]})
-            if skjema_motor not in ("modell", "felter"):
+            if skjema_motor not in ("modell", "felter", "auto"):
                 return self._svar(400, {
                     "ok": False,
                     "feil": ("Ukjent 'skjema_motor': "
                              f"{skjema_motor!r}. Bruk 'modell' (Borealis "
-                             "fyller) eller 'felter' (deterministisk "
-                             "fletting av {feltnavn}-plassholdere)."),
+                             "fyller alt), 'felter' (deterministisk "
+                             "fletting av {feltnavn}-plassholdere) eller "
+                             "'auto' (deterministisk der det går, modell "
+                             "for resten)."),
                     "felter_feil": [{"pointer": "/skjema_motor",
-                                     "message": "Bruk 'modell' eller 'felter'"}]})
+                                     "message": "Bruk 'modell', 'felter' eller 'auto'"}]})
 
-        # Deterministisk fletting krever ALDRI modellen — bare de LLM-
-        # baserte delene teller i modell-porten under.
+        # Bare «modell»-motoren MÅ ha Borealis. «felter» er ren kode, og
+        # «auto» faller elegant tilbake til deterministisk hvis modellen er
+        # nede — begge teller derfor som RASKE deler i porten under.
         skjema_med_modell = valg["skjema"] and skjema_motor == "modell"
 
         # Konsistens med /spor og /fyll_skjema: er BARE modelldeler bedt om
@@ -2718,7 +2726,7 @@ class Handler(BaseHTTPRequestHandler):
         # der alt innholdet er feilobjekter. Er en rask del også bedt om,
         # gjelder «delene feiler uavhengig» og vi svarer 200.
         rask_del = (valg["tekst"] or valg["felter"] or valg["struktur"]
-                    or (valg["skjema"] and skjema_motor == "felter"))
+                    or (valg["skjema"] and skjema_motor in ("felter", "auto")))
         bare_modell = not rask_del
         vil_ha_modell = valg["svar"] or skjema_med_modell or valg["korriger"]
         if bare_modell and vil_ha_modell and _borealis["status"] != "klar":
@@ -2815,6 +2823,16 @@ class Handler(BaseHTTPRequestHandler):
                             "tilgjengelige_felter":
                                 rapport["tilgjengelige_felter"]}
                 deler["skjema"] = trygt(_flett_del)
+            elif skjema_motor == "auto":
+                # Hybrid: deterministisk der regelen kan BEVISE, modell for
+                # resten (navn o.l. uten fast form) — med tallvakt. Faller
+                # tilbake til ren deterministisk hvis Borealis er nede.
+                def _hybrid_del():
+                    res = flett_mal_hybrid(raa_tekst, mal, ocr_brukt,
+                                           borealis_klar and not tomt_dokument)
+                    res["motor"] = "auto"
+                    return res
+                deler["skjema"] = trygt(_hybrid_del)
             elif not borealis_klar:
                 deler["skjema"] = {"ok": False, "feil": borealis_feil}
             elif tomt_dokument:
@@ -3543,6 +3561,56 @@ def fyll_skjema_kjerne(dok: str, mal: dict) -> dict:
                 "raasvar": svar_tekst[:1500]}
     renset, avvik = rens_skjemasvar(mal, utfylt, dok)
     return {"ok": True, "skjema": renset, "avvik": avvik}
+
+
+def flett_mal_hybrid(dok: str, mal, ocr_brukt: bool = False,
+                     borealis_klar: bool = True):
+    """Hybrid malfletting: det HANDFASTE deterministisk, RESTEN med modell.
+
+    Regelen fyller først alt den kan BEVISE (sjekksum, mønster, kontekst)
+    — raskt og uten hallusinasjon. Bare feltene den IKKE fant (typisk
+    fritekst uten fast form: navn, begrunnelse, arbeidsgiver) sendes til
+    modellen, som grunnes med de deterministisk funnede tallene og
+    kontrolleres av tallvakten (rens_skjemasvar). Modellen rører ALDRI et
+    felt regelen alt har bevist — matematikk slår gjetning.
+
+    Returnerer {"ok": True, "skjema": utfylt, "kilde_per_felt": {...},
+    "modell_brukt": bool, "avvik": [...], "ukjente_felter": [...]}.
+    «kilde_per_felt» sier for hvert feltnavn om verdien kom fra
+    «deterministisk» eller «modell» — full sporbarhet."""
+    flat = felter_flatt(dok, ocr_brukt=ocr_brukt)
+    referert = refererte_felt(mal)
+    kilde_per_felt = {f: "deterministisk"
+                      for f in referert if flat.get(f) is not None}
+    mangler = [f for f in referert if flat.get(f) is None]
+
+    avvik: list = []
+    modell_brukt = False
+    if mangler and borealis_klar:
+        # Bare de manglende feltene til modellen — malen holdes liten, og
+        # feltnavnet (klientens eget, f.eks. «avsender_navn») er hintet
+        # modellen fyller etter. Gjenbruker HELE grunningen + tallvakten.
+        sub_mal = {f: "" for f in mangler}
+        sub = fyll_skjema_kjerne(dok, sub_mal)
+        if sub.get("ok"):
+            modell_brukt = True
+            avvik = sub.get("avvik", [])
+            for f in mangler:
+                v = sub["skjema"].get(f, "")
+                if v not in ("", None):
+                    flat[f] = v               # beriker flat-tabellen
+                    kilde_per_felt[f] = "modell"
+
+    utfylt, rapport = flett_mal(mal, flat=flat)
+    return {
+        "ok": True,
+        "skjema": utfylt,
+        "kilde_per_felt": kilde_per_felt,
+        "modell_brukt": modell_brukt,
+        "avvik": avvik,
+        "ukjente_felter": rapport["ukjente_felter"],
+        "tilgjengelige_felter": rapport["tilgjengelige_felter"],
+    }
 
 
 def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
