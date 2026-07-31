@@ -111,8 +111,12 @@ def send(sti: str, valg: dict, sporsmal: str, mal: dict, tidsavbrudd: int):
             d = r.json()
         except ValueError:
             pass
-        sys.exit(f"HTTP {r.status_code}: {d.get('feil') or r.text[:300]}\n"
-                 f"Referanse (uuid) for support: {d.get('uuid') or korr}")
+        linjer = [f"HTTP {r.status_code}: {d.get('feil') or r.text[:300]}"]
+        # RFC 9457: vis HVILKET felt som er galt, når serveren sier det
+        for e in (d.get("problem") or {}).get("errors") or []:
+            linjer.append(f"  felt {e.get('pointer')}: {e.get('message')}")
+        linjer.append(f"Referanse (uuid) for support: {d.get('uuid') or korr}")
+        sys.exit("\n".join(linjer))
     return r.json()
 
 

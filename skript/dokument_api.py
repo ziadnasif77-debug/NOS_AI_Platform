@@ -414,8 +414,49 @@ LS_KONFIDENS_TERSKEL = float(os.environ.get("LS_KONFIDENS_TERSKEL", "0.85"))
 AUTO_GJENNOMGANG = bool(LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY)
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
-API_VERSJON = "1.2.0"
+API_VERSJON = "1.3.0"
 PROMPT_VERSJON = "p10"
+
+# RFC 9457 Problem Details — samme standard som NAV Oppgave-APIet bruker.
+# Basis-URI-en for «type» kan overstyres (settes til tjenestens egen
+# adresse i produksjon); ellers en nøytral placeholder.
+PROBLEM_BASIS = os.environ.get(
+    "PROBLEM_BASIS_URI", "https://nav-dokument-api/problems").rstrip("/")
+# Kort, stabil tittel per statuskode — det maskinlesbare «hva», mens
+# «detail» er den menneskelige forklaringen fra selve feilstedet.
+_PROBLEM_TITLER = {
+    400: ("ugyldig-input", "Ugyldig input"),
+    401: ("unauthorized", "Unauthorized"),
+    404: ("ikke-funnet", "Ikke funnet"),
+    409: ("konflikt", "Konflikt"),
+    413: ("for-stor", "For stor forespørsel"),
+    429: ("for-mange-kall", "For mange kall"),
+    503: ("utilgjengelig", "Tjenesten er opptatt"),
+    500: ("intern-feil", "Intern feil"),
+}
+
+
+def _problem_detaljer(kode, detalj, korrelasjon, sti=None, felter_feil=None):
+    """Bygger et RFC 9457-objekt {type, title, status, detail, traceId,
+    (errors)}. traceId = korrelasjons-ID-en, så ett oppslag kobler
+    problemet til logglinjen. `felter_feil` er en valgfri liste
+    {pointer, message, (value)} som forteller HVILKET felt som er galt —
+    slik NAV Oppgave-APIet gjør, i stedet for bare «ugyldig input»."""
+    kode = kode.value if hasattr(kode, "value") else kode
+    slug, tittel = _PROBLEM_TITLER.get(kode, ("feil", "Feil"))
+    problem = {
+        "type": f"{PROBLEM_BASIS}/{slug}",
+        "title": tittel,
+        "status": kode,
+        "detail": detalj or tittel,
+        "traceId": korrelasjon,
+    }
+    if sti:
+        problem["instance"] = sti
+    if felter_feil:
+        problem["errors"] = felter_feil
+    return problem
+
 
 _NORHAND_VERSJON = None
 
@@ -1750,6 +1791,22 @@ JOBB_STI = os.path.join(ROT, "data", "jobber")
 _jobber = {}
 _jobb_ko = queue.Queue()
 _jobb_las = threading.Lock()   # beskytter jobb-mutasjon mot samtidig lesing
+# Idempotency-Key → jobb_id. Sender en klient samme nøkkel om igjen (typisk
+# automatisk retry etter et nettbrudd), får den DEN OPPRINNELIGE jobben i
+# stedet for en ny — så et avbrutt opplastingsforsøk aldri gir to jobber
+# for samme dokument. NAV Oppgave-APIet bruker samme mekanisme.
+_idempotens = {}
+
+
+def _jobb_status(jobb: dict, ny_status: str, **felter) -> None:
+    """Setter status og øker versjon — grunnlaget for optimistisk låsing.
+    Hver endring løfter versjon med 1, så en klient som avbryter med en
+    utdatert versjon oppdager at noen (typisk arbeidstråden) har rukket å
+    endre jobben i mellomtiden, og får 409 i stedet for en stille no-op."""
+    jobb["status"] = ny_status
+    jobb["versjon"] = jobb.get("versjon", 1) + 1
+    for k, v in felter.items():
+        jobb[k] = v
 
 
 def _jobb_lagre(jobb: dict) -> None:
@@ -1787,7 +1844,7 @@ def _jobb_arbeider() -> None:
         jobb = _jobber.get(jobb_id)
         if jobb is None or jobb.get("avbrutt"):
             if jobb is not None:
-                jobb["status"] = "avbrutt"
+                _jobb_status(jobb, "avbrutt")
                 with _jobb_las:
                     jobb.pop("_data", None)   # frigjør filbytene
                 try:
@@ -1811,7 +1868,7 @@ def _jobb_arbeider() -> None:
             except ImportError:
                 _dekode = None
 
-            jobb["status"] = "pågår"
+            _jobb_status(jobb, "pågår")
             with _jobb_las:
                 data = jobb.pop("_data", None)
             doc = fitz.open(stream=data, filetype="pdf")
@@ -1828,7 +1885,8 @@ def _jobb_arbeider() -> None:
                 else:
                     t = tekstlag.strip()
                 jobb.update(
-                    status="ferdig", tekst=t, antall_tegn=len(t),
+                    status="ferdig", versjon=jobb.get("versjon", 1) + 1,
+                    tekst=t, antall_tegn=len(t),
                     felter=utvid_entiteter(t, {}), datoer=finn_alle_datoer(t),
                     # tekstlag = digitalt født, ingen OCR (ocr_brukt=False)
                     dokumentdato=dokumentdato_av(t, ocr_brukt=False),
@@ -1843,7 +1901,7 @@ def _jobb_arbeider() -> None:
             start = time.time()
             for i, side in enumerate(doc):
                 if jobb.get("avbrutt"):
-                    jobb["status"] = "avbrutt"
+                    _jobb_status(jobb, "avbrutt")
                     break
                 pix = side.get_pixmap(matrix=ocr_skala(doc, side))
                 bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
@@ -1885,7 +1943,8 @@ def _jobb_arbeider() -> None:
                     tekst = "\n".join(tekster).strip()
                 jobb["sekunder_igjen_estimat"] = None
                 jobb.update(
-                    status="ferdig", tekst=tekst, antall_tegn=len(tekst),
+                    status="ferdig", versjon=jobb.get("versjon", 1) + 1,
+                    tekst=tekst, antall_tegn=len(tekst),
                     felter=utvid_entiteter(tekst, {}),
                     datoer=finn_alle_datoer(tekst),
                     # Store skannede bunker går HIT, ikke gjennom /analyser
@@ -1897,8 +1956,7 @@ def _jobb_arbeider() -> None:
                 )
             _jobb_lagre(jobb)
         except Exception as exc:
-            jobb["status"] = "feil"
-            jobb["feil"] = str(exc)
+            _jobb_status(jobb, "feil", feil=str(exc))
             try:
                 _jobb_lagre(jobb)
             except Exception:
@@ -1929,8 +1987,19 @@ def _openapi() -> dict:
                 "(NAV-konvensjon) — samme endepunkt.\n\n"
                 "**Sporing:** send gjerne X-Correlation-ID; den ekkoes i svaret og "
                 "logges, så én sak kan følges på tvers av tjenester. Mangler den, "
-                "lager serveren en. Feilsvar har formen {ok:false, feil, uuid} der "
-                "uuid er korrelasjons-ID-en — oppgi den til support."),
+                "lager serveren en.\n\n"
+                "**Feilformat:** feilsvar har både de enkle feltene {ok:false, feil, "
+                "uuid} OG et RFC 9457-objekt «problem» {type, title, status, detail, "
+                "traceId, (errors med pointer per felt)} — samme standard som NAV "
+                "Oppgave-APIet. Bruk det du trenger.\n\n"
+                "**Tolerant reader:** les kun feltene du bruker og ignorer resten. "
+                "Vi UTVIDER svar med nye felter uten å regne det som en brytende "
+                "endring; brytende endringer kommer under et nytt versjonsprefiks "
+                "(/api/v2). Da er integrasjonen din robust mot videre utvikling.\n\n"
+                "**Store dokumenter (POST /jobb):** send Idempotency-Key (UUID) for "
+                "retry-trygghet — samme nøkkel gir samme jobb, aldri en dublett. "
+                "Avbryt med optimistisk låsing: ?versjon=N (eller X-Versjon) gir 409 "
+                "hvis noen andre har endret jobben i mellomtiden."),
         },
         "components": {
             "securitySchemes": {"ApiKeyAuth": {
@@ -2040,22 +2109,32 @@ def _openapi() -> dict:
                 "responses": {"200": {"description": "skjema (utfylt og renset), avvik (alle inngrep deklarert)"}}}},
             "/jobb": {"post": {
                 "summary": "Asynkron OCR av store dokumenter (ubegrenset antall sider)",
+                "parameters": [{"name": "Idempotency-Key", "in": "header", "required": False,
+                                "schema": {"type": "string", "format": "uuid"},
+                                "description": "Retry-trygghet: samme nøkkel gir samme jobb "
+                                               "(200 med idempotent_gjenbruk=true), aldri en dublett"}],
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object", "required": ["fil"],
                     "properties": {"fil": fil_felt}}}}},
-                "responses": {"202": {"description": "jobb_id — følg med på GET /jobb/{id}"}}}},
+                "responses": {"202": {"description": "jobb_id + versjon — følg med på GET /jobb/{id}"}}}},
             "/jobb/{id}": {"get": {"summary": "Jobbstatus og fremdrift",
                 "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "responses": {"200": {"description":
-                    "status, sider_ferdig/sider_totalt, tidsestimat, felter, datoer og "
-                    "dokumentdato (med «periode»: datospennet fra–til og dato per side — "
-                    "særlig nyttig her, siden store skannede bunker går via bakgrunnsjobber)"}}}},
+                    "status, versjon (for optimistisk låsing), sider_ferdig/sider_totalt, "
+                    "tidsestimat, felter, datoer og dokumentdato (med «periode»: datospennet "
+                    "fra–til og dato per side — særlig nyttig her, siden store skannede bunker "
+                    "går via bakgrunnsjobber)"}}}},
             "/jobb/{id}/tekst": {"get": {"summary": "Hele den utleste teksten fra en ferdig jobb",
                 "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "responses": {"200": {"description": "tekst, antall_tegn"}}}},
             "/jobb/{id}/avbryt": {"post": {"summary": "Avbryt en kø/pågående jobb",
-                "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
-                "responses": {"200": {"description": "status avbrytes"}}}},
+                "parameters": [
+                    {"name": "id", "in": "path", "required": True, "schema": {"type": "string"}},
+                    {"name": "versjon", "in": "query", "required": False,
+                     "schema": {"type": "integer"},
+                     "description": "Optimistisk låsing: 409 hvis jobben er endret siden denne versjonen"}],
+                "responses": {"200": {"description": "status avbrytes + versjon"},
+                              "409": {"description": "Versjonskonflikt eller jobben er i en sluttilstand"}}}},
         },
     }
 
@@ -2179,8 +2258,18 @@ class Handler(BaseHTTPRequestHandler):
             # support, som slår den opp i loggen — i stedet for å lete
             # etter «noe som skjedde rundt det tidspunktet». Legges bare på
             # feil (ok=False), så vellykkede svar beholder formen sin.
-            if data.get("ok") is False and "uuid" not in data:
-                data["uuid"] = korr
+            if data.get("ok") is False:
+                if "uuid" not in data:
+                    data["uuid"] = korr
+                # RFC 9457 Problem Details: ett STANDARDISERT feilobjekt
+                # (som NAV Oppgave-APIet), bygget ÉN gang her — de gamle
+                # feltene (ok/feil/uuid) beholdes, så ingen klient brytes,
+                # men en klient som forstår standarden får {type, title,
+                # status, detail, traceId} også.
+                if "problem" not in data:
+                    data["problem"] = _problem_detaljer(
+                        kode, data.get("feil"), korr, self._sti(),
+                        data.pop("felter_feil", None))
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(kode)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2264,6 +2353,18 @@ class Handler(BaseHTTPRequestHandler):
             trygg = re.sub(r"[^A-Za-z0-9._-]", "", raa)[:64]
             self._korr_id = trygg or uuid.uuid4().hex
         return self._korr_id
+
+    def _forventet_versjon(self):
+        """Klientens forventede jobb-versjon for optimistisk låsing, fra
+        ?versjon=N eller X-Versjon-headeren. None hvis ikke oppgitt (da
+        gjelder ingen låsing). Ugyldig verdi behandles som None."""
+        from urllib.parse import parse_qs, urlparse
+        raa = (parse_qs(urlparse(self.path).query).get("versjon", [None])[0]
+               or self.headers.get("X-Versjon"))
+        try:
+            return int(raa) if raa is not None else None
+        except (ValueError, TypeError):
+            return None
 
     def do_GET(self):
         self._t0_req = time.time()
@@ -2527,7 +2628,10 @@ class Handler(BaseHTTPRequestHandler):
         if ukjente:
             return self._svar(400, {"ok": False, "feil": (
                 "Ukjent bryterverdi: " + ", ".join(ukjente)
-                + ". Bruk ja/nei (eller 1/0, true/false).")})
+                + ". Bruk ja/nei (eller 1/0, true/false)."),
+                "felter_feil": [{"pointer": f"/{u.split('=')[0]}",
+                                 "message": "Ukjent bryterverdi (bruk ja/nei)"}
+                                for u in ukjente]})
 
         sporsmal = tekstfelter.get("sporsmal", "").strip()
         mal_raa = tekstfelter.get("skjema_mal", "").strip()
@@ -2542,8 +2646,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(400, {"ok": False,
                                     "feil": "Ingen fil funnet (felt 'fil')"})
         if valg["svar"] and not sporsmal:
-            return self._svar(400, {"ok": False,
-                                    "feil": "svar=ja krever feltet 'sporsmal'"})
+            return self._svar(400, {
+                "ok": False, "feil": "svar=ja krever feltet 'sporsmal'",
+                "felter_feil": [{"pointer": "/sporsmal",
+                                 "message": "Påkrevd når svar=ja"}]})
         # JSON-mal limt i sporsmal-feltet: /spor ruter slikt automatisk til
         # skjemautfylling. Her finnes et eget felt for det — si fra, ellers
         # ville malen blitt sendt som et vanlig SPØRSMÅL til modellen.
@@ -2556,18 +2662,26 @@ class Handler(BaseHTTPRequestHandler):
         mal = None
         if valg["skjema"]:
             if not mal_raa:
-                return self._svar(400, {"ok": False,
-                                        "feil": "skjema=ja krever feltet 'skjema_mal' (din JSON-mal)"})
+                return self._svar(400, {
+                    "ok": False,
+                    "feil": "skjema=ja krever feltet 'skjema_mal' (din JSON-mal)",
+                    "felter_feil": [{"pointer": "/skjema_mal",
+                                     "message": "Påkrevd når skjema=ja"}]})
             try:
                 mal = json.loads(mal_raa)
             except json.JSONDecodeError as exc:
-                return self._svar(400, {"ok": False,
-                                        "feil": f"Ugyldig JSON i 'skjema_mal': {exc}"})
+                return self._svar(400, {
+                    "ok": False, "feil": f"Ugyldig JSON i 'skjema_mal': {exc}",
+                    "felter_feil": [{"pointer": "/skjema_mal",
+                                     "message": "Ikke gyldig JSON"}]})
             # Lister godtas (rens_skjemasvar håndterer dem rekursivt) —
             # samme kontrakt som /fyll_skjema, slik dokumentasjonen lover
             if not isinstance(mal, (dict, list)) or not mal:
-                return self._svar(400, {"ok": False,
-                                        "feil": "'skjema_mal' må være et JSON-objekt (eller en liste) med felter"})
+                return self._svar(400, {
+                    "ok": False,
+                    "feil": "'skjema_mal' må være et JSON-objekt (eller en liste) med felter",
+                    "felter_feil": [{"pointer": "/skjema_mal",
+                                     "message": "Må være et ikke-tomt objekt eller liste"}]})
 
         # Konsistens med /spor og /fyll_skjema: er BARE modelldeler bedt om
         # og modellen er nede, er 503 med retry-signal riktigere enn 200
@@ -2757,10 +2871,31 @@ class Handler(BaseHTTPRequestHandler):
             jobb = _jobber.get(jid)
             if jobb is None:
                 return self._svar(404, {"ok": False, "feil": "Ukjent jobb_id"})
+            # Optimistisk låsing (NAV-konvensjon): sender klienten en
+            # forventet versjon (?versjon=N eller X-Versjon-header) og den
+            # ikke stemmer, har noen andre — typisk arbeidstråden — endret
+            # jobben siden klienten sist så den. Da 409, med gjeldende
+            # versjon så klienten kan hente på nytt og vurdere om avbrudd
+            # fortsatt er ønskelig. Uten oppgitt versjon: uendret oppførsel.
+            forventet = self._forventet_versjon()
+            if forventet is not None and forventet != jobb.get("versjon"):
+                return self._svar(409, {
+                    "ok": False,
+                    "feil": (f"Versjonskonflikt: du sendte versjon {forventet}, "
+                             f"men jobben er nå versjon {jobb.get('versjon')} "
+                             f"(status {jobb.get('status')}). Hent på nytt."),
+                    "jobb_id": jid, "versjon": jobb.get("versjon"),
+                    "status": jobb.get("status")})
             if jobb.get("status") in ("kø", "pågår"):
                 jobb["avbrutt"] = True
-                return self._svar(200, {"ok": True, "jobb_id": jid, "status": "avbrytes"})
-            return self._svar(409, {"ok": False, "feil": f"Jobben er allerede {jobb.get('status')}"})
+                return self._svar(200, {"ok": True, "jobb_id": jid,
+                                        "status": "avbrytes",
+                                        "versjon": jobb.get("versjon")})
+            return self._svar(409, {
+                "ok": False,
+                "feil": f"Jobben er allerede {jobb.get('status')}",
+                "jobb_id": jid, "versjon": jobb.get("versjon"),
+                "status": jobb.get("status")})
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
                        "/fyll_skjema", "/innsyn", "/dokument"):
@@ -2870,11 +3005,25 @@ class Handler(BaseHTTPRequestHandler):
                                          tekstfelter, les_strekkoder)
 
         if sti == "/jobb":
+            # Idempotens: samme Idempotency-Key → samme jobb (retry-trygt).
+            idem = re.sub(r"[^A-Za-z0-9._-]", "",
+                          self.headers.get("Idempotency-Key", ""))[:64]
+            if idem:
+                with _jobb_las:
+                    tidligere = _idempotens.get(idem)
+                if tidligere and tidligere in _jobber:
+                    with _jobb_las:
+                        vis = {k: v for k, v in _jobber[tidligere].items()
+                               if not k.startswith("_")}
+                    vis["ok"] = True
+                    vis["idempotent_gjenbruk"] = True
+                    return self._svar(200, vis)
             jobb_id = uuid.uuid4().hex[:12]
             # Alle feltene arbeidstråden senere fyller, forhåndsdeklareres
             # her — da endrer den bare VERDIER (aldri dict-størrelse), så
             # en samtidig statuspoll aldri krasjer under iterasjon.
             jobb = {"jobb_id": jobb_id, "filnavn": filnavn, "status": "kø",
+                    "versjon": 1,
                     "sider_ferdig": 0, "sider_totalt": None,
                     "sekunder_brukt": 0, "sekunder_igjen_estimat": None,
                     "tekst": "", "antall_tegn": 0, "felter": {}, "datoer": [],
@@ -2895,6 +3044,11 @@ class Handler(BaseHTTPRequestHandler):
                 jobb["_data"] = innhold
                 _jobber[jobb_id] = jobb
                 _jobb_ko.put(jobb_id)
+            if idem:
+                with _jobb_las:
+                    _idempotens[idem] = jobb_id
+                    while len(_idempotens) > 2000:   # eldste ryddes
+                        _idempotens.pop(next(iter(_idempotens)))
             return self._svar(202, {
                 "ok": True, "jobb_id": jobb_id, "status": jobb["status"],
                 "fremdrift": f"GET /jobb/{jobb_id}",
