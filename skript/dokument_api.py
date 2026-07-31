@@ -388,6 +388,9 @@ def _skriv_tilgang(handler, code) -> None:
         ms = round((time.time() - getattr(handler, "_t0_req", time.time())) * 1000)
         rad = json.dumps({
             "t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            # samme ID som klienten fikk i X-Correlation-ID-svarhodet, så
+            # en feilmelding hos brukeren kan slås rett opp i denne raden
+            "korrelasjon": getattr(handler, "_korr_id", None),
             "ip": handler._klient_ip(),
             "metode": getattr(handler, "command", "?"),
             "sti": handler.path.split("?", 1)[0],
@@ -1921,11 +1924,32 @@ def _openapi() -> dict:
                 "for store dokumenter.\n\n"
                 "**Kontrakt:** fil UTEN spørsmål → hele den utleste teksten ordrett "
                 "(deterministisk). Fil MED tekst → bestillingen utføres. Alle svar "
-                "deklarerer ærlig hva som skjedde (advarsel/avvik/tall_verifisert)."),
+                "deklarerer ærlig hva som skjedde (advarsel/avvik/tall_verifisert).\n\n"
+                "**Sti:** endepunktene svarer både på «/spor» og «/api/v1/spor» "
+                "(NAV-konvensjon) — samme endepunkt.\n\n"
+                "**Sporing:** send gjerne X-Correlation-ID; den ekkoes i svaret og "
+                "logges, så én sak kan følges på tvers av tjenester. Mangler den, "
+                "lager serveren en. Feilsvar har formen {ok:false, feil, uuid} der "
+                "uuid er korrelasjons-ID-en — oppgi den til support."),
         },
-        "components": {"securitySchemes": {"ApiKeyAuth": {
-            "type": "apiKey", "in": "header", "name": "X-API-Key",
-            "description": "Kreves kun når serveren er startet med API_NOKKEL"}}},
+        "components": {
+            "securitySchemes": {"ApiKeyAuth": {
+                "type": "apiKey", "in": "header", "name": "X-API-Key",
+                "description": "Kreves kun når serveren er startet med API_NOKKEL"}},
+            "parameters": {"KorrelasjonsID": {
+                "name": "X-Correlation-ID", "in": "header", "required": False,
+                "schema": {"type": "string", "maxLength": 64},
+                "description": "UUID for sporing på tvers av tjenester. "
+                               "Ekkoes i svaret; genereres hvis utelatt."}},
+            "responses": {"Feil": {
+                "description": "Feil — {ok:false, feil, uuid}",
+                "content": {"application/json": {"schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"},
+                                   "feil": {"type": "string"},
+                                   "uuid": {"type": "string",
+                                            "description": "korrelasjons-ID for support"}}}}}}},
+        },
         "paths": {
             "/hjelp": {"get": {"summary": "Tjenestestatus og oversikt",
                                "responses": {"200": {"description": "Status, endepunkter, grenser, Borealis-motor"}}}},
@@ -2129,7 +2153,10 @@ class Handler(BaseHTTPRequestHandler):
         melding, stakksporing) kunne lekke interne stier, spørringer og
         biblioteksdetaljer til enhver som treffer et endepunkt."""
         import traceback
-        print("!!! Uventet serverfeil:", file=sys.stderr)
+        korr = self._korrelasjonsid()
+        # Skriv korrelasjons-ID-en SAMMEN med stakksporet, så en bruker som
+        # oppgir uuid-en fører deg rett til akkurat denne feilen i loggen.
+        print(f"!!! Uventet serverfeil (korrelasjon={korr}):", file=sys.stderr)
         traceback.print_exc()
         try:
             return self._svar(500, {
@@ -2143,18 +2170,31 @@ class Handler(BaseHTTPRequestHandler):
         # R39/§4: berik versjon-blokken med full proveniens (modell/regel/
         # terskel) i ÉTT punkt. Additivt — eksisterende nøkler (api, prompt,
         # modell) beholdes, så ingen klient brytes.
-        if isinstance(data, dict) and isinstance(data.get("versjon"), dict):
-            data["versjon"] = {**_versjon_stempel(), **data["versjon"]}
+        korr = self._korrelasjonsid()
+        if isinstance(data, dict):
+            if isinstance(data.get("versjon"), dict):
+                data["versjon"] = {**_versjon_stempel(), **data["versjon"]}
+            # Feilsvar får ALLTID en uuid = korrelasjons-ID-en (NAV-
+            # konvensjon: {uuid, feilmelding}). Brukeren oppgir den til
+            # support, som slår den opp i loggen — i stedet for å lete
+            # etter «noe som skjedde rundt det tidspunktet». Legges bare på
+            # feil (ok=False), så vellykkede svar beholder formen sin.
+            if data.get("ok") is False and "uuid" not in data:
+                data["uuid"] = korr
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(kode)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        # Ekko korrelasjons-ID-en så klienten kan logge den sin side og
+        # koble sitt kall til vår logglinje.
+        self.send_header("X-Correlation-ID", korr)
         for navn, verdi in (hoder or {}).items():
             self.send_header(navn, str(verdi))
         opphav = self._cors_origin()
         if opphav:
             self.send_header("Access-Control-Allow-Origin", opphav)
         self.end_headers()
+        # HEAD/204 og lignende har ingen kropp; men alle våre svar er JSON.
         self.wfile.write(payload)
 
     def _tapp_kropp(self, lengde: int) -> None:
@@ -2190,8 +2230,40 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sti(self) -> str:
         """Stien uten query-streng og uten etterfølgende skråstrek —
-        så «/spor?x=1» og «/spor/» rutes som «/spor»."""
-        return self.path.split("?", 1)[0].rstrip("/")
+        så «/spor?x=1» og «/spor/» rutes som «/spor».
+
+        Kanonisk prefiks «/api/v1» strippes (NAV-konvensjon):
+        /api/v1/spor og /spor er SAMME endepunkt. De gamle stiene består
+        som alias, så ingen eksisterende klient brekker — og en fremtidig
+        v2 med brytende endringer kan leve side om side med v1."""
+        sti = self.path.split("?", 1)[0].rstrip("/")
+        for prefiks in ("/api/v1", "/api"):
+            if sti == prefiks:
+                return "/hjelp"
+            if sti.startswith(prefiks + "/"):
+                return sti[len(prefiks):]
+        return sti
+
+    def _korrelasjonsid(self) -> str:
+        """X-Correlation-ID for sporing PÅ TVERS av tjenester (NAV-
+        konvensjon). Kommer den fra klienten, beholdes den — da kan én
+        sak følges gjennom Oppgave → Dokarkiv → oss i én samlet logg.
+        Mangler den, lager vi en, så svaret og loggen ALLTID har en å
+        oppgi. Bufres per forespørsel så svar og logg får samme verdi.
+
+        Verdien er klientstyrt og havner i et svar-hode og i loggen, så
+        den saneres: bare trygge tegn, maks 64. Ellers kunne en injisert
+        CR/LF splittet svar-hoder eller forfalsket en loggrad."""
+        if getattr(self, "_korr_id", None) is None:
+            raa = (self.headers.get("X-Correlation-ID")
+                   or self.headers.get("X-Correlation-Id") or "")
+            # bare tegn som er trygge i et HTTP-hode og en JSON-loggrad:
+            # bokstaver, tall, bindestrek, punktum, understrek. CR/LF og
+            # kolon fjernes helt, så ingen kan splitte hoder eller
+            # forfalske en loggrad via denne klientstyrte verdien.
+            trygg = re.sub(r"[^A-Za-z0-9._-]", "", raa)[:64]
+            self._korr_id = trygg or uuid.uuid4().hex
+        return self._korr_id
 
     def do_GET(self):
         self._t0_req = time.time()
@@ -2289,6 +2361,10 @@ class Handler(BaseHTTPRequestHandler):
                         "språkmodellen og OCR jobbe side om side, men full "
                         "parallell OCR krever én modellinstans per kort."),
                 },
+                "sporing": ("Send X-Correlation-ID for å følge en sak på tvers av "
+                            "tjenester — den ekkoes i svaret og logges. Feilsvar har "
+                            "{ok:false, feil, uuid} der uuid er korrelasjons-ID-en. "
+                            "Stiene svarer også med /api/v1-prefiks."),
                 "sikkerhet": ("X-API-Key kreves på alle endepunkter" if API_NOKKEL else
                               "ÅPEN — sett miljøvariabelen API_NOKKEL for å kreve X-API-Key"),
                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON},

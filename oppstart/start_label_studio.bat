@@ -12,6 +12,10 @@ set "PYTHONNOUSERSITE=1"
 set "PYTHONUTF8=1"
 set "LABEL_STUDIO_BASE_DATA_DIR=%CD%\data\label-studio"
 set "LABEL_STUDIO_PORT=8080"
+REM Registrering KREVER invitasjonslenke. Uten denne kunne hvem som helst
+REM som naadde porten opprette konto - og dokumentene her inneholder
+REM personopplysninger. Med den maa man ha organisasjonens token i URL-en.
+set "LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK=true"
 REM Vis dokumentbildene som auto-gjennomgangen legger i data\gjennomgang
 REM (URL-ene /data/local-files/?d=bilder/... peker relativt til roten under).
 set "LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true"

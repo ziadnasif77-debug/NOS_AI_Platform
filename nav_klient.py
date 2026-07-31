@@ -51,9 +51,17 @@ def _grunnadresse() -> str:
     return url
 
 
-def _hoder() -> dict:
+def _hoder(korr: str = None) -> dict:
+    h = {}
     nokkel = (os.environ.get("NAV_NOKKEL") or "").strip()
-    return {"X-API-Key": nokkel} if nokkel else {}
+    if nokkel:
+        h["X-API-Key"] = nokkel
+    # Sporing på tvers av tjenester: sender du en egen ID, følges kallet
+    # ditt gjennom serverens logg under nøyaktig den. Ellers lager
+    # serveren en og gir den tilbake i X-Correlation-ID-svarhodet.
+    if korr:
+        h["X-Correlation-ID"] = korr
+    return h
 
 
 def status() -> int:
@@ -88,6 +96,8 @@ def send(sti: str, valg: dict, sporsmal: str, mal: dict, tidsavbrudd: int):
             timeout=tidsavbrudd,
         )
 
+    # Korrelasjons-ID-en serveren brukte — oppgi den til support ved feil
+    korr = r.headers.get("X-Correlation-ID", "?")
     if r.status_code == 401:
         sys.exit("401: feil eller manglende API-nøkkel. Sett NAV_NOKKEL "
                  "(verdien står som API_NOKKEL i .env på servermaskinen).")
@@ -96,7 +106,13 @@ def send(sti: str, valg: dict, sporsmal: str, mal: dict, tidsavbrudd: int):
         sys.exit(f"503: {r.json().get('feil')}\n"
                  f"Prøv igjen om {r.headers.get('Retry-After', '30')} sekunder.")
     if r.status_code >= 400:
-        sys.exit(f"HTTP {r.status_code}: {r.text[:400]}")
+        d = {}
+        try:
+            d = r.json()
+        except ValueError:
+            pass
+        sys.exit(f"HTTP {r.status_code}: {d.get('feil') or r.text[:300]}\n"
+                 f"Referanse (uuid) for support: {d.get('uuid') or korr}")
     return r.json()
 
 
