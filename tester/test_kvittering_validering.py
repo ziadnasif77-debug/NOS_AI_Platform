@@ -102,6 +102,33 @@ def test_tall_uten_valutaord_blir_ikke_belop(tekst):
     assert finn_alle_belop(tekst) == []
 
 
+@pytest.mark.parametrize("tekst,forventet", [
+    # R61, funnet på en ekte Thon-hotellkvittering: internasjonalt
+    # punktum-desimalformat «6380.00» (ikke norsk «6380,00») ga INGEN
+    # beløp — felter.belop ble 0.0 mens totalen sto to ganger i teksten.
+    ("6380.00 NOK", 6380.0),
+    ("Totalt 6380.00 NOK", 6380.0),
+    ("Betalt Mastercard 6380.00 NOK", 6380.0),
+    ("445.00 NOK", 445.0),
+    ("5935.00 NOK", 5935.0),
+    ("NOK 6380.00", 6380.0),                # valuta foran, punktum-desimal
+])
+def test_punktum_desimal_belop(tekst, forventet):
+    assert finn_belop(tekst) == forventet
+    assert finn_alle_belop(tekst)[0]["verdi"] == forventet
+
+
+@pytest.mark.parametrize("tekst,forventet", [
+    # Punktum må fortsatt tolkes som TUSENSKILLE når det er tre sifre —
+    # ikke plutselig som desimal etter R61-fiksen.
+    ("NOK 46.300", 46300.0),
+    ("kr 1.234.567", 1234567),
+    ("sum 12.345,-", 12345.0),
+])
+def test_punktum_tusenskille_bevart(tekst, forventet):
+    assert finn_belop(tekst) == forventet
+
+
 def test_alle_belop_paa_kvitteringstekst():
     """Hele kvitteringslinjene slik OCR faktisk leste dem: ingen av
     kronebeløpene skal blåses opp med en faktor hundre."""

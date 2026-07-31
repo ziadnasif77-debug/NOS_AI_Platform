@@ -15,6 +15,8 @@ eksakt:
 import sys
 from datetime import date
 
+import pytest
+
 sys.path.insert(0, ".")
 
 from delt.tekstuttrekk import (ROLLE_BEHANDLING, ROLLE_DOKUMENT,
@@ -311,6 +313,45 @@ def test_alder_taaler_soppel():
     assert dokumentets_alder(None) is None
     assert dokumentets_alder("tull") is None
     assert dokumentets_alder("31.02.2026") is None      # finnes ikke
+
+
+# ---------- OCR-robusthet i datodetektoren (R61) ----------
+def _datoer(tekst):
+    from delt.tekstuttrekk import finn_alle_datoer
+    return finn_alle_datoer(tekst)
+
+
+@pytest.mark.parametrize("tekst,forventet", [
+    # OCR limer ofte datoen til nabotekst på kvitteringer. Før R61 fant
+    # \b ingen ordgrense mellom to bokstaver/sifre og forkastet datoen.
+    ("DATO12.06.2026", ["12.06.2026"]),
+    ("12.06.2026kr", ["12.06.2026"]),
+    ("12.06.2026KL14:46", ["12.06.2026"]),
+    ("Dato12.06.2026Kl14:46", ["12.06.2026"]),
+])
+def test_dato_limt_til_nabotegn_fanges(tekst, forventet):
+    assert _datoer(tekst) == forventet
+
+
+@pytest.mark.parametrize("tekst,forventet", [
+    # OCR mister mellomrommet rundt månedsnavnet.
+    ("08.juni 2026", ["08.06.2026"]),
+    ("8.juni.2026", ["08.06.2026"]),
+    ("1. desember 2026kl", ["01.12.2026"]),
+])
+def test_maanedsnavn_uten_mellomrom_fanges(tekst, forventet):
+    assert _datoer(tekst) == forventet
+
+
+@pytest.mark.parametrize("tekst", [
+    "20261234",              # ren tallmengde — ingen dato
+    "kontonr 12345678901",   # identifikator, ikke dato
+    "12.06.20261",           # år limt til ekstra siffer — forkastes
+])
+def test_robusthet_gir_ingen_falske_datoer(tekst):
+    """Lookarounds skal bare tillate BOKSTAV-naboer, aldri plukke en
+    «dato» ut av en ren siffermengde."""
+    assert _datoer(tekst) == []
 
 
 # ---------- kodede kategorifelter {kode, term} (AAREG-stil) ----------

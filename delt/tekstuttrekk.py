@@ -18,7 +18,8 @@ from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 
 # Versjon av det deterministiske regelverket. Bumpes når mønstre/vakter
 # endres, så hvert svar kan spores til reglene som produserte det (§4).
-UTTREKK_REGEL_VERSJON = "u1"
+# u2: R61 — beløp med internasjonalt punktum-desimalformat («6380.00»)
+UTTREKK_REGEL_VERSJON = "u2"
 
 # ------------------------------------------------------------------ #
 #  Sjekksummer (mod11)                                                 #
@@ -97,17 +98,19 @@ _ALLE_MAANEDER = {**_MAANEDER, **_MAANEDER_EN}
 def finn_dato(tekst: str):
     """Første gyldige dato — numeriske formater og «12. januar 2020».
     Normaliseres til dd.mm.yyyy."""
-    for treff in re.finditer(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b", tekst):
+    for treff in re.finditer(
+            r"(?<!\d)(\d{1,2})[./](\d{1,2})[./](\d{4})(?!\d)", tekst):
         d, m, y = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
         if _gyldig_dato(d, m, y):
             return f"{d:02d}.{m:02d}.{y}"
-    for treff in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", tekst):
+    for treff in re.finditer(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", tekst):
         y, m, d = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
         if _gyldig_dato(d, m, y):
             return f"{d:02d}.{m:02d}.{y}"
     maaneder = "|".join(_MAANEDER)
     for treff in re.finditer(
-        rf"\b(\d{{1,2}})\.?\s+({maaneder})\s+(\d{{4}})\b", tekst, re.IGNORECASE
+        rf"(?<!\d)(\d{{1,2}})[.\s]+({maaneder})[.\s]+(\d{{4}})(?!\d)",
+        tekst, re.IGNORECASE
     ):
         d = int(treff.group(1))
         m = _MAANEDER[treff.group(2).lower()]
@@ -140,26 +143,36 @@ def _alle_datotreff(tekst: str) -> list:
                          f"{d:02d}.{m:02d}.{y}", aar_antatt))
 
     # Numerisk, firesifret år: 12.03.2024, 12/3/2024 — og OCR-varianter
-    # med mellomrom rundt skilletegnene («21.04 . 1994»)
+    # med mellomrom rundt skilletegnene («21.04 . 1994»).
+    # R61: ytre (?<!\d)/(?!\d) i stedet for \b. På kvitteringer limer OCR
+    # ofte datoen til nabotekst («12.06.2026kr», «DATO12.06.2026»,
+    # «12.06.2026KL14:46»); \b fant ingen ordgrense mellom to bokstaver/
+    # sifre og forkastet en fullt lesbar dato i det stille. Lookarounds
+    # forbyr bare SIFFER-naboer (så «2026» aldri plukkes ut av «20261234»),
+    # men tillater bokstav-naboer.
     for treff in re.finditer(
-        r"\b(\d{1,2})[ ]*[./][ ]*(\d{1,2})[ ]*[./][ ]*(\d{4})\b", tekst
+        r"(?<!\d)(\d{1,2})[ ]*[./][ ]*(\d{1,2})[ ]*[./][ ]*(\d{4})(?!\d)", tekst
     ):
         _legg_til(treff, int(treff.group(1)), int(treff.group(2)),
                   int(treff.group(3)))
     # Numerisk, tosifret år: 01.06.94 (århundre antas, flagges)
     for treff in re.finditer(
-        r"\b(\d{1,2})[ ]*[./][ ]*(\d{1,2})[ ]*[./][ ]*(\d{2})(?!\d)", tekst
+        r"(?<!\d)(\d{1,2})[ ]*[./][ ]*(\d{1,2})[ ]*[./][ ]*(\d{2})(?!\d)", tekst
     ):
         _legg_til(treff, int(treff.group(1)), int(treff.group(2)),
                   _antatt_aar(int(treff.group(3))), aar_antatt=True)
     # ISO: 2024-03-12
-    for treff in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", tekst):
+    for treff in re.finditer(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", tekst):
         _legg_til(treff, int(treff.group(3)), int(treff.group(2)),
                   int(treff.group(1)))
-    # Månedsnavn, norsk/engelsk: «12. mars 2024» / «March 12, 2024»
+    # Månedsnavn, norsk/engelsk: «12. mars 2024» / «March 12, 2024».
+    # R61: [.\s]+ i stedet for \s+ rundt måneden, så «08.juni 2026» og
+    # «8.juni.2026» (OCR mister mellomrommet) også fanges — månedsnavnet
+    # er selv et sterkt anker, så falske treff er usannsynlige.
     maaneder = "|".join(_ALLE_MAANEDER)
     for treff in re.finditer(
-        rf"\b(\d{{1,2}})\.?\s+({maaneder})\s+(\d{{4}})\b", tekst, re.IGNORECASE
+        rf"(?<!\d)(\d{{1,2}})[.\s]+({maaneder})[.\s]+(\d{{4}})(?!\d)",
+        tekst, re.IGNORECASE
     ):
         _legg_til(treff, int(treff.group(1)),
                   _ALLE_MAANEDER[treff.group(2).lower()], int(treff.group(3)))
@@ -870,7 +883,13 @@ def finn_postnummer_sted(tekst: str):
 # treffer ikke (OSL er ikke tre O/sifre etterfulgt av gruppeslutt), og
 # løpende tekst kan ikke bli til et beløp. Gruppen normaliseres til
 # sifre før tallet tolkes.
-_BELOP_TALL = r"\d+(?:[ .][\dOo]{3})*(?:,\d{2}|,-)?"
+# Desimaldelen godtar BÅDE komma (norsk «463,00») OG punktum
+# (internasjonalt «6380.00», som er vanlig på hotell-/utenlandskvitteringer).
+# R61: uten punktum-varianten ga «6380.00 NOK» INGEN beløp — det falt
+# mellom stolene fordi «.00» hverken er en tregruppe (tusenskille krever
+# tre sifre) eller et komma. Funnet på en ekte Thon-kvittering der belop
+# ble 0.0 mens totalen sto to ganger som «6380.00 NOK».
+_BELOP_TALL = r"\d+(?:[ .][\dOo]{3})*(?:[.,]\d{2}|,-)?"
 
 # Beløp der valutaordet står ETTER tallet: «12 500 kroner», «15 000 kr»,
 # «500 NOK». Dette er den vanligste skrivemåten i norske vedtaksbrev, og
@@ -889,6 +908,34 @@ def _o_til_null(tall: str) -> str:
     return tall.replace("O", "0").replace("o", "0")
 
 
+def _normaliser_belop(raa: str):
+    """Rå beløpsstreng → float, med RIKTIG tolkning av skilletegn.
+
+    Punktum er tvetydig: i norsk er det tusenskille («46.300» = 46300),
+    internasjonalt er det desimaltegn («6380.00» = 6380). Regelen som
+    løser det: et punktum (eller komma) med NØYAKTIG to sifre etter, helt
+    til slutt, er DESIMAL — alt annet er tusenskille. En tusengruppe er
+    alltid tre sifre, så «.00» kan aldri være tusener. Uten dette ble
+    «6380.00» normalisert til «638000» (punktum fjernet) og feiltolket."""
+    s = raa.replace(" ", "").replace(",-", "")
+    if "," in s:
+        # komma = desimal (norsk); punktum er da tusenskille
+        return _til_float(s.replace(".", "").replace(",", "."))
+    if "." in s:
+        heltall, siste = s.rsplit(".", 1)
+        if len(siste) == 2:                    # «.00» = desimal
+            return _til_float(heltall.replace(".", "") + "." + siste)
+        return _til_float(s.replace(".", ""))  # «.300» = tusenskille
+    return _til_float(s)
+
+
+def _til_float(s: str):
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def finn_belop(tekst: str):
     """Kronebeløp: «kr 12 345,50», «NOK 5000», «12.345,-»."""
     treff = re.search(
@@ -901,11 +948,7 @@ def finn_belop(tekst: str):
         return None
     raa = _o_til_null(
         (treff.group(1) or treff.group(2) or treff.group(3)).strip())
-    normalisert = raa.replace(" ", "").replace(".", "").replace(",-", "").replace(",", ".")
-    try:
-        return float(normalisert)
-    except ValueError:
-        return None
+    return _normaliser_belop(raa)
 
 
 def finn_saksnummer(tekst: str):
@@ -1123,11 +1166,8 @@ def finn_alle_belop(tekst: str, maks: int = 100) -> list:
         raa = _o_til_null(
             (treff.group(1) or treff.group(2) or treff.group(3)
              or treff.group(4)).strip())
-        normalisert = (raa.replace(" ", "").replace(".", "")
-                       .replace(",-", "").replace(",", "."))
-        try:
-            verdi = float(normalisert)
-        except ValueError:
+        verdi = _normaliser_belop(raa)
+        if verdi is None:
             continue
         kontekst = " ".join(
             tekst[max(0, treff.start() - 35):treff.end() + 15].split())
