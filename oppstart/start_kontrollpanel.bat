@@ -1,8 +1,10 @@
 @echo off
 REM ====================================================================
 REM  Aapner kontrollpanel-GUI-et (api_klient_gui.py): start/stopp av alle
-REM  tjenester + live GPU/CPU/RAM-grafer + dokumentklienten (Spor osv.).
-REM  Bruker pythonw (ingen konsollvindu).
+REM  tjenester + live GPU/CPU/RAM-grafer + dokumentklienten. Faner:
+REM  Dokument, Operasjoner (uniformt operasjoner-kontrakt), Spor, Fyll
+REM  skjema (alle med skjema_motor modell/felter/auto), Analyser, Uttrekk,
+REM  Storjobb. Bruker pythonw (ingen konsollvindu).
 REM ====================================================================
 cd /d "%~dp0.."
 
