@@ -89,6 +89,31 @@ def test_sitecustomize_paatvinger_ikke_offline():
         assert "TRANSFORMERS_OFFLINE" not in kode or "setdefault" not in kode
 
 
+# ---------- norsk er obligatorisk (CLAUDE.md regel 2) ----------
+def test_ingen_arabiske_tegn_i_kildekoden():
+    """Regel: all kode er på norsk. Et arabisk ord som sniker seg inn
+    skal erstattes umiddelbart — denne testen fanger det. Dekker skript,
+    delt, tester, launchere og dokumentasjon."""
+    import glob
+    monster = None
+    arabisk = [chr(c) for c in range(0x0600, 0x0700)]  # arabisk unicode-blokk
+    arabisk_sett = set(arabisk)
+    funn = []
+    filer = []
+    for m in ("skript/*.py", "delt/*.py", "tester/*.py", "portabilitet/*.py",
+              "oppstart/*.bat", "*.bat", "*.py", "CLAUDE.md"):
+        filer += glob.glob(os.path.join(ROT, m))
+    for f in filer:
+        try:
+            with open(f, encoding="utf-8") as fh:
+                for nr, linje in enumerate(fh, 1):
+                    if arabisk_sett & set(linje):
+                        funn.append(f"{os.path.relpath(f, ROT)}:{nr}")
+        except (OSError, UnicodeDecodeError):
+            continue
+    assert funn == [], f"arabiske tegn i koden (skal være norsk): {funn[:10]}"
+
+
 # ---------- ingen hardkodet C: i driftskoden ----------
 def test_ingen_hardkodet_c_sti_i_driftskoden():
     """delt/ og de importerte skriptene skal ikke ha en hardkodet
