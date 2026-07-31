@@ -101,9 +101,10 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_organisasjonsnummer,
                                finn_alle_telefoner, finn_dato,
                                finn_dokumentdato, finn_koder_med_kontekst,
-                               klassifiser_datoer, sett_dato_roller,
+                               flett_mal, klassifiser_datoer, sett_dato_roller,
                                strukturert_uttrekk,
-                               utvid_entiteter, UTTREKK_REGEL_VERSJON)
+                               utvid_entiteter, FLETT_REGEL_VERSJON,
+                               UTTREKK_REGEL_VERSJON)
 
 # UTF-8-trygg utskrift: norsk (æøå) skal ikke krasje når stdout er en fil/
 # pipe med ikke-UTF-8-kodesett (cp1256) — f.eks. når tjeneste-wrapperen
@@ -2029,7 +2030,10 @@ def _openapi() -> dict:
                     "- felter=ja (STANDARD PÅ): deterministiske felter + datoer — raskt\n"
                     "- struktur=ja: komplett strukturert uttrekk (som /uttrekk) — raskt\n"
                     "- svar=ja + sporsmal: Borealis-svar med alle vaktene (som /spor)\n"
-                    "- skjema=ja + skjema_mal: JSON-malen utfylt med kodevalidering (som /fyll_skjema)\n"
+                    "- skjema=ja + skjema_mal: JSON-malen din utfylt. skjema_motor=modell "
+                    "(standard): Borealis fyller med kodevalidering (som /fyll_skjema). "
+                    "skjema_motor=felter: deterministisk fletting av {feltnavn}-plassholdere "
+                    "i malen — raskt, uten modell, virker når Borealis er nede\n"
                     "- korriger=ja: LLM-korrigert OCR-tekst\n"
                     "- tekst=nei: utelat fullteksten fra svaret\n"
                     "Modelldelene (svar/skjema/korriger) er AV som standard og feiler uavhengig — "
@@ -2049,6 +2053,9 @@ def _openapi() -> dict:
                                    "skjema": {"type": "string", "enum": ["ja", "nei"]},
                                    "skjema_mal": {"type": "string",
                                                   "description": "Din JSON-mal (kreves når skjema=ja)"},
+                                   "skjema_motor": {"type": "string",
+                                                    "enum": ["modell", "felter"],
+                                                    "description": "modell=Borealis fyller (standard); felter=deterministisk fletting av {feltnavn}-plassholdere (rask, uten modell)"},
                                    "korriger": {"type": "string", "enum": ["ja", "nei"]},
                                    "tekst": {"type": "string", "enum": ["ja", "nei"]},
                                    "maks_sider": {"type": "integer"}}}}}},
@@ -2638,6 +2645,13 @@ class Handler(BaseHTTPRequestHandler):
 
         sporsmal = tekstfelter.get("sporsmal", "").strip()
         mal_raa = tekstfelter.get("skjema_mal", "").strip()
+        # Motor for skjemautfylling: «modell» (Borealis fyller — mest
+        # fleksibelt, men koster tid) eller «felter» (deterministisk
+        # fletting av {feltnavn}-plassholdere — like raskt som felter, og
+        # klienten bestemmer selv navn/oppsett). Standard er modell for å
+        # ikke endre eksisterende oppførsel stille.
+        skjema_motor = tekstfelter.get("skjema_motor", "").strip().lower() \
+            or "modell"
         # Vennlighet: sender du sporsmal/skjema_mal uten å sette bryteren,
         # er hensikten åpenbar — bryteren slås på av seg selv
         if sporsmal and not gitt("svar"):
@@ -2685,13 +2699,28 @@ class Handler(BaseHTTPRequestHandler):
                     "feil": "'skjema_mal' må være et JSON-objekt (eller en liste) med felter",
                     "felter_feil": [{"pointer": "/skjema_mal",
                                      "message": "Må være et ikke-tomt objekt eller liste"}]})
+            if skjema_motor not in ("modell", "felter"):
+                return self._svar(400, {
+                    "ok": False,
+                    "feil": ("Ukjent 'skjema_motor': "
+                             f"{skjema_motor!r}. Bruk 'modell' (Borealis "
+                             "fyller) eller 'felter' (deterministisk "
+                             "fletting av {feltnavn}-plassholdere)."),
+                    "felter_feil": [{"pointer": "/skjema_motor",
+                                     "message": "Bruk 'modell' eller 'felter'"}]})
+
+        # Deterministisk fletting krever ALDRI modellen — bare de LLM-
+        # baserte delene teller i modell-porten under.
+        skjema_med_modell = valg["skjema"] and skjema_motor == "modell"
 
         # Konsistens med /spor og /fyll_skjema: er BARE modelldeler bedt om
         # og modellen er nede, er 503 med retry-signal riktigere enn 200
         # der alt innholdet er feilobjekter. Er en rask del også bedt om,
         # gjelder «delene feiler uavhengig» og vi svarer 200.
-        bare_modell = not (valg["tekst"] or valg["felter"] or valg["struktur"])
-        vil_ha_modell = valg["svar"] or valg["skjema"] or valg["korriger"]
+        rask_del = (valg["tekst"] or valg["felter"] or valg["struktur"]
+                    or (valg["skjema"] and skjema_motor == "felter"))
+        bare_modell = not rask_del
+        vil_ha_modell = valg["svar"] or skjema_med_modell or valg["korriger"]
         if bare_modell and vil_ha_modell and _borealis["status"] != "klar":
             return self._svar(503, {
                 "ok": False,
@@ -2773,7 +2802,20 @@ class Handler(BaseHTTPRequestHandler):
                 deler["svar"] = trygt(_svar_del)
 
         if valg["skjema"]:
-            if not borealis_klar:
+            if skjema_motor == "felter":
+                # Deterministisk: fyll {feltnavn}-plassholdere fra de
+                # deterministisk funnede feltene. Ingen modell, ingen
+                # venting — virker selv om Borealis er nede eller
+                # dokumentet er «tomt» for modellens smak.
+                def _flett_del():
+                    utfylt, rapport = flett_mal(mal, raa_tekst, ocr_brukt)
+                    return {"ok": True, "motor": "felter",
+                            "skjema": utfylt,
+                            "ukjente_felter": rapport["ukjente_felter"],
+                            "tilgjengelige_felter":
+                                rapport["tilgjengelige_felter"]}
+                deler["skjema"] = trygt(_flett_del)
+            elif not borealis_klar:
                 deler["skjema"] = {"ok": False, "feil": borealis_feil}
             elif tomt_dokument:
                 deler["skjema"] = {"ok": False, "feil": tom_feil}

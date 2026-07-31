@@ -345,7 +345,7 @@ def test_maanedsnavn_uten_mellomrom_fanges(tekst, forventet):
 
 @pytest.mark.parametrize("tekst", [
     "20261234",              # ren tallmengde — ingen dato
-    "kontonr 12345678901",   # identifikator, ikke dato
+    "kontonr 12345678910",   # identifikator, ikke dato
     "12.06.20261",           # år limt til ekstra siffer — forkastes
 ])
 def test_robusthet_gir_ingen_falske_datoer(tekst):

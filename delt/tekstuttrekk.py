@@ -21,6 +21,12 @@ from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 # u2: R61 — beløp med internasjonalt punktum-desimalformat («6380.00»)
 UTTREKK_REGEL_VERSJON = "u2"
 
+# Versjon av den deterministiske malfletteren (flett_mal). Skilt fra
+# uttrekksreglene fordi flettingen kan endres uavhengig av hvordan de
+# enkelte feltene finnes. f1: første utgave — {feltnavn}-plassholdere
+# fylt fra felter_flatt, uten modell.
+FLETT_REGEL_VERSJON = "f1"
+
 # ------------------------------------------------------------------ #
 #  Sjekksummer (mod11)                                                 #
 # ------------------------------------------------------------------ #
@@ -1085,12 +1091,12 @@ def _opptatte_omraader(tekst: str) -> tuple:
 
 def _tallkandidater(tekst: str, lengde: int):
     """Alle sifferstrenger av gitt lengde uansett gruppering — «180527
-    422 30», «1805.27.44230» og «18052744230» er samme kandidat.
+    422 30», «1234.56.78910» og «12345678910» er samme kandidat.
 
     VAKT: kandidaten forkastes hvis den overlapper en DATO eller et
     BELØP. Mønsteret tillater et skilletegn mellom hvert sifferpar og
     skilte derfor ikke mellom sifre i SAMME tall og to NABOTALL:
-    «Vedtak datert 01.01.2024 114 kroner» ble limt til «01012024114»,
+    «Vedtak datert 01.01.2024 114 kroner» ble limt til «12345678910»,
     som består mod11 — og ble rapportert som et gyldig FØDSELSNUMMER.
     Det oppdiktede nummeret gikk videre inn i prompten merket
     «KONTROLLERT av kode (sjekksum/format)» og havnet i fnr-feltet i
@@ -1398,3 +1404,114 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
         resultat.pop("fylke")
 
     return resultat
+
+
+# ------------------------------------------------------------------ #
+#  Deterministisk malfletting — {feltnavn} fylt UTEN modell           #
+# ------------------------------------------------------------------ #
+#  Hver klient sender sitt EGET JSON-format der verdiene er            #
+#  plassholdere som «{telefon}». flett_mal bytter dem mot de           #
+#  deterministisk funnede verdiene. Ingen modell, ingen venting: like  #
+#  raskt som felter, men klienten bestemmer selv feltnavn og oppsett.  #
+
+
+def felter_flatt(tekst: str, ocr_brukt: bool = False) -> dict:
+    """Flat oppslagstabell {feltnavn: verdi} over ALLE deterministiske
+    felter, til bruk i malfletting. Verdiene beholder sin egen type: et
+    tall forblir tall, et felt som mangler blir None (→ null i JSON).
+
+    Dette er kilden plassholderne i en mal fylles fra. Navnene her er
+    kontrakten klienten skriver mot — hold dem stabile."""
+    ent = utvid_entiteter(tekst, {})
+    dd = finn_dokumentdato(klassifiser_datoer(tekst), ocr_brukt=ocr_brukt)
+    periode = dd.get("periode") or {}
+    alder = dokumentets_alder(dd.get("dato")) if dd.get("dato") else None
+
+    flat = {
+        # personopplysninger / kontakt
+        "telefon": ent.get("telefon"),
+        "epost": ent.get("epost"),
+        "fodselsnummer": ent.get("fodselsnummer"),
+        "kontonummer": ent.get("kontonummer"),
+        # adresse
+        "postnummer": ent.get("postnummer"),
+        "poststed": ent.get("poststed"),
+        "fylke": ent.get("fylke"),
+        # sak / ytelse / kontor
+        "saksnummer": ent.get("saksnummer"),
+        "ytelse": ent.get("ytelse"),
+        "kontornavn": ent.get("kontornavn"),
+        # beløp
+        "belop": ent.get("belop"),
+        # datoer
+        "dato": ent.get("dato"),
+        "dokumentdato": dd.get("dato"),
+        "dokumentdato_type": dd.get("type"),
+        "dokumentdato_kilde": dd.get("kilde"),
+        "dokumentdato_konfidens": dd.get("konfidens"),
+        "periode_start": periode.get("fra"),
+        "periode_slutt": periode.get("til"),
+        "alder_dager": alder.get("dager") if alder else None,
+    }
+    return flat
+
+
+# «{telefon}» eller «{ telefon }» — ett feltnavn i krøllparenteser
+_PLASSHOLDER = re.compile(r"\{\s*([a-zA-Z_æøåÆØÅ][\w æøåÆØÅ]*?)\s*\}")
+
+
+def _flett_streng(verdi: str, flat: dict, ukjente: list):
+    """Fyller plassholdere i én malverdi.
+
+    Er verdien NØYAKTIG én plassholder («{telefon}»), returneres den rå
+    verdien med sin egen type (tall/None bevart). Er plassholderen vevd
+    inn i tekst («Tlf: {telefon}»), gjøres tekstlig innsetting der None
+    blir tom streng. En verdi uten plassholder er en konstant klienten
+    vil ha uendret, og returneres som den er."""
+    full = _PLASSHOLDER.fullmatch(verdi.strip())
+    if full:
+        navn = full.group(1).strip()
+        if navn not in flat:
+            ukjente.append(navn)
+            return None
+        return flat[navn]
+
+    def _bytt(m):
+        navn = m.group(1).strip()
+        if navn not in flat:
+            ukjente.append(navn)
+            return ""
+        v = flat[navn]
+        return "" if v is None else str(v)
+
+    return _PLASSHOLDER.sub(_bytt, verdi)
+
+
+def flett_mal(mal, tekst: str, ocr_brukt: bool = False):
+    """Fyller en klients JSON-mal deterministisk fra dokumentteksten.
+
+    «mal» kan være et objekt eller en liste (vilkårlig nøstet). Hver
+    strengverdi tolkes av _flett_streng: «{feltnavn}» byttes mot den
+    deterministiske verdien. Andre typer (tall, bool, null) beholdes.
+
+    Returnerer (utfylt, rapport) der rapport har «ukjente_felter» (navn
+    i malen som ikke finnes) og «tilgjengelige_felter» (alle gyldige
+    navn), så klienten raskt ser hva som kan flettes."""
+    flat = felter_flatt(tekst, ocr_brukt=ocr_brukt)
+    ukjente: list = []
+
+    def _gaa(node):
+        if isinstance(node, dict):
+            return {k: _gaa(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_gaa(v) for v in node]
+        if isinstance(node, str):
+            return _flett_streng(node, flat, ukjente)
+        return node
+
+    utfylt = _gaa(mal)
+    rapport = {
+        "ukjente_felter": sorted(set(ukjente)),
+        "tilgjengelige_felter": sorted(flat.keys()),
+    }
+    return utfylt, rapport

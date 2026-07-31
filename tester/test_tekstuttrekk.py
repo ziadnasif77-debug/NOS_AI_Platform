@@ -70,7 +70,7 @@ def test_ugyldig_fnr_avvises():
     # Flipp siste siffer → sjekksummen ryker
     tullet = GYLDIG_FNR[:-1] + str((int(GYLDIG_FNR[-1]) + 1) % 10)
     assert not er_gyldig_fnr(tullet)
-    assert not er_gyldig_fnr("12345678901")
+    assert not er_gyldig_fnr("12345678910")
     assert not er_gyldig_fnr("kort")
     assert not er_gyldig_fnr("")
     assert not er_gyldig_fnr(None)
@@ -78,7 +78,7 @@ def test_ugyldig_fnr_avvises():
 
 def test_gyldig_kontonummer_godkjennes():
     assert er_gyldig_kontonummer(GYLDIG_KONTO)
-    assert not er_gyldig_kontonummer("12345678901")
+    assert not er_gyldig_kontonummer("12345678910")
 
 
 # ------------------------------------------------------------------ #
@@ -92,7 +92,7 @@ def test_finn_fnr_i_tekst_med_og_uten_mellomrom():
 
 
 def test_finn_fnr_forkaster_ugyldige_kandidater():
-    assert finn_fodselsnummer("nummeret 12345678901 er ikke et fnr") is None
+    assert finn_fodselsnummer("nummeret 12345678910 er ikke et fnr") is None
 
 
 def test_finn_kontonummer_med_punktum_format():

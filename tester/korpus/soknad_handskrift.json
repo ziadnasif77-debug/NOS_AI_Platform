@@ -18,7 +18,7 @@
 
   "kjent_svakhet": {
     "kontakt.telefoner": "«Telefon: 45 12 OO 33» gir ingen treff fordi OCR har lest nullene som bokstaven O. Beløp tåler dette nå (R60), telefonnumre ikke ennå.",
-    "identifikatorer.fodselsnummer": "«15027312345» består ikke mod11. Enten er testpersonens nummer syntetisk ugyldig, eller så har OCR lest et siffer feil. Riktig oppførsel å utelate det, men verdt å bekrefte mot originalen."
+    "identifikatorer.fodselsnummer": "«12345678910» består ikke mod11. Enten er testpersonens nummer syntetisk ugyldig, eller så har OCR lest et siffer feil. Riktig oppførsel å utelate det, men verdt å bekrefte mot originalen."
   },
 
   "maks_sekunder": 8

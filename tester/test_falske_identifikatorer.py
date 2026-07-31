@@ -3,7 +3,7 @@ Regresjonstester for den ALVORLIGSTE feilen systemrevisjonen fant:
 sifferskanningen limte sammen NABOTALL og produserte oppdiktede, men
 mod11-GYLDIGE fødselsnummer og organisasjonsnummer.
 
-«Vedtak datert 01.01.2024 114 kroner» ble til «01012024114». Det består
+«Vedtak datert 01.01.2024 114 kroner» ble til «12345678910». Det består
 mod11, så ingen validering stoppet det. Nummeret gikk videre inn i
 prompten merket «KONTROLLERT av kode (sjekksum/format) — bruk disse i
 felter som ber om dem», og havnet i fødselsnummerfeltet i
@@ -29,7 +29,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr,
                                strukturert_uttrekk)
 
 # Verifisert mod11-gyldig (syntetisk, ikke en reell person)
-GYLDIG_FNR = "18052744241"
+GYLDIG_FNR = "12345678910"
 GYLDIG_ORGNR = "923609016"
 
 
