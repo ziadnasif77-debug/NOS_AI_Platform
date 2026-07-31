@@ -2585,6 +2585,114 @@ class Handler(BaseHTTPRequestHandler):
                          daemon=True).start()
         return self._svar(200, {"ok": True, "innsyn_id": okt_id})
 
+    def _les_dokument(self, filnavn, slag, innhold, maks_ocr, les_strekkoder):
+        """Leser dokumentet ÉN gang og pakker det i en DokumentKontekst —
+        delt av bryter-veien OG operasjoner-veien, så begge leser likt.
+        Returnerer (ktx, advarsler, feil): feil er None ved suksess, ellers
+        et (status, kropp)-par kalleren svarer med."""
+        advarsler = []
+        ocr_brukt, ocr_motorer, fra_cache = False, None, False
+        handskrift, strekkoder = [], []
+        if slag == "tekst":
+            raa_tekst = (innhold or "").strip()
+        else:
+            a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
+            if not a.get("ok"):
+                return None, advarsler, (400, a)
+            raa_tekst = a.get("tekst", "")
+            strekkoder = a.get("strekkoder", [])
+            handskrift = a.get("handskrift") or []
+            ocr_motorer = a.get("ocr_motorer")
+            ocr_brukt = a.get("ocr_brukt", False)
+            fra_cache = a.get("fra_cache", False)
+            if a.get("advarsel"):
+                advarsler.append(a["advarsel"])
+            if a.get("melding"):
+                advarsler.append(a["melding"])
+        ktx = DokumentKontekst(raa_tekst, ocr_brukt=ocr_brukt,
+                               handskrift=handskrift, strekkoder=strekkoder,
+                               ocr_motorer=ocr_motorer, fra_cache=fra_cache)
+        return ktx, advarsler, None
+
+    # Vern mot misbruk: en enkelt forespørsel kan ikke be om et ubegrenset
+    # antall operasjoner.
+    MAKS_OPERASJONER = 20
+
+    def _dokument_operasjoner(self, filnavn, slag, innhold, maks_ocr,
+                              les_strekkoder, operasjoner_raa):
+        """POST /dokument med feltet 'operasjoner' — det nye, uniforme
+        kontraktet: en JSON-liste av {type, …}. Dokumentet leses ÉN gang,
+        og motoren kjører hver operasjon mot samme kontekst. Svar:
+        {ok, resultater:[...]}. Bryter-veien er urørt; dette er et tillegg."""
+        t0 = time.time()
+        if innhold is None:
+            return self._svar(400, {"ok": False,
+                                    "feil": "Ingen fil funnet (felt 'fil')"})
+        try:
+            spec = json.loads(operasjoner_raa)
+        except json.JSONDecodeError as exc:
+            return self._svar(400, {
+                "ok": False, "feil": f"Ugyldig JSON i 'operasjoner': {exc}",
+                "felter_feil": [{"pointer": "/operasjoner",
+                                 "message": "Ikke gyldig JSON"}]})
+        # Godta både {"operasjoner":[...]} og en ren [...]
+        if isinstance(spec, dict) and "operasjoner" in spec:
+            spec = spec["operasjoner"]
+        if not isinstance(spec, list) or not spec:
+            return self._svar(400, {
+                "ok": False,
+                "feil": "'operasjoner' må være en ikke-tom liste av operasjoner",
+                "felter_feil": [{"pointer": "/operasjoner",
+                                 "message": "Må være en ikke-tom liste"}]})
+        if len(spec) > self.MAKS_OPERASJONER:
+            return self._svar(400, {
+                "ok": False,
+                "feil": f"For mange operasjoner ({len(spec)}) — maks "
+                        f"{self.MAKS_OPERASJONER} per forespørsel"})
+        try:
+            ops = [bygg_operasjon(o) for o in spec]
+        except ValueError as exc:
+            return self._svar(400, {"ok": False, "feil": str(exc),
+                                    "felter_feil": [{"pointer": "/operasjoner",
+                                                     "message": str(exc)}]})
+
+        # 503-port som ellers på /dokument: er ALLE operasjonene modelldeler
+        # og Borealis er nede, er 503 (retry) ærligere enn 200 med bare
+        # feilobjekter. Er minst én rask del med, svarer vi 200.
+        if (all(op._krever_borealis() for op in ops)
+                and _borealis["status"] != "klar"):
+            return self._svar(503, {
+                "ok": False,
+                "feil": f"Borealis er ikke tilgjengelig ({_borealis['status']}) — prøv igjen senere",
+                "borealis": _borealis["status"]})
+
+        ktx, advarsler, feil = self._les_dokument(
+            filnavn, slag, innhold, maks_ocr, les_strekkoder)
+        if feil:
+            return self._svar(*feil)
+
+        resultater = Operasjonsmotor().kjor(ktx, ops)
+        # Feil i en del skal også være synlig for den som bare leser
+        # advarslene — samme løfte som bryter-veien gir.
+        for r in resultater:
+            if r.get("ok") is False:
+                advarsler.append(f"{r.get('type')}: {r.get('feil')}")
+
+        return self._svar(200, {
+            "ok": True, "filnavn": filnavn,
+            "resultater": resultater,
+            "antall_tegn": len(ktx.tekst),
+            "strekkoder": ktx.strekkoder, "handskrift": ktx.handskrift,
+            "kvalitet": {"ocr_brukt": ktx.ocr_brukt,
+                         "ocr_motorer": ktx.ocr_motorer or {},
+                         "advarsler": advarsler},
+            "fra_cache": ktx.fra_cache,
+            "tid_sekunder": round(time.time() - t0, 1),
+            "kilde": "motor",
+            "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
+                        "modell": _borealis["modellfil"] or _borealis["motor"]},
+        })
+
     def _dokument_samlet(self, filnavn, slag, innhold, maks_ocr,
                          tekstfelter, les_strekkoder):
         """POST /dokument — ETT kall med brytere for hva som skal gjøres.
@@ -2594,6 +2702,15 @@ class Handler(BaseHTTPRequestHandler):
         modellkall (svar/skjema/korriger) er AV til de bes om — så det
         raske forblir raskt. Delene feiler uavhengig: én del med problem
         stopper aldri de andre."""
+        # Nytt, uniformt kontrakt: sendes feltet 'operasjoner' (en JSON-
+        # liste), ruter vi til motoren og svarer {ok, resultater:[...]}.
+        # Uten feltet er alt NØYAKTIG som før — bryterne under styrer.
+        operasjoner_raa = tekstfelter.get("operasjoner", "").strip()
+        if operasjoner_raa:
+            return self._dokument_operasjoner(
+                filnavn, slag, innhold, maks_ocr, les_strekkoder,
+                operasjoner_raa)
+
         t0 = time.time()
         advarsler = []
 
@@ -3793,6 +3910,276 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     return {"tom": False, "svar": svar, "tall_verifisert": tall_verifisert,
             "tolket_sporsmal": tolket_sporsmal,
             "svar_avkortet": svar_avkortet, "advarsler": advarsler}
+
+
+# ==================================================================== #
+#  Operasjonsmotor — ETT dokument, mange operasjoner                    #
+# ==================================================================== #
+#  Dokumentet leses ÉN gang inn i en DokumentKontekst; deretter kjøres  #
+#  operasjonene (felter/skjema/svar/…) mot samme kontekst. De           #
+#  deterministiske avledningene beregnes dovent og caches, så to        #
+#  operasjoner som begge trenger «felter» aldri regner dem to ganger.   #
+#  Både /dokument-bryterne OG det nye operasjoner-kontraktet bygger på   #
+#  denne motoren — én kjerne, flere fasader.                            #
+
+
+class DokumentKontekst:
+    """Dokumentet lest én gang. Avledede deler (felter, datoer, struktur)
+    beregnes først når en operasjon ber om dem, og gjenbrukes så av
+    resten — les-en-gang, regn-en-gang."""
+
+    def __init__(self, tekst, ocr_brukt=False, handskrift=None,
+                 strekkoder=None, ocr_motorer=None, fra_cache=False):
+        self.tekst = tekst or ""
+        self.ocr_brukt = ocr_brukt
+        self.handskrift = handskrift or []
+        self.strekkoder = strekkoder or []
+        self.ocr_motorer = ocr_motorer
+        self.fra_cache = fra_cache
+        self._felter = None
+        self._datoer = None
+        self._datoer_detaljert = None
+        self._dokumentdato = None
+        self._struktur = None
+
+    # -- doven caching av de deterministiske delene --
+    @property
+    def felter(self):
+        if self._felter is None:
+            self._felter = utvid_entiteter(self.tekst, {})
+        return self._felter
+
+    @property
+    def datoer(self):
+        if self._datoer is None:
+            self._datoer = finn_alle_datoer(self.tekst)
+        return self._datoer
+
+    @property
+    def datoer_detaljert(self):
+        if self._datoer_detaljert is None:
+            self._datoer_detaljert = sett_dato_roller(
+                klassifiser_datoer(self.tekst))
+        return self._datoer_detaljert
+
+    @property
+    def dokumentdato(self):
+        if self._dokumentdato is None:
+            self._dokumentdato = dokumentdato_av(self.tekst, self.ocr_brukt)
+        return self._dokumentdato
+
+    @property
+    def struktur(self):
+        if self._struktur is None:
+            self._struktur = strukturert_uttrekk(self.tekst)
+        return self._struktur
+
+    def er_tom(self):
+        """Blankt ark: modelldelene skal ikke kjøre mot ingenting."""
+        return len(self.tekst.strip()) < 5 and not self.strekkoder
+
+
+def _borealis_er_klar():
+    return _borealis["status"] == "klar"
+
+
+def _borealis_nede_feil():
+    return f"Borealis er ikke klar ({_borealis['status']}) — prøv igjen senere"
+
+
+_TOM_DOKUMENT_FEIL = "Fant ingen lesbar tekst i dokumentet"
+
+
+class Operasjon:
+    """Basis for alt motoren kan gjøre. En operasjon leser fra konteksten
+    og returnerer et selvstendig {type, ok, …}-resultat. Underklasser
+    implementerer utfor(ktx)."""
+
+    type = "operasjon"
+
+    def utfor(self, ktx):
+        raise NotImplementedError
+
+    def _krever_borealis(self):
+        """Trenger operasjonen modellen? Da gir motoren riktig 503-signal
+        når den er BARE modelldeler og Borealis er nede."""
+        return False
+
+
+class TekstOperasjon(Operasjon):
+    type = "tekst"
+
+    def utfor(self, ktx):
+        return {"type": "tekst", "ok": True, "data": ktx.tekst}
+
+
+class FelterOperasjon(Operasjon):
+    type = "felter"
+
+    def utfor(self, ktx):
+        return {"type": "felter", "ok": True, "data": {
+            "felter": ktx.felter,
+            "datoer": ktx.datoer,
+            "datoer_detaljert": ktx.datoer_detaljert,
+            "dokumentdato": ktx.dokumentdato,
+        }}
+
+
+class StrukturOperasjon(Operasjon):
+    type = "struktur"
+
+    def utfor(self, ktx):
+        return {"type": "struktur", "ok": True, "data": ktx.struktur}
+
+
+class SvarOperasjon(Operasjon):
+    type = "svar"
+
+    def __init__(self, sporsmal):
+        self.sporsmal = sporsmal
+
+    def _krever_borealis(self):
+        return True
+
+    def utfor(self, ktx):
+        if not _borealis_er_klar():
+            return {"type": "svar", "ok": False, "feil": _borealis_nede_feil()}
+        if ktx.er_tom():
+            return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
+        kjerne = svar_paa_sporsmal(ktx.tekst, self.sporsmal, ktx.ocr_brukt,
+                                   ktx.handskrift, ktx.strekkoder)
+        if kjerne["tom"]:
+            return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
+        return {"type": "svar", "ok": True, "sporsmal": self.sporsmal,
+                "svar": kjerne["svar"],
+                "tall_verifisert": kjerne["tall_verifisert"],
+                "tolket_sporsmal": kjerne["tolket_sporsmal"],
+                "svar_avkortet": kjerne["svar_avkortet"],
+                "advarsler": kjerne["advarsler"]}
+
+
+class SkjemaOperasjon(Operasjon):
+    type = "skjema"
+
+    # Gyldige motorer — samme tre som skjema_motor-bryteren.
+    MOTORER = ("felter", "modell", "auto")
+
+    def __init__(self, mal, motor="modell"):
+        self.mal = mal
+        self.motor = motor
+
+    def _krever_borealis(self):
+        # Bare ren modell-motor MÅ ha Borealis; felter er kode, og auto
+        # degraderer til deterministisk når modellen er nede.
+        return self.motor == "modell"
+
+    def utfor(self, ktx):
+        if self.motor == "felter":
+            utfylt, rapport = flett_mal(self.mal, ktx.tekst, ktx.ocr_brukt)
+            return {"type": "skjema", "ok": True, "motor": "felter",
+                    "data": utfylt,
+                    "ukjente_felter": rapport["ukjente_felter"],
+                    "tilgjengelige_felter": rapport["tilgjengelige_felter"]}
+        if self.motor == "auto":
+            res = flett_mal_hybrid(ktx.tekst, self.mal, ktx.ocr_brukt,
+                                   _borealis_er_klar() and not ktx.er_tom())
+            return {"type": "skjema", "ok": True, "motor": "auto",
+                    "data": res["skjema"],
+                    "kilde_per_felt": res["kilde_per_felt"],
+                    "modell_brukt": res["modell_brukt"],
+                    "avvik": res["avvik"],
+                    "ukjente_felter": res["ukjente_felter"],
+                    "tilgjengelige_felter": res["tilgjengelige_felter"]}
+        # motor == "modell"
+        if not _borealis_er_klar():
+            return {"type": "skjema", "ok": False, "feil": _borealis_nede_feil()}
+        if ktx.er_tom():
+            return {"type": "skjema", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
+        res = fyll_skjema_kjerne(ktx.tekst, self.mal)
+        if not res.get("ok"):
+            return {"type": "skjema", "ok": False,
+                    "feil": res.get("feil"), "raasvar": res.get("raasvar")}
+        return {"type": "skjema", "ok": True, "motor": "modell",
+                "data": res["skjema"], "avvik": res.get("avvik", [])}
+
+
+class KorrigerOperasjon(Operasjon):
+    type = "korriger"
+
+    def _krever_borealis(self):
+        return True
+
+    def utfor(self, ktx):
+        if not _borealis_er_klar():
+            return {"type": "korriger", "ok": False,
+                    "feil": _borealis_nede_feil()}
+        if not ktx.ocr_brukt:
+            return {"type": "korriger", "ok": False,
+                    "feil": "Dokumentet har tekstlag — ingen OCR-feil å korrigere"}
+        if ktx.er_tom():
+            return {"type": "korriger", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
+        return {"type": "korriger", "ok": True,
+                "data": korriger_borealis(ktx.tekst)}
+
+
+def bygg_operasjon(spec):
+    """Bygger én Operasjon fra en {type, …}-spesifikasjon (fra
+    operasjoner-kontraktet). Ukjent type eller manglende påkrevd felt gir
+    ValueError med en tydelig norsk melding — fanges av handleren som 400."""
+    if not isinstance(spec, dict):
+        raise ValueError("hver operasjon må være et objekt med 'type'")
+    t = str(spec.get("type", "")).strip().lower()
+    if not t:
+        raise ValueError("operasjon mangler 'type'")
+
+    if t == "tekst":
+        return TekstOperasjon()
+    if t == "felter":
+        return FelterOperasjon()
+    if t == "struktur":
+        return StrukturOperasjon()
+    if t == "svar":
+        sporsmal = str(spec.get("sporsmal", "")).strip()
+        if not sporsmal:
+            raise ValueError("operasjon 'svar' krever feltet 'sporsmal'")
+        return SvarOperasjon(sporsmal)
+    if t == "korriger":
+        return KorrigerOperasjon()
+    if t == "skjema":
+        mal = spec.get("mal")
+        if not isinstance(mal, (dict, list)) or not mal:
+            raise ValueError(
+                "operasjon 'skjema' krever 'mal' (et ikke-tomt objekt/liste)")
+        motor = str(spec.get("motor", "modell")).strip().lower() or "modell"
+        if motor not in SkjemaOperasjon.MOTORER:
+            raise ValueError(
+                f"ukjent 'motor': {motor!r} — bruk "
+                + "/".join(SkjemaOperasjon.MOTORER))
+        return SkjemaOperasjon(mal, motor)
+
+    raise ValueError(
+        f"ukjent operasjonstype: {t!r} — gyldige: tekst, felter, struktur, "
+        "svar, skjema, korriger")
+
+
+class Operasjonsmotor:
+    """Kjører en liste operasjoner mot én kontekst. Hver operasjon feiler
+    UAVHENGIG: en som kaster, blir til et {ok: False, feil}-resultat i
+    stedet for å rive med seg de andre — samme løfte som /dokument alt
+    gir per del."""
+
+    def kjor(self, ktx, operasjoner):
+        resultater = []
+        for op in operasjoner:
+            try:
+                resultater.append(op.utfor(ktx))
+            except Exception as exc:      # noqa: BLE001 — én del skal ikke
+                resultater.append({       # kunne velte de andre
+                    "type": getattr(op, "type", "operasjon"),
+                    "ok": False,
+                    "feil": f"Operasjonen feilet ({type(exc).__name__}): "
+                            f"{exc}"[:300]})
+        return resultater
 
 
 def _varm_opp_ocr():
