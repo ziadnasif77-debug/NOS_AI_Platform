@@ -228,6 +228,7 @@ FANER = [
     ("innsyn", "Innsyn"),
     ("trening", "Trening"),
     ("dokument", "Dokument"),
+    ("operasjoner", "Operasjoner"),
     ("spor", "Spør"),
     ("fyll_skjema", "Fyll skjema"),
     ("analyser", "Analyser"),
@@ -255,6 +256,31 @@ EKSEMPEL_SKJEMA = """{
   "belop": null,
   "adresse": null
 }"""
+
+# Eksempelmal for felter-/auto-motoren: {feltnavn}-plassholdere som
+# flettes deterministisk (auto lar modellen ta det regelen ikke fant).
+EKSEMPEL_SKJEMA_FLETT = """{
+  "kunde": "{navn}",
+  "telefon": "{telefon}",
+  "sted": "{poststed}",
+  "ytelse": "{ytelse}",
+  "belop": "{belop}"
+}"""
+
+# De tre skjema-motorene, delt av /dokument og /fyll_skjema.
+SKJEMA_MOTORER = [
+    ("modell", "Modell — Borealis fyller alt (tregere, forstår fritekst)"),
+    ("felter", "Felter — deterministisk {feltnavn} (raskt, uten modell)"),
+    ("auto", "Auto — hybrid: regel der mulig, modell for resten (navn o.l.)"),
+]
+
+# Eksempel for Operasjoner-fanen: det uniforme kontraktet der ÉN
+# forespørsel ber om flere ting på rad, hver med sitt eget resultat.
+EKSEMPEL_OPERASJONER = """[
+  { "type": "felter" },
+  { "type": "skjema", "motor": "auto",
+    "mal": { "kunde": "{navn}", "telefon": "{telefon}", "ytelse": "{ytelse}" } }
+]"""
 
 
 def les_konfig() -> dict:
@@ -516,12 +542,13 @@ class ApiKlient:
             filer["jobb_id"] = (None, jobb_id)
         return self._post("/spor", filer=filer)
 
-    def fyll_skjema(self, pdf_sti: Path, skjema_json: str):
+    def fyll_skjema(self, pdf_sti: Path, skjema_json: str,
+                    skjema_motor: str = "modell"):
         with open(pdf_sti, "rb") as fil:
             return self._post(
                 "/fyll_skjema",
                 filer={"fil": (pdf_sti.name, fil, "application/pdf")},
-                felter={"skjema": skjema_json},
+                felter={"skjema": skjema_json, "skjema_motor": skjema_motor},
             )
 
     def send_fil(self, endepunkt: str, pdf_sti: Path):
@@ -540,6 +567,16 @@ class ApiKlient:
                 "/dokument",
                 filer={"fil": (pdf_sti.name, fil, "application/pdf")},
                 felter=felter,
+            )
+
+    def dokument_operasjoner(self, pdf_sti: Path, operasjoner_json: str):
+        """POST /dokument med det uniforme operasjoner-kontraktet: en
+        JSON-liste av {type, …} → {ok, resultater:[…]}."""
+        with open(pdf_sti, "rb") as fil:
+            return self._post(
+                "/dokument",
+                filer={"fil": (pdf_sti.name, fil, "application/pdf")},
+                felter={"operasjoner": operasjoner_json},
             )
 
     def jobb_status(self, jobb_id: str):
@@ -2983,6 +3020,7 @@ class DokumentKlientApp:
         self.trening = TreningPanel(self._fane_rammer["trening"], self.rot,
                                     self.kontroll)
         self._bygg_dokument_fane(self._fane_rammer["dokument"])
+        self._bygg_operasjoner_fane(self._fane_rammer["operasjoner"])
         self._bygg_spor_fane(self._fane_rammer["spor"])
         self._bygg_fyll_skjema_fane(self._fane_rammer["fyll_skjema"])
         self._bygg_analyser_fane(self._fane_rammer["analyser"])
@@ -3158,6 +3196,27 @@ class DokumentKlientApp:
     # én gang, og bare delene som er slått PÅ kjøres. Modelldelene er AV
     # som standard, så det raske forblir raskt.
     # ======================================================================
+    def _bygg_motorvelger(self, forelder, var):
+        """Felles radiovelger for skjema_motor (modell/felter/auto). Brukes
+        i både Dokument- og Fyll skjema-fanen så valget ser likt ut."""
+        ramme = tema_rammefelt(forelder, "Skjema-motor (for utfylling av JSON-mal)")
+        ramme.pack(fill="x", padx=12, pady=6)
+        for nokkel, tekst in SKJEMA_MOTORER:
+            tk.Radiobutton(
+                ramme, text=tekst, value=nokkel, variable=var, anchor="w",
+                bg=BG_PANEL, fg=FG_TEKST, selectcolor=BG_INNDATA,
+                activebackground=BG_PANEL, activeforeground=FG_TEKST,
+                highlightthickness=0,
+            ).pack(fill="x", padx=10, pady=1)
+        tk.Label(
+            ramme,
+            text="«felter»/«auto» bruker plassholdere som {telefon} i malen; "
+                 "«modell» fyller tomme strenger. «auto» lar modellen finne "
+                 "det regelen ikke fant (f.eks. navn) og merker kilden per felt.",
+            fg=FG_DEMPET, bg=BG_PANEL, anchor="w", wraplength=880,
+            justify="left").pack(fill="x", padx=10, pady=(2, 6))
+        return ramme
+
     def _bygg_dokument_fane(self, forelder):
         pad = {"padx": 12, "pady": 6}
         self.dokument_valgt_fil: str | None = None
@@ -3221,6 +3280,9 @@ class DokumentKlientApp:
         self.dokument_mal_tekst.pack(fill="x", padx=12, pady=(2, 4))
         bind_utklippstavle(self.rot, self.dokument_mal_tekst)
 
+        self.dokument_motor_var = tk.StringVar(value="modell")
+        self._bygg_motorvelger(forelder, self.dokument_motor_var)
+
         primaerknapp(forelder, "Kjør valgte deler (ett kall)",
                      self._send_dokument).pack(fill="x", **pad)
 
@@ -3277,6 +3339,7 @@ class DokumentKlientApp:
             felter["sporsmal"] = sporsmal
         if mal and self.dokument_brytere["skjema"].get():
             felter["skjema_mal"] = mal
+            felter["skjema_motor"] = self.dokument_motor_var.get()
 
         panel = self.dokument_panel
         panel.nullstill("Klargjør filen ...")
@@ -3308,8 +3371,20 @@ class DokumentKlientApp:
             if isinstance(sk, dict):
                 linjer.append("")
                 if sk.get("ok"):
-                    linjer.append("Utfylt skjema:")
+                    motor = sk.get("motor")
+                    linjer.append("Utfylt skjema"
+                                  + (f" (motor: {motor})" if motor else "") + ":")
                     linjer.append(formater_json(sk.get("skjema") or {}))
+                    if sk.get("kilde_per_felt"):
+                        linjer.append("  Kilde per felt: "
+                                      + ", ".join(f"{k}={v}" for k, v
+                                                  in sk["kilde_per_felt"].items()))
+                    if sk.get("ukjente_felter"):
+                        linjer.append("  Fant ikke: "
+                                      + ", ".join(sk["ukjente_felter"]))
+                    if sk.get("avvik"):
+                        for a in sk["avvik"]:
+                            linjer.append(f"  Avvik: {a}")
                 else:
                     linjer.append(f"Skjema FEILET — {sk.get('feil')}")
             f = data.get("felter")
@@ -3330,6 +3405,137 @@ class DokumentKlientApp:
             self._fil_foresporsel(self.dokument_valgt_fil,
                                   lambda pdf: self.klient.dokument_samlet(pdf, felter)),
             self._standard_suksess(panel, "Samlet svar mottatt", formatter),
+        )
+
+    # ======================================================================
+    # Fane: Operasjoner (/dokument med feltet 'operasjoner') — det uniforme
+    # kontraktet: en JSON-liste av {type, …} kjøres på rad mot samme
+    # dokument, hver med sitt eget resultat.
+    # ======================================================================
+    def _bygg_operasjoner_fane(self, forelder):
+        pad = {"padx": 12, "pady": 6}
+        self.operasjoner_valgt_fil: str | None = None
+
+        filramme = tema_rammefelt(forelder, "Dokument (påkrevd)")
+        filramme.pack(fill="x", **pad)
+        filrad = tk.Frame(filramme, bg=BG_PANEL)
+        filrad.pack(fill="x", padx=8, pady=8)
+        self.operasjoner_fil_etikett = tk.Label(
+            filrad, text="Ingen fil valgt", fg=FG_DEMPET, bg=BG_PANEL, anchor="w")
+        self.operasjoner_fil_etikett.pack(side="left", fill="x", expand=True)
+        tema_knapp(
+            filrad, "Bla gjennom ...",
+            lambda: self._velg_fil_til(self.operasjoner_fil_etikett,
+                                       self._sett_operasjoner_fil),
+        ).pack(side="right")
+
+        opramme = tema_rammefelt(
+            forelder, "Operasjoner (JSON-liste) — kjøres på rad mot dokumentet")
+        opramme.pack(fill="both", **pad)
+        ophode = tk.Frame(opramme, bg=BG_PANEL)
+        ophode.pack(fill="x", padx=8, pady=(8, 0))
+        tk.Label(ophode, text="Gyldige typer: tekst, felter, struktur, svar "
+                 "(+sporsmal), skjema (+mal, +motor), korriger",
+                 fg=FG_DEMPET, bg=BG_PANEL, anchor="w").pack(side="left")
+        tema_knapp(ophode, "Sett inn eksempel",
+                   self._sett_inn_operasjoner_eksempel).pack(side="right")
+        self.operasjoner_tekst = tema_tekstfelt(
+            opramme, wrap="word", font=("Consolas", 10), height=8)
+        self.operasjoner_tekst.pack(fill="both", expand=True, padx=8, pady=8)
+        bind_utklippstavle(self.rot, self.operasjoner_tekst)
+
+        primaerknapp(forelder, "Kjør operasjoner",
+                     self._send_operasjoner).pack(fill="x", **pad)
+
+        self.operasjoner_panel = SvarPanel(forelder, self.rot,
+                                           etikett="Resultater")
+
+    def _sett_operasjoner_fil(self, sti):
+        self.operasjoner_valgt_fil = sti
+
+    def _sett_inn_operasjoner_eksempel(self):
+        naavaerende = self.operasjoner_tekst.get("1.0", "end").strip()
+        if naavaerende and not messagebox.askyesno(
+            "Erstatte?", "Dette erstatter det som står i feltet nå. Fortsette?"):
+            return
+        self.operasjoner_tekst.delete("1.0", "end")
+        self.operasjoner_tekst.insert("1.0", EKSEMPEL_OPERASJONER)
+
+    def _send_operasjoner(self):
+        if not self._sjekk_valgt_fil(self.operasjoner_valgt_fil):
+            return
+        raa = self.operasjoner_tekst.get("1.0", "end").strip()
+        if not raa:
+            messagebox.showwarning(
+                "Merk", "Lim inn en JSON-liste av operasjoner først "
+                        "(eller trykk «Sett inn eksempel»).")
+            return
+        # Fang ugyldig JSON / feil form lokalt — samme krav som serveren,
+        # så brukeren slipper en serverrunde for en åpenbar skrivefeil.
+        try:
+            tolket = json.loads(raa)
+        except json.JSONDecodeError as exc:
+            messagebox.showerror("Ugyldig JSON",
+                                 f"Operasjonene er ikke gyldig JSON: {exc}")
+            return
+        if isinstance(tolket, dict) and "operasjoner" in tolket:
+            tolket = tolket["operasjoner"]
+        if not isinstance(tolket, list) or not tolket:
+            messagebox.showwarning(
+                "Feil form", "Operasjonene må være en ikke-tom JSON-liste, "
+                'f.eks. [{"type":"felter"}].')
+            return
+
+        panel = self.operasjoner_panel
+        panel.nullstill("Klargjør filen ...")
+
+        def formatter(data):
+            linjer = []
+            for r in data.get("resultater") or []:
+                t, ok = r.get("type"), r.get("ok")
+                if not ok:
+                    linjer.append(f"[{t}] FEILET — {r.get('feil')}")
+                    linjer.append("")
+                    continue
+                if t == "skjema":
+                    linjer.append(f"[skjema] motor: {r.get('motor')}")
+                    linjer.append(formater_json(r.get("data") or {}))
+                    if r.get("kilde_per_felt"):
+                        linjer.append("    kilde: " + ", ".join(
+                            f"{k}={v}" for k, v in r["kilde_per_felt"].items()))
+                    if r.get("ukjente_felter"):
+                        linjer.append("    fant ikke: "
+                                      + ", ".join(r["ukjente_felter"]))
+                elif t == "felter":
+                    linjer.append("[felter]")
+                    for navn, verdi in ((r.get("data") or {}).get("felter")
+                                        or {}).items():
+                        linjer.append(f"    {navn}: {verdi}")
+                elif t == "svar":
+                    linjer.append(f"[svar] {r.get('svar')}")
+                elif t in ("tekst", "korriger"):
+                    utdrag = str(r.get("data") or "")[:800]
+                    linjer.append(f"[{t}]")
+                    linjer.append("    " + utdrag.replace("\n", "\n    "))
+                elif t == "struktur":
+                    linjer.append("[struktur]")
+                    linjer.append(formater_json(r.get("data") or {}))
+                else:
+                    linjer.append(f"[{t}]")
+                    linjer.append(formater_json(r))
+                linjer.append("")
+            for adv in (data.get("kvalitet") or {}).get("advarsler") or []:
+                linjer.append(f"ADVARSEL: {adv}")
+            linjer.append("Fullt svar (JSON):")
+            linjer.append(formater_json(data))
+            return "\n".join(linjer)
+
+        self._kjor_foresporsel(
+            panel,
+            self._fil_foresporsel(
+                self.operasjoner_valgt_fil,
+                lambda pdf: self.klient.dokument_operasjoner(pdf, raa)),
+            self._standard_suksess(panel, "Resultater mottatt", formatter),
         )
 
     def _bygg_spor_fane(self, forelder):
@@ -3510,6 +3716,9 @@ class DokumentKlientApp:
         self.skjema_tekst.pack(fill="both", expand=True, padx=8, pady=8)
         bind_utklippstavle(self.rot, self.skjema_tekst)
 
+        self.fyll_motor_var = tk.StringVar(value="modell")
+        self._bygg_motorvelger(forelder, self.fyll_motor_var)
+
         primaerknapp(forelder, "Fyll skjema", self._send_fyll_skjema).pack(fill="x", **pad)
 
         self.fyll_panel = SvarPanel(forelder, self.rot, etikett="Utfylt resultat")
@@ -3523,8 +3732,13 @@ class DokumentKlientApp:
             "Erstatte malen?", "Dette erstatter det som står i skjemafeltet nå. Fortsette?"
         ):
             return
+        # felter/auto flettes fra {feltnavn}-plassholdere; modell fyller
+        # tomme verdier. Sett inn eksempelet som passer valgt motor.
+        motor = getattr(self, "fyll_motor_var", None)
+        flett = motor is not None and motor.get() in ("felter", "auto")
         self.skjema_tekst.delete("1.0", "end")
-        self.skjema_tekst.insert("1.0", EKSEMPEL_SKJEMA)
+        self.skjema_tekst.insert("1.0",
+                                 EKSEMPEL_SKJEMA_FLETT if flett else EKSEMPEL_SKJEMA)
 
     def _send_fyll_skjema(self):
         if not self._sjekk_valgt_fil(self.fyll_valgt_fil):
@@ -3552,16 +3766,28 @@ class DokumentKlientApp:
             # svaret — så både nytte og full sporbarhet er synlig.
             deler = []
             if isinstance(data.get("skjema"), dict):
-                deler.append("Utfylt skjema:")
+                motor = data.get("motor")
+                deler.append("Utfylt skjema"
+                             + (f" (motor: {motor})" if motor else "") + ":")
                 deler.append(formater_json(data["skjema"]))
+                if data.get("kilde_per_felt"):
+                    deler.append("Kilde per felt: "
+                                 + ", ".join(f"{k}={v}" for k, v
+                                             in data["kilde_per_felt"].items()))
+                if data.get("ukjente_felter"):
+                    deler.append("Fant ikke (regelen): "
+                                 + ", ".join(data["ukjente_felter"]))
                 deler.append("")
                 deler.append("Fullt svar (JSON):")
             deler.append(formater_json(data))
             return "\n".join(deler)
 
+        motor = self.fyll_motor_var.get()
         self._kjor_foresporsel(
             panel,
-            self._fil_foresporsel(kilde_sti, lambda pdf: self.klient.fyll_skjema(pdf, skjema)),
+            self._fil_foresporsel(
+                kilde_sti,
+                lambda pdf: self.klient.fyll_skjema(pdf, skjema, skjema_motor=motor)),
             self._standard_suksess(panel, "Skjema utfylt", formatter),
         )
 
