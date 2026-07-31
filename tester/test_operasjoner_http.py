@@ -206,3 +206,56 @@ def test_bryter_skjema_felter_motor_beholder_skjema_nokkel():
 def test_bryter_ukjent_verdi_gir_400():
     kode, data = _kjor_brytere({"felter": "kanskje"})
     assert kode == 400 and "Ukjent bryterverdi" in data["feil"]
+
+
+# ------------------------------------------------------------------ #
+#  Vakt mot feilnavngitte skjemafelter (UiPath-fella)                 #
+# ------------------------------------------------------------------ #
+
+def test_ser_ut_som_verdi():
+    f = dokument_api._ser_ut_som_verdi
+    assert f("ja") and f("auto") and f("nei") and f("modell")
+    assert f('{"a":"b"}') and f("[1,2]")            # JSON som navn
+    assert f("C:\\Users\\N\\fil.pdf")               # filsti som navn
+    assert f("kvittering.pdf")
+    assert not f("skjema_mal") and not f("telefon") and not f("skjema_motor")
+
+
+def test_omvendte_feltnavn_gir_400():
+    """Brukerens EKTE feil: verdier brukt som feltnavn (omvendt UiPath-
+    orden) skal gi et TYDELIG 400, ikke et misvisende 200."""
+    f = _lag_handler()
+    f._dokument_samlet("d.txt", "tekst", DOK, None,
+                       {"auto": "skjema_motor", "ja": "struktur",
+                        '{"kunde":"{navn}"}': "skjema_mal"}, True)
+    kode, data = f.svar
+    assert kode == 400
+    assert "VERDIER brukt som feltnavn" in data["feil"]
+    assert "auto" in data["ukjente_felt"] and "ja" in data["ukjente_felt"]
+    assert "skjema_mal" in data["kjente_felt"]
+
+
+def test_korrekte_feltnavn_ingen_400():
+    """Riktig orden (navn først for tekst) skal virke som før."""
+    kode, data = _kjor_brytere({"skjema": "ja", "skjema_motor": "felter",
+                                "skjema_mal": '{"tlf":"{telefon}"}'})
+    assert kode == 200 and data["skjema"]["ok"] is True
+
+
+def test_benignt_ukjent_felt_advarer_ikke_400():
+    """Et ukjent, men ufarlig feltnavn skal bare gi en advarsel, ikke 400."""
+    kode, data = _kjor_brytere({"ekstrafelt": "noe", "felter": "ja"})
+    assert kode == 200
+    assert any("Ukjente felt" in a for a in data["kvalitet"]["advarsler"])
+
+
+def test_omvendt_i_operasjoner_gir_400():
+    kode, data = _kjor('[{"type":"felter"}]')      # gyldig operasjoner
+    assert kode == 200
+    # men verdi-som-navn ved siden av operasjoner-feltet stoppes:
+    f = _lag_handler()
+    f._dokument_operasjoner("d.txt", "tekst", DOK, None, True,
+                            '[{"type":"felter"}]',
+                            {"operasjoner": "...", "ja": "struktur"})
+    kode, data = f.svar
+    assert kode == 400 and "VERDIER brukt som feltnavn" in data["feil"]

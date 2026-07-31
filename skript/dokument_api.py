@@ -2667,7 +2667,7 @@ class Handler(BaseHTTPRequestHandler):
     MAKS_OPERASJONER = 20
 
     def _dokument_operasjoner(self, filnavn, slag, innhold, maks_ocr,
-                              les_strekkoder, operasjoner_raa):
+                              les_strekkoder, operasjoner_raa, tekstfelter=None):
         """POST /dokument med feltet 'operasjoner' — det nye, uniforme
         kontraktet: en JSON-liste av {type, …}. Dokumentet leses ÉN gang,
         og motoren kjører hver operasjon mot samme kontekst. Svar:
@@ -2676,6 +2676,11 @@ class Handler(BaseHTTPRequestHandler):
         if innhold is None:
             return self._svar(400, {"ok": False,
                                     "feil": "Ingen fil funnet (felt 'fil')"})
+        _, omvendte = _sjekk_feltnavn(tekstfelter or {},
+                                      _KJENTE_FELT_OPERASJONER)
+        if omvendte:
+            return self._svar(400, _omvendt_felt_feil(omvendte,
+                                                      _KJENTE_FELT_OPERASJONER))
         try:
             spec = json.loads(operasjoner_raa)
         except json.JSONDecodeError as exc:
@@ -2757,10 +2762,22 @@ class Handler(BaseHTTPRequestHandler):
         if operasjoner_raa:
             return self._dokument_operasjoner(
                 filnavn, slag, innhold, maks_ocr, les_strekkoder,
-                operasjoner_raa)
+                operasjoner_raa, tekstfelter)
 
         t0 = time.time()
         advarsler = []
+
+        # Feilnavngitte felt (UiPath-fella): en VERDI brukt som feltnavn er
+        # en klar feil — stopp med 400 i stedet for et misvisende 200 der
+        # skjema_mal/skjema_motor stilltiende falt bort.
+        milde, omvendte = _sjekk_feltnavn(tekstfelter, _KJENTE_FELT_DOKUMENT)
+        if omvendte:
+            return self._svar(400, _omvendt_felt_feil(omvendte,
+                                                      _KJENTE_FELT_DOKUMENT))
+        if milde:
+            advarsler.append(
+                "Ukjente felt ignorert: " + ", ".join(milde)
+                + ". Kjente felt: " + ", ".join(sorted(_KJENTE_FELT_DOKUMENT)))
 
         # Bryterne tar både norsk og engelsk ja/nei. En UKJENT verdi
         # avvises (400) i stedet for å bli tolket som «nei» — ellers ville
@@ -3345,6 +3362,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(200 if resultat.get("ok") else 400, resultat)
 
         if sti == "/fyll_skjema":
+            _, omvendte = _sjekk_feltnavn(tekstfelter, _KJENTE_FELT_FYLL_SKJEMA)
+            if omvendte:
+                return self._svar(400, _omvendt_felt_feil(
+                    omvendte, _KJENTE_FELT_FYLL_SKJEMA))
             skjema_raa = tekstfelter.get("skjema", "").strip()
             if not skjema_raa:
                 return self._svar(400, {"ok": False, "feil": "Mangler multipart-felt 'skjema' (JSON-malen din)"})
@@ -4040,6 +4061,73 @@ def _borealis_nede_feil():
 
 
 _TOM_DOKUMENT_FEIL = "Fant ingen lesbar tekst i dokumentet"
+
+
+# ------------------------------------------------------------------ #
+#  Vakt mot feilnavngitte skjemafelter (UiPath-fella)                 #
+# ------------------------------------------------------------------ #
+#  UiPath er inkonsekvent: TextFormDataPart(navn, verdi) har navnet   #
+#  FØRST, mens FileFormDataPart(sti, navn) har navnet SIST. Snur en   #
+#  klient tekstfeltene, får serveren felter som HETER «auto», «ja»    #
+#  eller en hel JSON-streng. Før gikk de tapt i stillhet og svaret    #
+#  ble et misvisende 200. En profesjonell API sier tydelig fra.
+
+# Ord/mønstre som røper at en VERDI er brukt som feltnavn.
+_VERDI_ORD = {"ja", "nei", "auto", "felter", "modell", "1", "0", "true",
+              "false", "på", "pa", "av", "yes", "no", "on", "off"}
+
+
+def _ser_ut_som_verdi(navn: str) -> bool:
+    """Ser feltNAVNET ut som en VERDI (→ omvendt TextFormDataPart)?"""
+    n = (navn or "").strip()
+    if n.lower() in _VERDI_ORD:
+        return True
+    if n.startswith(("{", "[")):                       # JSON-mal som navn
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", n) or "\\" in n:    # filsti som navn
+        return True
+    if n.lower().endswith((".pdf", ".png", ".jpg", ".jpeg", ".txt", ".docx")):
+        return True
+    return False
+
+
+def _sjekk_feltnavn(tekstfelter: dict, kjente: set):
+    """Deler mottatte feltnavn i (ukjente, omvendte). «omvendte» er de som
+    tydelig er en verdi brukt som navn — en klar UiPath-feil vi stopper med
+    400. «ukjente» ellers er bare ukjente navn vi advarer mildt om."""
+    ukjente = [n for n in tekstfelter if n and n not in kjente]
+    omvendte = [n for n in ukjente if _ser_ut_som_verdi(n)]
+    milde = [n for n in ukjente if n not in omvendte]
+    return milde, omvendte
+
+
+# Feltnavn hvert endepunkt faktisk kjenner (fil-delen «fil» er egen, ikke
+# et tekstfelt). Alt annet er ukjent — og en verdi-som-navn stoppes.
+_KJENTE_FELT_DOKUMENT = {
+    "felter", "struktur", "svar", "skjema", "korriger", "tekst", "sporsmal",
+    "skjema_mal", "skjema_motor", "operasjoner", "maks_sider", "strekkoder"}
+_KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder"}
+_KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
+
+
+def _omvendt_felt_feil(omvendte: list, kjente: set) -> dict:
+    """Feilobjektet for 400 når feltnavn er en verdi (omvendt UiPath-orden)."""
+    vis = ", ".join((n if len(n) <= 40 else n[:37] + "…") for n in omvendte)
+    return {
+        "ok": False,
+        "feil": (f"Mottok felt som ser ut som VERDIER brukt som feltnavn: "
+                 f"{vis}. I UiPath kommer NAVNET først i "
+                 "TextFormDataPart(navn, verdi) — motsatt av "
+                 "FileFormDataPart(sti, navn). Snu de tekstlige feltene, "
+                 'f.eks. New TextFormDataPart("skjema_mal", "{…}") og '
+                 'New TextFormDataPart("skjema_motor", "auto").'),
+        "ukjente_felt": omvendte,
+        "kjente_felt": sorted(kjente),
+        "felter_feil": [{"pointer": f"/{n}",
+                         "message": "Ser ut som en verdi brukt som feltnavn "
+                                    "(snu rekkefølgen: navn først)"}
+                        for n in omvendte],
+    }
 
 
 class Operasjon:
