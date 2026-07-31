@@ -18,8 +18,9 @@ from datetime import date
 sys.path.insert(0, ".")
 
 from delt.tekstuttrekk import (ROLLE_BEHANDLING, ROLLE_DOKUMENT,
-                               ROLLE_INNHOLD, dokumentets_alder,
-                               finn_dokumentdato,
+                               ROLLE_INNHOLD, _ROLLE_TERM, _TYPE_TERM,
+                               dokumentets_alder,
+                               finn_dokumentdato, kodeverk,
                                klassifiser_datoer, rolle_for_type,
                                sett_dato_roller)
 
@@ -310,6 +311,55 @@ def test_alder_taaler_soppel():
     assert dokumentets_alder(None) is None
     assert dokumentets_alder("tull") is None
     assert dokumentets_alder("31.02.2026") is None      # finnes ikke
+
+
+# ---------- kodede kategorifelter {kode, term} (AAREG-stil) ----------
+def test_kodeverk_gir_kode_og_term():
+    assert kodeverk("vedtaksdato", _TYPE_TERM) == {
+        "kode": "vedtaksdato", "term": "Vedtaksdato"}
+
+
+def test_kodeverk_ukjent_kode_faller_tilbake_til_seg_selv():
+    """En ny type skal aldri mangle en lesbar verdi."""
+    assert kodeverk("helt_ny_type", _TYPE_TERM) == {
+        "kode": "helt_ny_type", "term": "helt_ny_type"}
+
+
+def test_kodeverk_none_gir_none():
+    assert kodeverk(None, _TYPE_TERM) is None
+    assert kodeverk(None, _ROLLE_TERM) is None
+
+
+def test_datoer_faar_kodede_felter_i_tillegg_til_raa():
+    datoer = sett_dato_roller(klassifiser_datoer(
+        "Vedtaksdato: 12.06.2026\nKlagefrist innen 05.07.2026.\n"))
+    vedtak = next(d for d in datoer if d["dato"] == "12.06.2026")
+    # rå strengfelt uendret (bakoverkompatibelt)
+    assert vedtak["type"] == "vedtaksdato"
+    assert vedtak["rolle"] == ROLLE_DOKUMENT
+    # kodede par lagt til
+    assert vedtak["type_kodet"] == {"kode": "vedtaksdato", "term": "Vedtaksdato"}
+    assert vedtak["rolle_kodet"]["kode"] == "dokument"
+    assert vedtak["rolle_kodet"]["term"]
+
+
+def test_dokumentdato_har_kodede_felter():
+    resultat = _dokumentdato("Vedtaksdato: 12.06.2026\nFrist 05.07.2026.\n")
+    assert resultat["type"] == "vedtaksdato"          # rå, uendret
+    assert resultat["type_kodet"] == {"kode": "vedtaksdato",
+                                      "term": "Vedtaksdato"}
+    assert resultat["rolle_kodet"]["kode"] == "dokument"
+
+
+def test_alternativer_har_kodet_type():
+    resultat = finn_dokumentdato([
+        _kandidat("01.02.2026", "pdf_opprettet", side=None),
+        _kandidat("12.06.2026", "vedtaksdato"),
+    ])
+    alt = resultat["alternativer"][0]
+    assert alt["type"] == "pdf_opprettet"
+    assert alt["type_kodet"]["kode"] == "pdf_opprettet"
+    assert alt["type_kodet"]["term"]
 
 
 def test_roller_settes_paa_alle_datoer():

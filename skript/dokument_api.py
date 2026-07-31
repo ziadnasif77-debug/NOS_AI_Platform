@@ -2435,6 +2435,9 @@ class Handler(BaseHTTPRequestHandler):
                            "en side eller ved en signaturblokk > PDF-metadata. dokumentdato."
                            "periode gir datospennet FRA–TIL med dato per side: én dato for et "
                            "enkelt brev, en periode når filen er en bunke daterte dokumenter. "
+                           "Kategorifeltene har både rå streng («type», «rolle») OG et kodet "
+                           "par «type_kodet»/«rolle_kodet» {kode, term} (AAREG-stil): kode er "
+                           "stabil/maskinlesbar, term er for et menneske. "
                            "Finnes ingen, sies det ærlig i stedet for å gjette. Egne "
                            "etiketter: egne_etiketter.txt («ord = type = rolle»)"),
                 "filtyper": "PDF, bilder (JPG/PNG/TIFF/BMP/WEBP — OCR-es), DOCX, XLSX/XLSM, CSV, TXT",

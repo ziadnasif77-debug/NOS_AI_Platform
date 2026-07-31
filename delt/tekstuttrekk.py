@@ -293,6 +293,55 @@ _STED_FORAN_DATO = re.compile(r"[A-ZÆØÅ][a-zæøåA-ZÆØÅ\- ]{1,25},\s*$")
 _RANG_KONFIDENS = {1: "hoy", 2: "middels", 3: "middels", 4: "lav", 5: "lav"}
 
 
+# Lesbare beskrivelser (term) for hver datotype og rolle. Ideen fra NAVs
+# AAREG-API: en kategoriverdi er et PAR {kode, term} — koden er stabil og
+# maskinlesbar, termen er for et menneske. En klient kan forgrene på
+# «vedtaksdato» uten å hardkode en norsk streng, og samtidig vise en
+# forklaring i et grensesnitt uten å bygge sin egen oversettelsestabell.
+_TYPE_TERM = {
+    "dokumentdato": "Dokumentets dato",
+    "vedtaksdato": "Vedtaksdato",
+    "utstedt": "Utstedelsesdato",
+    "signaturdato": "Signaturdato",
+    "signaturdato_sannsynlig": "Sannsynlig signaturdato (ved underskrift)",
+    "soknadsdato": "Søknadsdato",
+    "brevdato_sannsynlig": "Sannsynlig brevdato (øverst i dokumentet)",
+    "sendt": "Sendt-dato",
+    "mottatt": "Mottatt-dato",
+    "arkivert": "Arkivert-dato",
+    "merket_dato": "Dato merket «dato»",
+    "frist": "Frist",
+    "utlop": "Utløpsdato",
+    "gyldig_fra": "Gyldig fra",
+    "avreise": "Avreisedato",
+    "ankomst": "Ankomstdato",
+    "periode_start": "Periodestart",
+    "periode_slutt": "Periodeslutt",
+    "utbetalingsdato": "Utbetalingsdato",
+    "fodselsdato": "Fødselsdato",
+    "fodselsdato_fra_fnr": "Fødselsdato (avledet fra fødselsnummer)",
+    "i_lopende_tekst": "Dato i løpende tekst",
+    "pdf_opprettet": "PDF opprettet (metadata)",
+    "pdf_endret": "PDF endret (metadata)",
+    "ukjent": "Ukjent",
+}
+_ROLLE_TERM = {
+    ROLLE_DOKUMENT: "Dokumentets egen dato",
+    ROLLE_INNHOLD: "Dato i innholdet (noe dokumentet handler om)",
+    ROLLE_BEHANDLING: "Dato for håndtering av dokumentet",
+    ROLLE_UKJENT: "Ukjent rolle",
+}
+
+
+def kodeverk(kode, tabell) -> dict:
+    """{kode, term}-par for en kategoriverdi (AAREG-stil). Ukjent kode gir
+    kode som term, så en ny type aldri mangler en lesbar verdi. None-kode
+    gir None (feltet finnes ikke)."""
+    if kode is None:
+        return None
+    return {"kode": kode, "term": tabell.get(kode, str(kode))}
+
+
 def rolle_for_type(dtype) -> str:
     """Rollen til en datotype. Ukjente typer (egne etiketter uten oppgitt
     rolle) regnes som INNHOLD — en ny etikett navngir nesten alltid noe
@@ -304,11 +353,17 @@ def rolle_for_type(dtype) -> str:
 
 
 def sett_dato_roller(datoer: list) -> list:
-    """Merker hver klassifiserte dato med «rolle». Muterer og returnerer
+    """Merker hver klassifiserte dato med «rolle», og med de kodede
+    parene «type_kodet»/«rolle_kodet» {kode, term} (AAREG-stil). De rå
+    strengfeltene «type» og «rolle» beholdes uendret, så ingen klient
+    brytes — de kodede feltene kommer i tillegg. Muterer og returnerer
     lista (praktisk i kjeder)."""
     for d in datoer:
         if isinstance(d, dict):
-            d["rolle"] = rolle_for_type(d.get("type"))
+            rolle = rolle_for_type(d.get("type"))
+            d["rolle"] = rolle
+            d["type_kodet"] = kodeverk(d.get("type"), _TYPE_TERM)
+            d["rolle_kodet"] = kodeverk(rolle, _ROLLE_TERM)
     return datoer
 
 
@@ -488,6 +543,9 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
     return {
         "dato": beste["dato"],
         "type": beste.get("type"),
+        # kodet par {kode, term} i tillegg til den rå «type»-strengen
+        "type_kodet": kodeverk(beste.get("type"), _TYPE_TERM),
+        "rolle_kodet": kodeverk(ROLLE_DOKUMENT, _ROLLE_TERM),
         "kilde": kilde,
         "konfidens": konfidens,
         "begrunnelse": begrunnelse,
@@ -497,6 +555,7 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
         "periode": periode,
         "alternativer": [
             {"dato": k[4]["dato"], "type": k[4].get("type"),
+             "type_kodet": kodeverk(k[4].get("type"), _TYPE_TERM),
              "konfidens": _RANG_KONFIDENS.get(k[0], "lav")}
             for k in kandidater[1:6]],
         "advarsel": "; ".join(advarsler) if advarsler else None,
