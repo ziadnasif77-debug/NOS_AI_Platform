@@ -2123,8 +2123,11 @@ def _openapi() -> dict:
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object", "required": ["fil", "skjema"],
                     "properties": {"fil": fil_felt,
-                                   "skjema": {"type": "string", "description": "JSON-malen din (tomme strenger som verdier)"}}}}}},
-                "responses": {"200": {"description": "skjema (utfylt og renset), avvik (alle inngrep deklarert)"}}}},
+                                   "skjema": {"type": "string", "description": "JSON-malen din. For 'modell': tomme strenger som verdier. For 'felter'/'auto': {feltnavn}-plassholdere, f.eks. {\"tlf\":\"{telefon}\"}"},
+                                   "skjema_motor": {"type": "string",
+                                                    "enum": ["modell", "felter", "auto"],
+                                                    "description": "modell=Borealis fyller (standard); felter=deterministisk fletting av {feltnavn} (rask, uten modell); auto=hybrid med tallvakt"}}}}}},
+                "responses": {"200": {"description": "skjema (utfylt), motor, avvik; for felter/auto også ukjente_felter (+ kilde_per_felt/modell_brukt for auto)"}}}},
             "/jobb": {"post": {
                 "summary": "Asynkron OCR av store dokumenter (ubegrenset antall sider)",
                 "parameters": [{"name": "Idempotency-Key", "in": "header", "required": False,
@@ -2530,16 +2533,21 @@ class Handler(BaseHTTPRequestHandler):
         return self._svar(404, {"ok": False, "feil": "Se GET /hjelp for endepunkter"})
 
     def _fyll_skjema_flyt(self, filnavn, slag, innhold, maks_ocr, mal,
-                          via_spor=False, les_strekkoder=True):
-        """Fyller brukerens egen JSON-mal fra dokumentet: modellen
-        fyller, KODEN validerer (rens_skjemasvar). Selve utfyllingen bor
-        i fyll_skjema_kjerne (delt med POST /dokument)."""
+                          via_spor=False, les_strekkoder=True,
+                          skjema_motor="modell"):
+        """Fyller brukerens egen JSON-mal fra dokumentet. Tre motorer, som
+        på /dokument: «modell» (Borealis fyller, KODEN validerer via
+        rens_skjemasvar), «felter» (deterministisk fletting av
+        {feltnavn}-plassholdere — rask, uten modell) og «auto» (hybrid:
+        regel der den kan bevise, modell for resten, med tallvakt)."""
         t0 = time.time()
-        if _borealis["status"] != "klar":
+        # KUN modell-motoren MÅ ha Borealis. felter er ren kode, og auto
+        # degraderer til deterministisk når modellen er nede.
+        if skjema_motor == "modell" and _borealis["status"] != "klar":
             return self._svar(503, {"ok": False,
                                     "feil": f"Borealis er ikke klar ({_borealis['status']})",
                                     "borealis": _borealis["status"]})
-        fra_cache = False
+        fra_cache, ocr_brukt = False, False
         if slag == "tekst":
             dok = innhold
         else:
@@ -2548,21 +2556,52 @@ class Handler(BaseHTTPRequestHandler):
                 return self._svar(400, a)
             dok = a.get("tekst", "")
             fra_cache = a.get("fra_cache", False)
+            ocr_brukt = a.get("ocr_brukt", False)
 
+        grunn = {"ok": True, "filnavn": filnavn, "fra_cache": fra_cache,
+                 "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
+                             "modell": _borealis["modellfil"] or _borealis["motor"]}}
+
+        # --- deterministisk fletting (ingen modell) ---
+        if skjema_motor == "felter":
+            utfylt, rapport = flett_mal(mal, dok, ocr_brukt)
+            svar = {**grunn, "motor": "felter", "skjema": utfylt, "avvik": [],
+                    "ukjente_felter": rapport["ukjente_felter"],
+                    "tilgjengelige_felter": rapport["tilgjengelige_felter"],
+                    "tid_sekunder": round(time.time() - t0, 1),
+                    "kilde": "deterministisk"}
+            if via_spor:
+                svar["svar"] = json.dumps(utfylt, ensure_ascii=False, indent=2)
+            return self._svar(200, svar)
+
+        # --- hybrid: deterministisk der mulig, modell for resten ---
+        if skjema_motor == "auto":
+            res = flett_mal_hybrid(dok, mal, ocr_brukt,
+                                   _borealis["status"] == "klar")
+            svar = {**grunn, "motor": "auto", "skjema": res["skjema"],
+                    "kilde_per_felt": res["kilde_per_felt"],
+                    "modell_brukt": res["modell_brukt"],
+                    "avvik": res["avvik"],
+                    "ukjente_felter": res["ukjente_felter"],
+                    "tilgjengelige_felter": res["tilgjengelige_felter"],
+                    "tid_sekunder": round(time.time() - t0, 1),
+                    "kilde": ("borealis+deterministisk" if res["modell_brukt"]
+                              else "deterministisk")}
+            if via_spor:
+                svar["svar"] = json.dumps(res["skjema"], ensure_ascii=False,
+                                          indent=2)
+            return self._svar(200, svar)
+
+        # --- modell: Borealis fyller, koden validerer ---
         kjerne = fyll_skjema_kjerne(dok, mal)
         if not kjerne.get("ok"):
             return self._svar(200, kjerne)
         renset, avvik = kjerne["skjema"], kjerne["avvik"]
-        svar = {
-            "ok": True, "filnavn": filnavn,
-            "skjema": renset,
-            "avvik": avvik,
-            "fra_cache": fra_cache,
-            "tid_sekunder": round(time.time() - t0, 1),
-            "kilde": "borealis_" + (_borealis["motor"] or "ukjent") + "+kodevalidering",
-            "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
-                        "modell": _borealis["modellfil"] or _borealis["motor"]},
-        }
+        svar = {**grunn, "motor": "modell",
+                "skjema": renset,
+                "avvik": avvik,
+                "tid_sekunder": round(time.time() - t0, 1),
+                "kilde": "borealis_" + (_borealis["motor"] or "ukjent") + "+kodevalidering"}
         if via_spor:
             svar["melding"] = ("JSON-mal oppdaget i spørsmålet — behandlet "
                                "som skjemautfylling med full kodevalidering")
@@ -3313,8 +3352,19 @@ class Handler(BaseHTTPRequestHandler):
                 mal = json.loads(skjema_raa)
             except json.JSONDecodeError as exc:
                 return self._svar(400, {"ok": False, "feil": f"Ugyldig JSON i 'skjema': {exc}"})
+            # Samme tre motorer som /dokument: felter (deterministisk),
+            # auto (hybrid) og modell (Borealis, standard).
+            motor = tekstfelter.get("skjema_motor", "").strip().lower() or "modell"
+            if motor not in ("modell", "felter", "auto"):
+                return self._svar(400, {
+                    "ok": False,
+                    "feil": (f"Ukjent 'skjema_motor': {motor!r}. Bruk "
+                             "'modell', 'felter' eller 'auto'."),
+                    "felter_feil": [{"pointer": "/skjema_motor",
+                                     "message": "Bruk 'modell', 'felter' eller 'auto'"}]})
             return self._fyll_skjema_flyt(filnavn, slag, innhold, maks_ocr, mal,
-                                          les_strekkoder=les_strekkoder)
+                                          les_strekkoder=les_strekkoder,
+                                          skjema_motor=motor)
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
         # R47: fil UTEN spørsmål = hele den utleste teksten, ordrett og
