@@ -21,7 +21,10 @@ from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 # u2: R61 — beløp med internasjonalt punktum-desimalformat («6380.00»)
 # u3: R62 — finn_belop fanger beløp der etikett og tall står på hver sin
 #     linje («Total Kr:\n486,00»), likt finn_alle_belop
-UTTREKK_REGEL_VERSJON = "u3"
+# u4: nytt felt «totalbelop» — beløpet på en Total-/Sum-/Å betale-linje.
+#     Additivt: «belop» (første beløp) er URØRT, fordi hvilket beløp som
+#     er riktig avhenger av dokumentet. Klienten velger.
+UTTREKK_REGEL_VERSJON = "u4"
 
 # Versjon av den deterministiske malfletteren (flett_mal). Skilt fra
 # uttrekksreglene fordi flettingen kan endres uavhengig av hvordan de
@@ -969,6 +972,40 @@ def finn_belop(tekst: str):
     return _normaliser_belop(raa)
 
 
+# Etiketter som peker på dokumentets TOTALBELØP. «Total Km» kan aldri bli
+# et beløp — både fordi km ikke har valutaord og fordi beløpsmønsteret
+# krever to desimaler («15,8» er ikke et beløp).
+_TOTAL_ETIKETT = re.compile(
+    r"^\W*(?:total(?:sum|t|beløp|belop)?|sum|å\s*betale|aa\s*betale"
+    r"|til\s*betaling)\b", re.IGNORECASE)
+
+
+def finn_totalbelop(tekst: str):
+    """Beløpet på en linje merket «Total», «Sum», «Å betale» e.l.
+    None hvis dokumentet ikke har en slik etikett.
+
+    SKILT fra finn_belop, som gir FØRSTE beløp i teksten. På en kvittering
+    er de forskjellige: «Pris Kr: 463,00 … Total Kr: 486,00». Hvilket som
+    er «riktig» avhenger av dokumentet — et vedtak kan si «12 500 kroner
+    per måned» først og en årssum etterpå, der FØRSTE beløp er det man vil
+    ha i skjemaet og summen ville vært feil. Derfor gjetter API-et ikke:
+    det leverer begge deterministisk, og klienten velger.
+
+    Beløpet godtas både på SAMME linje («Sum: 486,00») og på den NESTE
+    («Total Kr:\\n486,00») — sistnevnte er vanlig kvitteringsoppsett der
+    etikett og tall står i hver sin kolonne, som OCR leser som to linjer.
+    """
+    linjer = (tekst or "").splitlines()
+    for i, linje in enumerate(linjer):
+        if not _TOTAL_ETIKETT.match(linje.strip()):
+            continue
+        for kandidat in (linje, *linjer[i + 1:i + 2]):
+            verdi = finn_belop(kandidat)
+            if verdi is not None:
+                return verdi
+    return None
+
+
 def finn_saksnummer(tekst: str):
     """Saksreferanser: «saksnr 21/12345», «ref.: 2020/0456» og
     NAV-skjemakoder som «NAV 04-01.03»."""
@@ -1344,6 +1381,7 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
         "telefon":       finn_telefon(tekst),
         "epost":         finn_epost(tekst),
         "belop":         finn_belop(tekst),
+        "totalbelop":    finn_totalbelop(tekst),
         "saksnummer":    finn_saksnummer(tekst),
         "kontornavn":    finn_kontornavn(tekst),
     }
@@ -1388,11 +1426,14 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
             except Exception:
                 resultat.pop(felt)
     # beløp: modellverdi må være tallbar
-    if resultat.get("belop") is not None and deterministiske.get("belop") is None:
-        try:
-            float(str(resultat["belop"]).replace(",", ".").replace(" ", ""))
-        except (ValueError, TypeError):
-            resultat.pop("belop")
+    for beløpsfelt in ("belop", "totalbelop"):
+        if (resultat.get(beløpsfelt) is not None
+                and deterministiske.get(beløpsfelt) is None):
+            try:
+                float(str(resultat[beløpsfelt])
+                      .replace(",", ".").replace(" ", ""))
+            except (ValueError, TypeError):
+                resultat.pop(beløpsfelt)
 
     # kontornavn betyr NAV-kontor — alt annet er en organisasjon, ikke kontor
     if resultat.get("kontornavn") and not str(resultat["kontornavn"]).upper().startswith("NAV"):
@@ -1453,8 +1494,11 @@ def felter_flatt(tekst: str, ocr_brukt: bool = False) -> dict:
         "saksnummer": ent.get("saksnummer"),
         "ytelse": ent.get("ytelse"),
         "kontornavn": ent.get("kontornavn"),
-        # beløp
+        # beløp — «belop» er FØRSTE beløp i teksten, «totalbelop» det på
+        # en Total-/Sum-linje. På en kvittering er de forskjellige (pris
+        # vs. sum); klienten velger hvilket malen skal fylles med.
         "belop": ent.get("belop"),
+        "totalbelop": ent.get("totalbelop"),
         # datoer
         "dato": ent.get("dato"),
         "dokumentdato": dd.get("dato"),
