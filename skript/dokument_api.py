@@ -500,6 +500,32 @@ MAKS_SVAR_TOKENS = int(os.environ.get("MAKS_SVAR_TOKENS", "1024"))
 #  Multipart-parsing (kun stdlib) — henter fil OG tekstfelter         #
 # ------------------------------------------------------------------ #
 
+def _cd_parameter(hoder: bytes, parameter: str):
+    """Henter en Content-Disposition-parameter («name» / «filename») ENTEN
+    klienten siterer verdien eller ikke. None hvis parameteren mangler.
+
+    R63: RFC 7578 sier verdien BØR siteres, men .NET-baserte klienter —
+    og dermed UiPath — sender et enkelt token USITERT:
+        Content-Disposition: form-data; name=sporsmal
+    Parseren krevde `name="` med anførselstegn og droppet da ALLE
+    tekstfeltene i stillhet. Fila kom likevel fram, fordi et filnavn med
+    mellomrom («Taxi fra.pdf») MÅ siteres — derfor så det ut som om bare
+    tekstfeltene «forsvant» hos klienten. Det er denne fella som gjorde at
+    skjema_mal/skjema_motor/sporsmal aldri nådde serveren fra UiPath.
+
+    Foranstilt `(?:^|[;\\s])` er nødvendig: uten den ville «name» også
+    treffe inni «filename=»."""
+    tekst = hoder.decode("utf-8", "replace")
+    treff = re.search(
+        r'(?:^|[;\s])' + re.escape(parameter) + r'\s*=\s*(?:"([^"]*)"|([^;\r\n]*))',
+        tekst, re.IGNORECASE)
+    if not treff:
+        return None
+    if treff.group(1) is not None:
+        return treff.group(1)
+    return (treff.group(2) or "").strip()
+
+
 def _parse_multipart(body: bytes, content_type: str):
     """Returnerer (filnavn, filbytes, tekstfelter) fra en
     multipart/form-data-body. Filnavn/filbytes er None hvis ingen fil;
@@ -517,22 +543,15 @@ def _parse_multipart(body: bytes, content_type: str):
         hoder, _, innhold = del_.partition(b"\r\n\r\n")
         # fjern etterfølgende \r\n før neste boundary
         innhold = innhold.rstrip(b"\r\n")
-        if b"filename=" in hoder:
-            navn = "opplastet.pdf"
-            for linje in hoder.split(b"\r\n"):
-                if b"filename=" in linje:
-                    try:
-                        navn = linje.split(b'filename="', 1)[1].split(b'"', 1)[0].decode("utf-8", "replace")
-                    except Exception:
-                        pass
+        funnet_filnavn = _cd_parameter(hoder, "filename")
+        funnet_feltnavn = _cd_parameter(hoder, "name")
+        if funnet_filnavn is not None:
             if filbytes is None:      # første fil vinner
-                filnavn, filbytes = navn, innhold
-        elif b'name="' in hoder:
-            try:
-                feltnavn = hoder.split(b'name="', 1)[1].split(b'"', 1)[0].decode("utf-8", "replace")
-                tekstfelter[feltnavn] = innhold.decode("utf-8", "replace").strip()
-            except Exception:
-                pass
+                filnavn = funnet_filnavn or "opplastet.pdf"
+                filbytes = innhold
+        elif funnet_feltnavn:
+            tekstfelter[funnet_feltnavn] = \
+                innhold.decode("utf-8", "replace").strip()
     return filnavn, filbytes, tekstfelter
 
 
