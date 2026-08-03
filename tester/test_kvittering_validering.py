@@ -17,7 +17,7 @@ sys.path.insert(0, ".")
 
 import pytest
 
-from delt.tekstuttrekk import finn_alle_belop, finn_belop
+from delt.tekstuttrekk import finn_alle_belop, finn_belop, finn_totalbelop
 
 
 # ------------------------------------------------------------------ #
@@ -159,6 +159,79 @@ def test_alle_belop_paa_kvitteringstekst():
 ])
 def test_belop_etikett_og_tall_paa_hver_sin_linje(tekst, forventet):
     assert finn_belop(tekst) == forventet
+
+
+# ------------------------------------------------------------------ #
+#  totalbelop — Total-/Sum-linjen, skilt fra «første beløp»           #
+# ------------------------------------------------------------------ #
+
+# Kvitteringen slik OCR leste den. Merk «Total Km» RETT FØR «Total Kr»:
+# en etikettbasert totalsøker som ikke krever et ekte beløp ville tatt
+# 15,8 (kilometer) og rapportert det som kroner.
+TAXI = ("Kvittering for taxitur\n"
+        "Total Km:\n15,8\n"
+        "Betalingskort: 553017******1641\n"
+        "Pris Kr:\n463,00\n"
+        "+ Utlegg Kr:\n23,00\n"
+        "Herav MVA 12% Kr:\n52,07\n"
+        "Total Kr:\n486,00")
+
+
+def test_totalbelop_og_belop_er_forskjellige_paa_kvittering():
+    """Poenget med at feltet finnes: «første beløp» er prisen, ikke
+    totalen. Begge leveres, klienten velger."""
+    assert finn_belop(TAXI) == 463.0        # Pris — første beløp
+    assert finn_totalbelop(TAXI) == 486.0   # Total Kr — summen
+
+
+@pytest.mark.parametrize("tekst", [
+    "Total Km:\n15,8",              # kilometer er ikke kroner
+    "Herav MVA 12% Kr:\n52,07",     # mva-linjen er ikke totalen
+    "Ingen sum her 463,00",         # beløp uten total-etikett
+    "Vedtak: du får 12 500 kroner per måned",
+])
+def test_totalbelop_uten_ekte_totaletikett(tekst):
+    assert finn_totalbelop(tekst) is None
+
+
+@pytest.mark.parametrize("tekst,forventet", [
+    ("Sum: 1 250,00", 1250.0),
+    ("Å betale 486,00", 486.0),
+    ("Til betaling kr 999,50", 999.5),
+    ("Totalt 12 500 kroner", 12500.0),
+    ("Sum\n15 000,00", 15000.0),      # etikett og tall på hver sin linje
+    ("Totalsum: 6380.00 NOK", 6380.0),
+])
+def test_totalbelop_etiketter(tekst, forventet):
+    assert finn_totalbelop(tekst) == forventet
+
+
+def test_totalbelop_med_i_felteruttrekk():
+    """Feltet må faktisk nå fram til felter-svaret UiPath leser."""
+    from delt.tekstuttrekk import utvid_entiteter
+    felter = utvid_entiteter(TAXI, {})
+    assert felter["belop"] == 463.0
+    assert felter["totalbelop"] == 486.0
+
+
+def test_totalbelop_som_plassholder_i_mal():
+    """UiPath fyller maler med {feltnavn} — da må navnet finnes i
+    felter_flatt, ikke bare i felter-svaret."""
+    from delt.tekstuttrekk import flett_mal
+    utfylt, rapport = flett_mal(
+        {"pris": "{belop}", "total": "{totalbelop}"}, TAXI)
+    assert utfylt == {"pris": 463.0, "total": 486.0}
+    assert rapport["ukjente_felter"] == []
+    assert "totalbelop" in rapport["tilgjengelige_felter"]
+
+
+def test_belop_uendret_uten_totaletikett():
+    """Additivt: dokumenter uten Total-linje oppfører seg NØYAKTIG som før
+    — «belop» er urørt og «totalbelop» settes ikke."""
+    from delt.tekstuttrekk import utvid_entiteter
+    felter = utvid_entiteter("Du får utbetalt 12 500 kroner i måneden", {})
+    assert felter["belop"] == 12500.0
+    assert "totalbelop" not in felter
 
 
 # ------------------------------------------------------------------ #
