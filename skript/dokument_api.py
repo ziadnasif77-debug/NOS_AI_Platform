@@ -97,7 +97,7 @@ _ENV_SATT = _last_env_fil() if __name__ == "__main__" else []
 from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_belop, finn_alle_datoer,
                                finn_alle_eposter, finn_alle_fodselsnummer,
-                               finn_alle_kontonummer,
+                               finn_alle_kid, finn_alle_kontonummer,
                                finn_alle_organisasjonsnummer,
                                finn_alle_telefoner, finn_dato,
                                finn_dokumentdato, finn_koder_med_kontekst,
@@ -5189,7 +5189,8 @@ def er_ren_sidelesing(sporsmal: str) -> bool:
 _STREKKODE_SPM = re.compile(
     r"^\W*(?:(?:hva|hvilken|hvilke)\s+(?:er|st(?:å|aa)r)?\s*)?"
     r"(?:(?:hent|vis|les|gi\s+meg|skriv(?:\s+ut)?)\s+)?"
-    r"(?:ut\s+)?(?:strekkode\w*|qr[\s-]?kode\w*|barcode\w*|kode\w*)"
+    r"(?:ut\s+)?(?:strek[\s-]?kode\w*|bar[\s-]?kode\w*|barcode\w*"
+    r"|qr[\s-]?kode\w*|qr\b|kode\w*)"
     r"(?:[^?]{0,40})?\W*\??\W*$", re.IGNORECASE)
 
 
@@ -5227,10 +5228,71 @@ def _strekkodesvar(strekkoder: list, sideref=None, strekkoder_lest=True):
         for k in aktuelle)
 
 
+# Spørsmål som ber om en SJEKKSUMVALIDERT identifikator. Disse finnes
+# allerede bevist i uttrekket (mod11/Luhn/format) — å la en 4B-modell
+# gjengi sifrene er å bytte matematikk mot sannsynlighet. Modellen
+# velger dessuten ÉN verdi; bunken har to fødselsnumre og to
+# kontonumre, og koden svarer med begge.
+_IDENT_ORD = [
+    ("fodselsnummer", r"f(?:ø|oe?)dsels[\s-]?nummer\w*|fnr\b|"
+                      r"person[\s-]?nummer\w*|d-?nummer\w*"),
+    ("kontonummer", r"konto[\s-]?(?:nummer|nr)\w*|kontoen\b|konto\b"),
+    ("organisasjonsnummer", r"organisasjons[\s-]?nummer\w*|org\.?[\s-]?nr\w*|"
+                            r"orgnummer\w*"),
+    ("kid", r"kid[\s-]?(?:nummer|nr)\w*|kid\b"),
+    ("telefon", r"telefon\w*|tlf\b|mobil\w*"),
+    ("epost", r"e-?post\w*|e-?mail\w*|epostadresse\w*"),
+]
+_IDENT_SPM = [
+    (felt, re.compile(
+        r"^\W*(?:(?:hva|hvilken|hvilke|hvor)\s+(?:er|st(?:å|aa)r)?\s*)?"
+        r"(?:(?:hent|vis|les|finn|gi\s+meg|skriv(?:\s+ut)?)\s+)?"
+        r"(?:ut\s+)?(?:\w+s\s+)?(?:" + monster + r")"
+        r"(?:[^?]{0,40})?\W*\??\W*$", re.IGNORECASE))
+    for felt, monster in _IDENT_ORD
+]
+
+
+def identsporsmalets_felt(sporsmal: str):
+    """Hvilken sjekksumvalidert identifikator spør spørsmålet om?
+    None hvis det ikke er et rent identifikatorspørsmål."""
+    for felt, monster in _IDENT_SPM:
+        if monster.match(sporsmal or ""):
+            return felt
+    return None
+
+
+# Finnerne som svarer på hvert identifikatorspørsmål — de SAMME som
+# /sladd og koordinatene bruker, så svarene aldri kan sprike.
+_IDENT_FINNERE = {
+    "fodselsnummer": (finn_alle_fodselsnummer, "fødselsnummer"),
+    "kontonummer": (finn_alle_kontonummer, "kontonummer"),
+    "organisasjonsnummer": (finn_alle_organisasjonsnummer,
+                            "organisasjonsnummer"),
+    "kid": (finn_alle_kid, "KID-nummer"),
+    "telefon": (finn_alle_telefoner, "telefonnummer"),
+    "epost": (finn_alle_eposter, "e-postadresse"),
+}
+
+
+def _identsvar(tekst: str, felt: str):
+    """Deterministisk svar på et identifikatorspørsmål."""
+    finner, navn = _IDENT_FINNERE[felt]
+    funn = finner(tekst or "")
+    if not funn:
+        return (f"Fant ingen {navn} i dokumentet. (Et nummer som ikke "
+                "består kontrollsifferet utelates med vilje — det er "
+                "trolig feillest.)")
+    if len(funn) == 1:
+        return funn[0]
+    return f"{len(funn)} {navn}: " + ", ".join(funn)
+
+
 def kan_svares_uten_modell(sporsmal: str) -> bool:
     """Spørsmål koden kan besvare alene — de skal forbi Borealis-portene
     så en nede modell ikke feller noe vi kan svare på deterministisk."""
-    return er_ren_sidelesing(sporsmal) or er_strekkodesporsmal(sporsmal)
+    return (er_ren_sidelesing(sporsmal) or er_strekkodesporsmal(sporsmal)
+            or identsporsmalets_felt(sporsmal) is not None)
 
 
 def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
@@ -5286,11 +5348,26 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                     "tolket_sporsmal": (f"side {sideref} gjengitt ordrett "
                                         "(deterministisk, uten modell)"),
                     "svar_avkortet": False, "advarsler": advarsler}
-        # Spørsmål OM en bestemt side → modellen får kun den siden
+        # Spørsmål OM en bestemt side → svaret hentes fra kun den siden
         raa_tekst = f"[Side {sideref} av {antall_sider}]\n{sider[sideref]}"
         advarsler.append(
-            f"Spørsmålet peker på side {sideref} — modellen fikk kun den "
-            "siden (deterministisk utsnitt)")
+            f"Spørsmålet peker på side {sideref} — svaret er hentet fra "
+            "kun den siden (deterministisk utsnitt)")
+
+    # Sjekksumvaliderte identifikatorer svares fra uttrekket, ikke av
+    # modellen. Ligger ETTER sideroutingen, så «kontonummeret på side 2»
+    # søker i riktig side. Finner koden ingenting, er det fordi
+    # kontrollsifferet ikke stemmer — og da skal vi si det, ikke la
+    # modellen gjette et tall som ser riktig ut.
+    ident_felt = identsporsmalets_felt(sporsmal)
+    if ident_felt and len((raa_tekst or "").strip()) >= 5:
+        return {"tom": False, "modell_brukt": False,
+                "svar": _identsvar(raa_tekst, ident_felt),
+                "tall_verifisert": True,
+                "tolket_sporsmal": (f"{ident_felt} hentet fra det "
+                                    "sjekksumvaliderte uttrekket "
+                                    "(deterministisk)"),
+                "svar_avkortet": False, "advarsler": advarsler}
 
     tekst = raa_tekst
     # Merk håndskriftregioner så Borealis kan skille dem fra trykt

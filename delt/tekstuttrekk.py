@@ -1307,11 +1307,18 @@ def finn_alle_organisasjonsnummer(tekst: str) -> list:
     return _unike(k for k in _tallkandidater(tekst, 9) if er_gyldig_orgnr(k))
 
 
+# «KID», «KID-nummer», «KIDnummer», «KID nr.» — alle formene som står på
+# norske fakturaer. Uten «nummer/nr»-varianten fant vi bare KID-en på
+# fakturaer som TILFELDIGVIS også har en bar «KID:»-linje (målt på
+# testbunken: «KID-nummer 1002345678911» ga ingen treff alene).
+_KID_ETIKETT = r"(?i)\bkid[\s-]*(?:nummer|nr\.?)?[.:\s-]*"
+
+
 def finn_alle_kid(tekst: str) -> list:
     """KID krever etikett i konteksten — et rent tall uten «KID» ved
     siden av er for tvetydig til å påstås å være KID."""
     ut = []
-    for treff in re.finditer(r"(?i)\bkid[.:\s-]*((?:\d[ .]?){2,30}\d)", tekst):
+    for treff in re.finditer(_KID_ETIKETT + r"((?:\d[ .]?){2,30}\d)", tekst):
         kompakt = re.sub(r"[ .]", "", treff.group(1))
         if er_gyldig_kid(kompakt):
             ut.append(kompakt)
@@ -1366,8 +1373,9 @@ def finn_sladdeomraader(tekst: str, typer=None) -> list:
                 funn.append((start, slutt, "organisasjonsnummer"))
     if "kid" in valgte:
         # Kun selve nummeret sladdes — «KID»-etiketten står igjen, så
-        # leseren ser at det STO et KID der.
-        for treff in re.finditer(r"(?i)\bkid[.:\s-]*((?:\d[ .]?){2,30}\d)",
+        # leseren ser at det STO et KID der. Samme etikettmønster som
+        # finn_alle_kid, så de aldri kan være uenige.
+        for treff in re.finditer(_KID_ETIKETT + r"((?:\d[ .]?){2,30}\d)",
                                  tekst):
             if er_gyldig_kid(re.sub(r"[ .]", "", treff.group(1))):
                 funn.append((treff.start(1), treff.end(1), "kid"))
