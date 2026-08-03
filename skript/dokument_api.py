@@ -703,6 +703,24 @@ def _ocr_status() -> dict:
         return {"feil": f"kunne ikke lese motorstatus: {exc}"}
 
 
+def naturlig_dpi(doc, side):
+    """Bildesidens EGEN oppløsning i dpi — eller None for en ren tekst-/
+    vektorside (som kan rendres vilkårlig fint).
+
+    Trukket ut av ocr_skala slik at forhåndssjekken og OCR-veien bruker
+    NØYAKTIG samme regnestykke: én piksel innebygd bilde per PDF-punkt
+    tilsvarer 72 dpi."""
+    try:
+        bilder = side.get_images(full=True)
+        if len(bilder) == 1 and side.rect.width > 0:
+            bredde_px = doc.extract_image(bilder[0][0]).get("width", 0)
+            if bredde_px:
+                return (bredde_px / side.rect.width) * 72.0
+    except Exception:
+        pass   # klarer vi ikke å lese bildeinfo, oppgi ingen dpi
+    return None
+
+
 def ocr_skala(doc, side):
     """Renderoppløsning for OCR av én side.
 
@@ -716,16 +734,65 @@ def ocr_skala(doc, side):
     import fitz
 
     standard = OCR_DPI / 72
-    try:
-        bilder = side.get_images(full=True)
-        if len(bilder) == 1 and side.rect.width > 0:
-            bredde_px = doc.extract_image(bilder[0][0]).get("width", 0)
-            if bredde_px:
-                naturlig = bredde_px / side.rect.width
-                standard = min(standard, max(naturlig, 1.0))
-    except Exception:
-        pass   # klarer vi ikke å lese bildeinfo, bruk standard dpi
+    dpi = naturlig_dpi(doc, side)
+    if dpi is not None:
+        standard = min(standard, max(dpi / 72.0, 1.0))
     return fitz.Matrix(standard, standard)
+
+
+# --- forhåndssjekk: billig kvalitetsdom FØR GPU-en brukes -----------
+# Sidetak: forhåndssjekken skal være rask og GPU-fri, og et 300-siders
+# dokument trenger ikke 300 målinger for en dom — de første sidene er
+# representative for skannerens innstillinger.
+FORHANDSSJEKK_MAKS_SIDER = int(os.environ.get("FORHANDSSJEKK_MAKS_SIDER", "10"))
+# «Avvis»-tersklene er strengere enn advarsel-tersklene i
+# delt/forbehandling.py: en advarsel betyr «antakelig dårlig lesing»,
+# avvis betyr «OCR er så godt som garantert søppel — ikke bruk GPU-en».
+#
+# MERK: dømming skjer på RENDREDE PIKSLER, ikke på nominell dpi. Målt i
+# kalibreringen: et knivskarpt 1700×2200-bilde lastet opp som PNG får
+# nominell dpi 96 (formatets standardantakelse, ikke en egenskap ved
+# bildet) — en dpi-terskel ville avvist hvert eneste mobilfoto uansett
+# hvor godt det var. Pikslene er det OCR faktisk ser; dpi rapporteres
+# som informasjon, uten dom.
+FORHANDSSJEKK_AVVIS_PIKSLER = int(
+    os.environ.get("FORHANDSSJEKK_AVVIS_PIKSLER", "300"))
+FORHANDSSJEKK_AVVIS_SKARPHET = float(
+    os.environ.get("FORHANDSSJEKK_AVVIS_SKARPHET", "30"))
+
+
+def doem_forhandssjekk(sider: list) -> tuple:
+    """Samlet dom over sidevurderingene: (dom, anbefaling).
+
+    Reglene, i prioritert rekkefølge:
+      «avvis»   — alle sider er tomme, ELLER alle sider med innhold er
+                  uleselige (dpi/skarphet under avvis-terskelen).
+      «tvilsom» — minst én side har en advarsel. Dokumentet kan leses,
+                  men resultatet bør gjennom et menneske.
+      «god»     — ingen advarsler.
+
+    Én tom side blant innholdssider gir IKKE avvis: tosidig skanning
+    legger rutinemessig inn blanke baksider, og de er ikke en feil."""
+    tomme = [s for s in sider if s["tom"]]
+    med_innhold = [s for s in sider if not s["tom"]]
+    if not med_innhold:
+        return ("avvis",
+                f"Alle {len(sider)} vurderte sider er tomme — skann "
+                "dokumentet på nytt (riktig side opp, dokumentet i "
+                "skanneren).")
+    uleselige = [s for s in med_innhold if s["uleselig"]]
+    if len(uleselige) == len(med_innhold):
+        return ("avvis",
+                "Alle sider med innhold er uleselige (for lav oppløsning "
+                "eller sterkt uskarpe) — OCR vil gi søppel. Skann på nytt "
+                "med høyere oppløsning (minst 200 dpi) og godt fokus.")
+    if any(s["advarsler"] for s in sider) or tomme:
+        return ("tvilsom",
+                "Dokumentet kan leses, men har kvalitetsadvarsler — "
+                "resultatet bør kontrolleres av et menneske. Se "
+                "advarslene per side.")
+    return ("god", "Skannkvaliteten ser god ut — send dokumentet til "
+                   "POST /dokument.")
 
 
 def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
@@ -2286,6 +2353,59 @@ def _skjemaer() -> dict:
                                 "gjøre for å avgjøre om et menneske bør se "
                                 "på svaret."),
                 "versjon": ref("Versjon")}},
+        "SideVurdering": {
+            "type": "object",
+            "description": "Kvalitetsmåling av ÉN side, uten OCR.",
+            "properties": {
+                "side": {"type": "integer", "example": 1},
+                "dpi": {"type": "number", "nullable": True,
+                        "description": "Nominell oppløsning — KUN "
+                                       "informasjon, aldri dømt på: for et "
+                                       "opplastet bilde er den formatets "
+                                       "antakelse (PNG=96), ikke en "
+                                       "egenskap ved bildet. null for "
+                                       "tekst-/vektorsider."},
+                "piksler": {"type": "array", "items": {"type": "integer"},
+                            "description": "[bredde, høyde] slik OCR ville "
+                                           "sett siden — dette dømmes det "
+                                           "på"},
+                "skarphet": {"type": "number",
+                             "description": "Laplacian-varians — høyere er "
+                                            "skarpere"},
+                "lys": {"type": "number",
+                        "description": "Gjennomsnittlig lysnivå 0–255"},
+                "blekk_andel": {"type": "number",
+                                "description": "Andel mørke piksler. Nær 0 "
+                                               "= tom side."},
+                "tom": b(),
+                "uleselig": b(description="Under AVVIS-terskelen (under 300 "
+                                          "piksler eller sterkt uskarp) — "
+                                          "OCR vil gi søppel"),
+                "advarsler": {"type": "array", "items": s()}}},
+        "ForhandssjekkSvar": {
+            "type": "object",
+            "description": "Kvalitetsdom FØR prosessering — aldri OCR, "
+                           "aldri modell. Bruk «dom» som port: god → send "
+                           "til /dokument; tvilsom → send, men flagg for "
+                           "menneskelig kontroll; avvis → be om nytt skann "
+                           "i stedet for å brenne GPU-tid.",
+            "properties": {
+                "ok": b(),
+                "filnavn": s(),
+                "dom": s(enum=["god", "tvilsom", "avvis"]),
+                "tekstlag": b(description="Dokumentet har tekstlag — OCR "
+                                          "kjøres aldri, skannkvalitet er "
+                                          "irrelevant"),
+                "trenger_ocr": b(),
+                "antall_sider": {"type": "integer", "nullable": True},
+                "sider_vurdert": {"type": "integer"},
+                "sider": {"type": "array",
+                          "items": ref("SideVurdering")},
+                "advarsler": {"type": "array", "items": s()},
+                "anbefaling": s(description="Menneskelig lesbar anbefaling "
+                                            "på norsk"),
+                "tid_sekunder": {"type": "number"},
+                "versjon": {"type": "object"}}},
         "EkkoSvar": {
             "type": "object",
             "description": "Diagnose: nøyaktig hva serveren mottok. "
@@ -2569,6 +2689,34 @@ def _openapi() -> dict:
                                     "forrige svar, så får du bare det nye"}],
                 "responses": {"200": {"description":
                     "status, hendelser, neste, resultat, feil"}}}},
+            "/forhandssjekk": {"post": {
+                "summary": "Kvalitetsdom FØR prosessering — avvis dårlige skann uten å bruke GPU",
+                "description":
+                    "Rendrer sidene ved samme oppløsning som OCR ville "
+                    "brukt og måler skarphet, lys, oppløsning (dpi) og "
+                    "tomme sider — men kjører ALDRI OCR og rører aldri "
+                    "modellen. Svarer på ~sekundet.\n\n"
+                    "Bruk «dom» som port i roboten: god → POST /dokument; "
+                    "tvilsom → prosesser, men flagg for menneskelig "
+                    "kontroll; avvis → be om nytt skann.\n\n"
+                    "Dokumenter MED tekstlag får alltid dommen «god» uten "
+                    "sidevurderinger: OCR kjøres aldri på dem, så "
+                    "skannkvalitet er irrelevant.",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "properties": {
+                        "fil": fil_felt,
+                        "maks_sider": {"type": "integer",
+                                       "description": "Hvor mange sider som "
+                                                      "vurderes (tak 10)"}}}}}},
+                "responses": {
+                    "200": {"description": "Kvalitetsdom",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/"
+                                        "ForhandssjekkSvar"}}}},
+                    "400": {"description": "Manglende fil eller korrupt PDF",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/ekko": {"post": {
                 "summary": "Diagnose: svarer med NØYAKTIG hva serveren mottok fra deg",
                 "description":
@@ -3319,6 +3467,135 @@ class Handler(BaseHTTPRequestHandler):
             "raa_deler": deler,
         })
 
+    def _forhandssjekk(self, filnavn, slag, innhold, tekstfelter):
+        """POST /forhandssjekk — billig kvalitetsdom FØR GPU-en brukes.
+
+        Rendrer sidene (samme oppløsning som OCR ville brukt) og måler
+        skarphet/lys/oppløsning/tomhet med vurder_kvalitet og
+        andel_blekk fra delt/forbehandling — men kjører ALDRI OCR og
+        rører aldri modellen. Et dårlig skann avvises på ~sekundet i
+        stedet for å koste 30 s GPU og gi søppeltekst.
+
+        Har dokumentet TEKSTLAG, er skannkvalitet irrelevant (OCR kjøres
+        aldri) — da er dommen «god» uten sidevurderinger."""
+        t0 = time.time()
+        milde, omvendte = _sjekk_feltnavn(tekstfelter,
+                                          _KJENTE_FELT_FORHANDSSJEKK)
+        if omvendte:
+            return self._svar(400, _omvendt_felt_feil(
+                omvendte, _KJENTE_FELT_FORHANDSSJEKK))
+        advarsler = _ukjent_felt_advarsel(milde, _KJENTE_FELT_FORHANDSSJEKK)
+        grunn = {"ok": True, "filnavn": filnavn,
+                 "versjon": {"api": API_VERSJON,
+                             "uttrekk_regler": UTTREKK_REGEL_VERSJON}}
+
+        # DOCX/TXT/regneark: det finnes ikke noe skann å vurdere
+        if slag == "tekst":
+            return self._svar(200, {
+                **grunn, "dom": "god", "tekstlag": True,
+                "trenger_ocr": False, "antall_sider": None,
+                "sider_vurdert": 0, "sider": [],
+                "advarsler": advarsler,
+                "anbefaling": "Tekstdokument — det finnes ikke noe skann "
+                              "å vurdere. Send det rett til POST /dokument.",
+                "tid_sekunder": round(time.time() - t0, 1)})
+
+        import fitz
+        try:
+            doc = fitz.open(stream=innhold, filetype="pdf")
+        except Exception as exc:
+            return self._svar(400, {"ok": False,
+                                    "feil": f"Ugyldig/korrupt PDF: {exc}"})
+        try:
+            antall = len(doc)
+            if antall == 0:
+                return self._svar(400, {"ok": False,
+                                        "feil": "PDF-en har ingen sider"})
+
+            # Tekstlag → OCR kjøres aldri → skannkvalitet er irrelevant.
+            # Samme terskel (20 tegn) som analyser_bytes bruker for å
+            # avgjøre om OCR trengs — de to skal aldri være uenige.
+            total_tekst = sum(len((s.get_text() or "").strip())
+                              for s in doc)
+            if total_tekst >= 20:
+                return self._svar(200, {
+                    **grunn, "dom": "god", "tekstlag": True,
+                    "trenger_ocr": False, "antall_sider": antall,
+                    "sider_vurdert": 0, "sider": [],
+                    "advarsler": advarsler,
+                    "anbefaling": "Dokumentet har tekstlag — OCR trengs "
+                                  "ikke, og skannkvalitet er irrelevant. "
+                                  "Send det rett til POST /dokument.",
+                    "tid_sekunder": round(time.time() - t0, 1)})
+
+            import numpy as np
+
+            from delt.forbehandling import (TOM_SIDE_BLEKK, andel_blekk,
+                                            vurder_kvalitet)
+            # Klientens maks_sider respekteres, men aldri over taket —
+            # et kjent felt som ignoreres i stillhet er nettopp fella
+            # resten av API-et nå vokter mot.
+            try:
+                onsket = int(tekstfelter.get("maks_sider", "0") or 0)
+            except ValueError:
+                onsket = 0
+            tak = FORHANDSSJEKK_MAKS_SIDER
+            grense = min(onsket, tak) if onsket > 0 else tak
+            grense = min(grense, antall)
+            sider = []
+            for i in range(grense):
+                side = doc[i]
+                dpi = naturlig_dpi(doc, side)
+                pix = side.get_pixmap(matrix=ocr_skala(doc, side))
+                bilde = np.frombuffer(pix.samples, dtype=np.uint8) \
+                    .reshape(pix.height, pix.width, pix.n)
+                if pix.n == 4:      # RGBA → RGB
+                    bilde = bilde[:, :, :3]
+                kvalitet = vurder_kvalitet(bilde)
+                blekk = andel_blekk(bilde)
+                tom = blekk < TOM_SIDE_BLEKK
+                side_advarsler = list(kvalitet["advarsler"])
+                if tom:
+                    side_advarsler.append(
+                        "tom side — ingen synlig tekst eller innhold")
+                # «uleselig» = under avvis-terskelen, ikke bare under
+                # advarsel-terskelen. Dømmes på det OCR faktisk får se:
+                # rendrede piksler og skarphet — IKKE nominell dpi (se
+                # kommentaren ved tersklene).
+                min_px = min(bilde.shape[0], bilde.shape[1])
+                uleselig = (min_px < FORHANDSSJEKK_AVVIS_PIKSLER
+                            or kvalitet["skarphet"]
+                            < FORHANDSSJEKK_AVVIS_SKARPHET)
+                if not tom and min_px < FORHANDSSJEKK_AVVIS_PIKSLER:
+                    side_advarsler.append(
+                        f"altfor få piksler ({min_px} — under "
+                        f"{FORHANDSSJEKK_AVVIS_PIKSLER}): teksten kan "
+                        "ikke leses")
+                sider.append({
+                    "side": i + 1,
+                    "dpi": round(dpi, 1) if dpi is not None else None,
+                    "piksler": [bilde.shape[1], bilde.shape[0]],
+                    "skarphet": kvalitet["skarphet"],
+                    "lys": kvalitet["lys"],
+                    "blekk_andel": round(blekk, 4),
+                    "tom": tom,
+                    "uleselig": bool(uleselig and not tom),
+                    "advarsler": side_advarsler,
+                })
+            if grense < antall:
+                advarsler.append(
+                    f"Kun de første {grense} av {antall} sider er vurdert "
+                    f"(feltet maks_sider, tak {tak})")
+            dom, anbefaling = doem_forhandssjekk(sider)
+            return self._svar(200, {
+                **grunn, "dom": dom, "tekstlag": False,
+                "trenger_ocr": True, "antall_sider": antall,
+                "sider_vurdert": grense, "sider": sider,
+                "advarsler": advarsler, "anbefaling": anbefaling,
+                "tid_sekunder": round(time.time() - t0, 1)})
+        finally:
+            doc.close()
+
     def _les_dokument(self, filnavn, slag, innhold, maks_ocr, les_strekkoder):
         """Leser dokumentet ÉN gang og pakker det i en DokumentKontekst —
         delt av bryter-veien OG operasjoner-veien, så begge leser likt.
@@ -3838,7 +4115,8 @@ class Handler(BaseHTTPRequestHandler):
                 "status": jobb.get("status")})
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
-                       "/fyll_skjema", "/innsyn", "/dokument", "/ekko"):
+                       "/fyll_skjema", "/innsyn", "/dokument", "/ekko",
+                       "/forhandssjekk"):
             return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
@@ -3918,6 +4196,14 @@ class Handler(BaseHTTPRequestHandler):
                                                 f"korrupt eller ugyldig format ({type(exc).__name__})"})
             if slag is None:
                 return self._svar(400, {"ok": False, "feil": innhold})
+
+        # Forhåndssjekk: kvalitetsdom uten OCR og uten modell. Ruges så
+        # tidlig fordi den ikke trenger noe av maskineriet under.
+        if sti == "/forhandssjekk":
+            if innhold is None:
+                return self._svar(400, {
+                    "ok": False, "feil": "Ingen fil funnet (felt 'fil')"})
+            return self._forhandssjekk(filnavn, slag, innhold, tekstfelter)
 
         # Valgfri sidegrense for synkron OCR (felt maks_sider)
         try:
@@ -4837,6 +5123,7 @@ _KJENTE_FELT_DOKUMENT = {
     "skjema_mal", "skjema_motor", "operasjoner", "maks_sider", "strekkoder"}
 _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
+_KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}
 
 
 def _ukjent_felt_advarsel(milde: list, kjente: set) -> list:

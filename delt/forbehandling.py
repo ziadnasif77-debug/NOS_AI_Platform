@@ -37,6 +37,10 @@ MAKS_SKJEVHET_GRADER = 5.0
 MIN_SKJEVHET_GRADER = 0.4
 MIN_FIRKANT_AREAL = 0.55      # dokumentfirkanten må dekke > 55 % av bildet
 UJEVN_BELYSNING_STD = 18.0    # std i bakgrunnsestimatet før vi flater
+# Under denne blekkandelen regnes en side som TOM (brukes av
+# forhåndssjekken). Kalibrert med margin: en side med én kort tekstlinje
+# ligger typisk over 0,3 %, en blank skannerside under 0,05 %.
+TOM_SIDE_BLEKK = float(os.environ.get("KVALITET_TOM_SIDE", "0.002"))
 
 
 def vurder_kvalitet(bilde_np) -> dict:
@@ -56,6 +60,24 @@ def vurder_kvalitet(bilde_np) -> dict:
         advarsler.append("utbrent/blankt bilde — unngå gjenskinn og blits")
     return {"skarphet": round(skarphet, 1), "lys": round(lys, 1),
             "advarsler": advarsler}
+
+
+def andel_blekk(bilde_np) -> float:
+    """Andelen «blekk» (mørke piksler) på siden — 0.0 er helt hvitt.
+
+    Brukes av forhåndssjekken til å finne TOMME sider før OCR i det hele
+    tatt startes. De ytterste 5 % av hver kant kuttes først: skannere
+    legger ofte en mørk skyggekant langs papirkanten, og uten marginen
+    ville en blank side med kantskygge målt som «har innhold».
+
+    Fast terskel (< 200 av 255) med vilje, ikke Otsu: Otsu FINNER en
+    terskel selv i ren støy og ville dømt en blank side til å ha blekk."""
+    import cv2
+    h, w = bilde_np.shape[:2]
+    mh, mw = int(h * 0.05), int(w * 0.05)
+    utsnitt = bilde_np[mh:h - mh or None, mw:w - mw or None]
+    graa = cv2.cvtColor(utsnitt, cv2.COLOR_RGB2GRAY)
+    return float((graa < 200).mean())
 
 
 def rett_perspektiv(bilde_np):
