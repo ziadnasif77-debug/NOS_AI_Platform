@@ -3138,6 +3138,17 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True, "tekst": korriger_borealis(raa_tekst)})
                 korrigert = deler["korriger"].get("tekst")
 
+        # «kilde» skal si hva som FAKTISK skjedde, ikke hva som ble bedt om.
+        # auto-motoren kaller modellen bare for de feltene den ikke klarte å
+        # bevise deterministisk, så svaret ligger i «modell_brukt» — ikke i
+        # bryteren. Uten dette meldte /dokument «deterministisk» selv når
+        # Borealis hadde fylt et felt, og klienten kunne ikke se forskjell
+        # på et bevist og et gjettet svar. /fyll_skjema gjorde det allerede
+        # riktig; dette retter opp forskjellen mellom de to veiene.
+        skjema_del = deler.get("skjema")
+        modell_kjorte = vil_ha_modell or (isinstance(skjema_del, dict)
+                                          and skjema_del.get("modell_brukt"))
+
         # Feil i en del skal også være synlig for den som bare leser
         # advarslene (GUI-et, en enkel klient) — ikke bare i deltreet
         for navn in ("felter", "struktur", "svar", "skjema", "korriger"):
@@ -3162,7 +3173,7 @@ class Handler(BaseHTTPRequestHandler):
                          "advarsler": advarsler},
             "fra_cache": fra_cache,
             "tid_sekunder": round(time.time() - t0, 1),
-            "kilde": ("borealis+deterministisk" if vil_ha_modell
+            "kilde": ("borealis+deterministisk" if modell_kjorte
                       else "deterministisk"),
             "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
                         "modell": _borealis["modellfil"] or _borealis["motor"]},
