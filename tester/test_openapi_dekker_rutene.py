@@ -56,6 +56,53 @@ def test_diagnoseendepunktet_er_dokumentert():
     assert "raa_deler" in str(ekko)
 
 
+def test_svarmodellene_er_dokumentert():
+    """Uten components.schemas viser ikke Swagger noen «Schemas»-seksjon, og
+    en integrator må kalle API-et for å finne ut hva feltene heter."""
+    skjemaer = api._openapi()["components"]["schemas"]
+    # De modellene en klient faktisk leser mot
+    for navn in ("DokumentSvar", "FelterDel", "StrukturDel", "SvarDel",
+                 "SkjemaDel", "Dokumentdato", "EkkoSvar", "Feilsvar"):
+        assert navn in skjemaer, f"Mangler svarmodell: {navn}"
+
+
+def test_ingen_brutte_referanser():
+    """En $ref som peker på et skjema som ikke finnes gjør at Swagger viser
+    feil i stedet for modellen."""
+    import json
+    spekk = api._openapi()
+    definerte = set(spekk["components"]["schemas"])
+    brukte = set(re.findall(r"#/components/schemas/(\w+)",
+                            json.dumps(spekk, ensure_ascii=False)))
+    assert not (brukte - definerte), \
+        f"Brutte $ref: {sorted(brukte - definerte)}"
+
+
+def test_belop_er_dokumentert_i_begge_former():
+    """Den formen som overrasker mest: «belop» er et TALL i felter-delen,
+    men en LISTE av objekter med kontekst i struktur-delen. Står det ikke
+    i modellen, oppdager klienten det først i produksjon."""
+    skjemaer = api._openapi()["components"]["schemas"]
+    felt = skjemaer["DeterministiskeFelter"]["properties"]["belop"]
+    assert felt["type"] == "number"
+    struktur = skjemaer["StrukturDel"]["properties"]["belop"]
+    assert struktur["type"] == "array"
+    assert struktur["items"]["$ref"].endswith("/Belop")
+
+
+def test_schemas_seksjonen_er_synlig_i_swagger():
+    """defaultModelsExpandDepth: -1 skjuler «Schemas» helt. Da hjelper det
+    ikke at modellene finnes i spekken."""
+    assert "defaultModelsExpandDepth: -1" not in api._SWAGGER_HTML
+    assert "defaultModelsExpandDepth: 0" in api._SWAGGER_HTML
+
+
+def test_veiledningen_ligger_under_endepunktlista():
+    html = api._SWAGGER_HTML
+    assert html.index('<div class="veiledning">') > html.index('id="swagger-ui"')
+    assert html.count("<section>") == html.count("</section>")
+
+
 def test_spekken_er_gyldig_json_struktur():
     """Hver dokumentert sti må ha minst én HTTP-metode med responses."""
     for sti, metoder in api._openapi()["paths"].items():
