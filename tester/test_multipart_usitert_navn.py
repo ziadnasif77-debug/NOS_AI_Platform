@@ -118,3 +118,79 @@ def test_cd_parameter_henter_filnavn(disposisjon, forventet):
 def test_cd_parameter_mangler_gir_none():
     assert api._cd_parameter(b'Content-Disposition: form-data; name=fil',
                              "filename") is None
+
+
+# ------------------------------------------------------------------ #
+#  Samme feilmodus, andre klientvarianter                             #
+#  Alle faller stille ut og gir 200 «som om feltet aldri ble sendt».  #
+# ------------------------------------------------------------------ #
+
+def test_boundary_med_flere_parametre():
+    """«boundary=X; charset=utf-8» — naiv split tok med resten av
+    strengen som del av boundaryen, og HELE kroppen ble usynlig."""
+    kropp = _kropp(_del(FIL_USITERT, PDF),
+                   _del(b"form-data; name=sporsmal", b"Hva er totalen?"))
+    ct = "multipart/form-data; boundary=" + GRENSE + "; charset=utf-8"
+    filnavn, _, tekstfelter = api._parse_multipart(kropp, ct)
+    assert filnavn == "Taxi fra.pdf"
+    assert tekstfelter == {"sporsmal": "Hva er totalen?"}
+
+
+def test_sitert_boundary():
+    kropp = _kropp(_del(b"form-data; name=sporsmal", b"hei"))
+    ct = 'multipart/form-data; boundary="' + GRENSE + '"'
+    assert api._parse_multipart(kropp, ct)[2] == {"sporsmal": "hei"}
+
+
+def test_uten_boundary_gir_tomt():
+    assert api._parse_multipart(b"noe", "multipart/form-data") == \
+        (None, None, {})
+
+
+def test_bare_lf_som_linjeskift():
+    """Klienter som sender LF i stedet for CRLF: krever vi CRLF, hoppes
+    HVER del over og kroppen ser tom ut."""
+    kropp = (b"--" + GRENSE.encode() + b"\n"
+             b"Content-Disposition: form-data; name=fil; filename=a.pdf\n\n"
+             + PDF + b"\n"
+             b"--" + GRENSE.encode() + b"\n"
+             b"Content-Disposition: form-data; name=sporsmal\n\n"
+             b"Hva er totalen?\n"
+             b"--" + GRENSE.encode() + b"--\n")
+    filnavn, filbytes, tekstfelter = api._parse_multipart(kropp, CT)
+    assert (filnavn, filbytes) == ("a.pdf", PDF)
+    assert tekstfelter == {"sporsmal": "Hva er totalen?"}
+
+
+@pytest.mark.parametrize("disposisjon,forventet", [
+    # .NET bruker RFC 5987-formen så snart navnet har æøå — altså for
+    # ethvert norsk filnavn. Uten støtte ble filparten tolket som TEKST.
+    (b"form-data; name=fil; filename*=UTF-8''taxi%20fr%C3%A5.pdf",
+     "taxi frå.pdf"),
+    # Begge former sendt samtidig (vanlig): den utvidede skal vinne,
+    # for det er den som bærer tegnene riktig.
+    (b'form-data; name=fil; filename="taxi fra.pdf";'
+     b" filename*=UTF-8''taxi%20fr%C3%A5.pdf", "taxi frå.pdf"),
+])
+def test_filnavn_rfc5987(disposisjon, forventet):
+    filnavn, filbytes, tekstfelter = api._parse_multipart(
+        _kropp(_del(disposisjon, PDF)), CT)
+    assert (filnavn, filbytes) == (forventet, PDF)
+    assert tekstfelter == {}, "filparten må ikke bli et tekstfelt"
+
+
+def test_tekstfelt_med_eget_tegnsett():
+    """Del som oppgir latin-1: dekodes vi alltid som UTF-8, blir æøå krøll."""
+    kropp = _kropp(_del(
+        b"form-data; name=sporsmal\r\nContent-Type: text/plain; charset=iso-8859-1",
+        "Hva er totalbeløpet?".encode("iso-8859-1")))
+    assert api._parse_multipart(kropp, CT)[2] == \
+        {"sporsmal": "Hva er totalbeløpet?"}
+
+
+def test_utf8_er_standard_uten_charset():
+    """Uten charset-angivelse (det UiPath faktisk sender) skal UTF-8 gjelde."""
+    kropp = _kropp(_del(b"form-data; name=sporsmal",
+                        "Hva er totalbeløpet?".encode("utf-8")))
+    assert api._parse_multipart(kropp, CT)[2] == \
+        {"sporsmal": "Hva er totalbeløpet?"}
