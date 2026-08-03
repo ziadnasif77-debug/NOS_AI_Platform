@@ -526,32 +526,83 @@ def _cd_parameter(hoder: bytes, parameter: str):
     return (treff.group(2) or "").strip()
 
 
+def _rfc5987_verdi(raa: str):
+    """Dekoder «UTF-8''taxi%20fr%C3%A5.pdf» → «taxi frå.pdf».
+
+    RFC 5987/6266-formen brukes av .NET og andre klienter så snart et
+    filnavn har tegn utenfor ASCII — altså for ethvert norsk filnavn med
+    æøå. Uten dette ville et slikt navn ikke bli gjenkjent som filnavn i
+    det hele tatt, og filparten ville blitt tolket som et TEKSTFELT."""
+    from urllib.parse import unquote
+    deler = raa.split("'", 2)
+    if len(deler) != 3:
+        return None
+    tegnsett, _sprak, kodet = deler
+    try:
+        return unquote(kodet, encoding=tegnsett or "utf-8", errors="replace")
+    except (LookupError, ValueError):
+        return unquote(kodet, encoding="utf-8", errors="replace")
+
+
+def _cd_filnavn(hoder: bytes):
+    """Filnavnet fra Content-Disposition, uansett hvilken av de to
+    formene klienten bruker. «filename*» (RFC 5987) vinner når begge
+    finnes — det er den som bærer æøå korrekt."""
+    utvidet = _cd_parameter(hoder, "filename*")
+    if utvidet:
+        dekodet = _rfc5987_verdi(utvidet)
+        if dekodet:
+            return dekodet
+    return _cd_parameter(hoder, "filename")
+
+
 def _parse_multipart(body: bytes, content_type: str):
     """Returnerer (filnavn, filbytes, tekstfelter) fra en
     multipart/form-data-body. Filnavn/filbytes er None hvis ingen fil;
-    tekstfelter er dict av vanlige skjemafelter (f.eks. 'sporsmal')."""
+    tekstfelter er dict av vanlige skjemafelter (f.eks. 'sporsmal').
+
+    Parseren er bevisst tolerant mot klientvariasjon (R63): feltnavn med
+    og uten anførselstegn, CRLF og bare LF, filnavn i begge RFC-former,
+    og en boundary som står sammen med andre parametre. Alle disse har
+    samme feilmodus — delen faller stille ut og API-et svarer 200 som om
+    klienten aldri sendte feltet."""
     tekstfelter = {}
-    if "boundary=" not in content_type:
+    # Boundary hentes med samme parameterleser som resten: den takler
+    # både «boundary=abc» og «boundary="abc"», og stopper ved neste «;».
+    # Naiv split på «boundary=» tok med etterfølgende parametre — en
+    # Content-Type som «...; boundary=abc; charset=utf-8» ga da en
+    # boundary som aldri fantes i kroppen, og ALT ble borte.
+    boundary = _cd_parameter(content_type.encode("utf-8", "replace"),
+                             "boundary")
+    if not boundary:
         return None, None, tekstfelter
-    boundary = content_type.split("boundary=", 1)[1].strip().strip('"')
     skille = ("--" + boundary).encode()
     filnavn, filbytes = None, None
     for del_ in body.split(skille):
-        # Skill hoder fra innhold ved første tomme linje (\r\n\r\n)
-        if b"\r\n\r\n" not in del_:
+        # Hoder skilles fra innhold av en TOM LINJE. RFC krever CRLF, men
+        # enkelte klienter sender bare LF — godtar vi ikke begge, hoppes
+        # hele delen over.
+        tomlinje = re.search(b"\r?\n\r?\n", del_)
+        if not tomlinje:
             continue
-        hoder, _, innhold = del_.partition(b"\r\n\r\n")
-        # fjern etterfølgende \r\n før neste boundary
-        innhold = innhold.rstrip(b"\r\n")
-        funnet_filnavn = _cd_parameter(hoder, "filename")
+        hoder = del_[:tomlinje.start()]
+        # fjern etterfølgende linjeskift før neste boundary
+        innhold = del_[tomlinje.end():].rstrip(b"\r\n")
+        funnet_filnavn = _cd_filnavn(hoder)
         funnet_feltnavn = _cd_parameter(hoder, "name")
         if funnet_filnavn is not None:
             if filbytes is None:      # første fil vinner
                 filnavn = funnet_filnavn or "opplastet.pdf"
                 filbytes = innhold
         elif funnet_feltnavn:
-            tekstfelter[funnet_feltnavn] = \
-                innhold.decode("utf-8", "replace").strip()
+            # Tekstdelen kan oppgi sitt eget tegnsett. Uten dette ville
+            # æøå fra en klient som ikke bruker UTF-8 bli til krøll.
+            tegnsett = _cd_parameter(hoder, "charset") or "utf-8"
+            try:
+                tekst = innhold.decode(tegnsett, "replace")
+            except LookupError:
+                tekst = innhold.decode("utf-8", "replace")
+            tekstfelter[funnet_feltnavn] = tekst.strip()
     return filnavn, filbytes, tekstfelter
 
 
