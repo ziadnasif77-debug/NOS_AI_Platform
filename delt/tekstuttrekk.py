@@ -943,17 +943,27 @@ def _til_float(s: str):
 
 
 def finn_belop(tekst: str):
-    """Kronebeløp: «kr 12 345,50», «NOK 5000», «12.345,-»."""
+    """Kronebeløp: «kr 12 345,50», «NOK 5000», «12.345,-», «463,00».
+
+    Siste alternativ (rent øre-desimaltall uten valutaord i nærheten)
+    dekker kvitteringer der etikett og tall står på hver sin linje —
+    «Total Kr:\\n486,00» — slik at hverken prefiks- eller
+    suffiks-regelen når over linjeskiftet til tallet. finn_alle_belop
+    hadde alt dette alternativet; finn_belop manglet det, så
+    strukturert felt-uttrekk («felter.belop») mistet beløpet stille på
+    denne kvitteringslayouten selv om selve teksten inneholdt det."""
     treff = re.search(
         r"(?:kr\.?|NOK)\s?(" + _BELOP_TALL + r")|"
         r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))|"
+        r"\b(\d{1,6},\d{2})\b|"
         + _BELOP_ETTER,
         tekst, re.IGNORECASE,
     )
     if not treff:
         return None
     raa = _o_til_null(
-        (treff.group(1) or treff.group(2) or treff.group(3)).strip())
+        (treff.group(1) or treff.group(2) or treff.group(3)
+         or treff.group(4)).strip())
     return _normaliser_belop(raa)
 
 
