@@ -43,6 +43,27 @@ DOKUMENT_MAPPE = os.path.join(ROT, "data", "korpus")
 BASE = os.environ.get("KORPUS_API", "http://127.0.0.1:8600")
 
 
+def _api_nokkel() -> str:
+    """API-nøkkelen fra miljøet, eller fra .env i prosjektroten.
+
+    Korpuskjøreren ble skrevet før serveren håndhevet X-API-Key, og
+    stoppet på 401 over hele linja da nøkkelen kom — regresjonsPORTEN
+    var dermed selv regressert. Leser .env direkte (uten avhengigheter)
+    så «python skript/kjor_korpus.py» bare virker."""
+    nokkel = os.environ.get("API_NOKKEL", "")
+    if nokkel:
+        return nokkel
+    try:
+        with open(os.path.join(ROT, ".env"), encoding="utf-8") as f:
+            for linje in f:
+                linje = linje.strip()
+                if linje.startswith("API_NOKKEL="):
+                    return linje.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def hent_sti(data, sti: str):
     """Slår opp «belop.0.verdi» i et nøstet svar. Returnerer en
     sentinel når stien ikke finnes, slik at «manglende» og «None» ikke
@@ -93,6 +114,7 @@ def kjor_ett(fasit: dict) -> dict:
             svar = requests.post(BASE + "/uttrekk",
                                  files={"fil": (fasit["fil"], f,
                                                 "application/pdf")},
+                                 headers={"X-API-Key": _api_nokkel()},
                                  timeout=900)
         except Exception as exc:
             return {"feil": "kom ikke til serveren: %s" % exc}

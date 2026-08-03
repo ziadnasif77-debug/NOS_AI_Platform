@@ -411,7 +411,25 @@ def velg_motor(easy_tekst: str, easy_konf: float,
 # ------------------------------------------------------------------ #
 
 def flett_regioner(regioner: list) -> str:
-    """Fletter regioner til tekst i leserekkefølge.
+    """Fletter regioner til tekst i leserekkefølge. Se
+    flett_regioner_med_register — dette er samme fletting uten
+    registeret, og de KAN ikke divergere: én implementasjon."""
+    return flett_regioner_med_register(regioner)[0]
+
+
+def flett_regioner_med_register(regioner: list):
+    """Fletter regioner til tekst i leserekkefølge — og returnerer i
+    tillegg registeret som knytter hvert tegnområde i den flettede
+    teksten tilbake til regionen (og dermed boksen) det kom fra.
+
+    Returnerer (tekst, register) der register er en liste av
+    (start, slutt, region) sortert på start: tekst[start:slutt] er
+    NØYAKTIG region["tekst"].strip(). Skilletegnene (mellomrom mellom
+    regioner, linjeskift mellom linjer) tilhører ingen region.
+
+    Registeret er broen fra et regex-treff i teksten («fødselsnummer på
+    tegn 120–131») tilbake til koordinater på siden — uten det kan et
+    funn aldri vises som en utheving i dokumentet.
 
     Algoritme:
       1) Linjegruppering: regioner hvis vertikale midtpunkt ligger innenfor
@@ -423,7 +441,7 @@ def flett_regioner(regioner: list) -> str:
     """
     regioner = [r for r in regioner if r.get("tekst", "").strip()]
     if not regioner:
-        return ""
+        return "", []
 
     # R-fiks 2026-07-24: linjegruppering på VERTIKALT OVERLAPP, ikke
     # midtpunktavstand. På en tettskrevet notatside med 21 linjer og 147
@@ -465,11 +483,35 @@ def flett_regioner(regioner: list) -> str:
         linje["midt"] = sum((q["boks"][1] + q["boks"][3]) / 2
                             for q in linje["regioner"]) / len(linje["regioner"])
     linjer.sort(key=lambda l: l["midt"])
-    ut = []
-    for linje in linjer:
+    # Sammenstillingen bygger tekst og register i SAMME løkke, så et
+    # registerområde per konstruksjon peker på nøyaktig de tegnene
+    # regionen bidro med. (Tilsvarer «\n».join av « ».join per linje.)
+    deler, register, pos = [], [], 0
+    for i, linje in enumerate(linjer):
+        if i:
+            deler.append("\n")
+            pos += 1
         linje["regioner"].sort(key=lambda r: r["boks"][0])
-        ut.append(" ".join(r["tekst"].strip() for r in linje["regioner"]))
-    return "\n".join(ut)
+        for j, r in enumerate(linje["regioner"]):
+            if j:
+                deler.append(" ")
+                pos += 1
+            t = r["tekst"].strip()
+            register.append((pos, pos + len(t), r))
+            deler.append(t)
+            pos += len(t)
+    return "".join(deler), register
+
+
+def regioner_for_omraade(register: list, start: int, slutt: int) -> list:
+    """Regionene som bidro med tegn i området [start, slutt) av den
+    flettede teksten — broen fra et finner-treff til bokser på siden.
+
+    Et treff kan spenne flere regioner (et gruppert kontonummer der OCR
+    delte gruppene i egne bokser) — da returneres alle, i tekstrekkefølge.
+    Skilletegn mellom regioner tilhører ingen region, så et område som
+    KUN dekker et skilletegn gir tom liste."""
+    return [r for s, e, r in register if s < slutt and start < e]
 
 
 # ------------------------------------------------------------------ #
