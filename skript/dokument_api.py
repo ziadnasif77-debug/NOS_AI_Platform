@@ -2604,7 +2604,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _fyll_skjema_flyt(self, filnavn, slag, innhold, maks_ocr, mal,
                           via_spor=False, les_strekkoder=True,
-                          skjema_motor="modell"):
+                          skjema_motor="modell", ekstra_advarsler=None):
         """Fyller brukerens egen JSON-mal fra dokumentet. Tre motorer, som
         på /dokument: «modell» (Borealis fyller, KODEN validerer via
         rens_skjemasvar), «felter» (deterministisk fletting av
@@ -2628,7 +2628,11 @@ class Handler(BaseHTTPRequestHandler):
             fra_cache = a.get("fra_cache", False)
             ocr_brukt = a.get("ocr_brukt", False)
 
+        # «advarsler» ligger i grunnlaget slik at ALLE tre motorene svarer
+        # med samme nøkkel — ellers ville et ukjent felt bli meldt på én
+        # motor og forsvinne på en annen.
         grunn = {"ok": True, "filnavn": filnavn, "fra_cache": fra_cache,
+                 "advarsler": list(ekstra_advarsler or []),
                  "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
                              "modell": _borealis["modellfil"] or _borealis["motor"]}}
 
@@ -2665,7 +2669,11 @@ class Handler(BaseHTTPRequestHandler):
         # --- modell: Borealis fyller, koden validerer ---
         kjerne = fyll_skjema_kjerne(dok, mal)
         if not kjerne.get("ok"):
-            return self._svar(200, kjerne)
+            # Også feilsvaret skal bære advarselen — ellers mister den som
+            # trenger den mest (noe gikk galt) hintet om at et felt ble
+            # ignorert.
+            return self._svar(200, {**kjerne,
+                                    "advarsler": list(ekstra_advarsler or [])})
         renset, avvik = kjerne["skjema"], kjerne["avvik"]
         svar = {**grunn, "motor": "modell",
                 "skjema": renset,
@@ -2785,11 +2793,18 @@ class Handler(BaseHTTPRequestHandler):
         if innhold is None:
             return self._svar(400, {"ok": False,
                                     "feil": "Ingen fil funnet (felt 'fil')"})
-        _, omvendte = _sjekk_feltnavn(tekstfelter or {},
-                                      _KJENTE_FELT_OPERASJONER)
+        milde, omvendte = _sjekk_feltnavn(tekstfelter or {},
+                                          _KJENTE_FELT_OPERASJONER)
         if omvendte:
             return self._svar(400, _omvendt_felt_feil(omvendte,
                                                       _KJENTE_FELT_OPERASJONER))
+        # Samme grunn som på /fyll_skjema: advarselen ble regnet ut og
+        # kastet. Her er fallhøyden ekstra stor, for operasjoner-veien
+        # IGNORERER bryterne — sender klienten «felter=ja» sammen med
+        # «operasjoner», skjer det ingenting, og uten melding ser svaret
+        # ut som om begge deler ble utført.
+        operasjon_advarsler = _ukjent_felt_advarsel(milde,
+                                                    _KJENTE_FELT_OPERASJONER)
         try:
             spec = json.loads(operasjoner_raa)
         except json.JSONDecodeError as exc:
@@ -2832,6 +2847,7 @@ class Handler(BaseHTTPRequestHandler):
             filnavn, slag, innhold, maks_ocr, les_strekkoder)
         if feil:
             return self._svar(*feil)
+        advarsler = operasjon_advarsler + advarsler
 
         resultater = Operasjonsmotor().kjor(ktx, ops)
         # Feil i en del skal også være synlig for den som bare leser
@@ -2883,10 +2899,7 @@ class Handler(BaseHTTPRequestHandler):
         if omvendte:
             return self._svar(400, _omvendt_felt_feil(omvendte,
                                                       _KJENTE_FELT_DOKUMENT))
-        if milde:
-            advarsler.append(
-                "Ukjente felt ignorert: " + ", ".join(milde)
-                + ". Kjente felt: " + ", ".join(sorted(_KJENTE_FELT_DOKUMENT)))
+        advarsler.extend(_ukjent_felt_advarsel(milde, _KJENTE_FELT_DOKUMENT))
 
         # Bryterne tar både norsk og engelsk ja/nei. En UKJENT verdi
         # avvises (400) i stedet for å bli tolket som «nei» — ellers ville
@@ -3489,10 +3502,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(200 if resultat.get("ok") else 400, resultat)
 
         if sti == "/fyll_skjema":
-            _, omvendte = _sjekk_feltnavn(tekstfelter, _KJENTE_FELT_FYLL_SKJEMA)
+            milde, omvendte = _sjekk_feltnavn(tekstfelter,
+                                              _KJENTE_FELT_FYLL_SKJEMA)
             if omvendte:
                 return self._svar(400, _omvendt_felt_feil(
                     omvendte, _KJENTE_FELT_FYLL_SKJEMA))
+            # Ukjente felt SKAL meldes. Her ble advarselen regnet ut og så
+            # kastet («_»), så «motor=felter» — et nærliggende feilnavn,
+            # siden feltet heter skjema_motor — ble ignorert i stillhet og
+            # kallet falt tilbake til modell-motoren. Klienten betalte
+            # GPU-tid for noe den uttrykkelig hadde bedt om å slippe, og
+            # fikk 200 uten et eneste signal. /dokument meldte fra; disse
+            # gjorde det ikke.
+            ukjente_felt_advarsel = _ukjent_felt_advarsel(
+                milde, _KJENTE_FELT_FYLL_SKJEMA)
             skjema_raa = tekstfelter.get("skjema", "").strip()
             if not skjema_raa:
                 return self._svar(400, {"ok": False, "feil": "Mangler multipart-felt 'skjema' (JSON-malen din)"})
@@ -3512,7 +3535,8 @@ class Handler(BaseHTTPRequestHandler):
                                      "message": "Bruk 'modell', 'felter' eller 'auto'"}]})
             return self._fyll_skjema_flyt(filnavn, slag, innhold, maks_ocr, mal,
                                           les_strekkoder=les_strekkoder,
-                                          skjema_motor=motor)
+                                          skjema_motor=motor,
+                                          ekstra_advarsler=ukjente_felt_advarsel)
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
         # R47: fil UTEN spørsmål = hele den utleste teksten, ordrett og
@@ -4193,11 +4217,20 @@ _TOM_DOKUMENT_FEIL = "Fant ingen lesbar tekst i dokumentet"
 # ------------------------------------------------------------------ #
 #  Vakt mot feilnavngitte skjemafelter (UiPath-fella)                 #
 # ------------------------------------------------------------------ #
-#  UiPath er inkonsekvent: TextFormDataPart(navn, verdi) har navnet   #
-#  FØRST, mens FileFormDataPart(sti, navn) har navnet SIST. Snur en   #
-#  klient tekstfeltene, får serveren felter som HETER «auto», «ja»    #
-#  eller en hel JSON-streng. Før gikk de tapt i stillhet og svaret    #
-#  ble et misvisende 200. En profesjonell API sier tydelig fra.
+#  UiPath: BEGGE delene tar VERDIEN først og NAVNET sist —            #
+#      New FileFormDataPart(filsti, "fil")                            #
+#      New TextFormDataPart("auto", "skjema_motor")                   #
+#  Snur en klient tekstfeltene (navn først), havner navnet i verdi-   #
+#  plassen og serveren får felter som HETER «auto», «ja» eller en hel #
+#  JSON-streng. Før gikk de tapt i stillhet og svaret ble et          #
+#  misvisende 200. En profesjonell API sier tydelig fra.              #
+#                                                                     #
+#  RETTET 2026-08-03: teksten her påsto tidligere det MOTSATTE (navn  #
+#  først for Text). Det er feil, og feilmeldingen under sendte derfor #
+#  brukeren rett i grøfta: legger man JSON-malen i andre argument,    #
+#  kaster UiPath «The format of value '{…}' is invalid» FØR requesten #
+#  sendes — nettopp fordi andre argument er NAVNET, som må være et    #
+#  gyldig token. Bekreftet mot brukerens kjørende UiPath-oppsett.
 
 # Ord/mønstre som røper at en VERDI er brukt som feltnavn.
 _VERDI_ORD = {"ja", "nei", "auto", "felter", "modell", "1", "0", "true",
@@ -4237,17 +4270,29 @@ _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
 
 
+def _ukjent_felt_advarsel(milde: list, kjente: set) -> list:
+    """Advarselslinjene for felt serveren ikke kjenner. Tom liste når alt
+    er kjent, så kalleren bare kan utvide advarselslista si.
+
+    Et ukjent felt er ALLTID verdt å melde: klienten trodde den ba om noe,
+    og fikk 200 som om den fikk det."""
+    if not milde:
+        return []
+    return ["Ukjente felt ignorert: " + ", ".join(milde)
+            + ". Kjente felt: " + ", ".join(sorted(kjente))]
+
+
 def _omvendt_felt_feil(omvendte: list, kjente: set) -> dict:
     """Feilobjektet for 400 når feltnavn er en verdi (omvendt UiPath-orden)."""
     vis = ", ".join((n if len(n) <= 40 else n[:37] + "…") for n in omvendte)
     return {
         "ok": False,
         "feil": (f"Mottok felt som ser ut som VERDIER brukt som feltnavn: "
-                 f"{vis}. I UiPath kommer NAVNET først i "
-                 "TextFormDataPart(navn, verdi) — motsatt av "
+                 f"{vis}. I UiPath kommer VERDIEN først og NAVNET sist — "
+                 "likt for begge delene: TextFormDataPart(verdi, navn) og "
                  "FileFormDataPart(sti, navn). Snu de tekstlige feltene, "
-                 'f.eks. New TextFormDataPart("skjema_mal", "{…}") og '
-                 'New TextFormDataPart("skjema_motor", "auto").'),
+                 'f.eks. New TextFormDataPart("auto", "skjema_motor") og '
+                 'New TextFormDataPart("{…}", "skjema_mal").'),
         "ukjente_felt": omvendte,
         "kjente_felt": sorted(kjente),
         "felter_feil": [{"pointer": f"/{n}",
