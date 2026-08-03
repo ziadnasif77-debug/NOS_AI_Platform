@@ -27,7 +27,7 @@ def _region(tekst, x0, y0, x1, y1, **ekstra):
 # Merk region med innledende/avsluttende blanke — flettingen stripper.
 SIDE = [
     _region("Org. Nr:", 40, 100, 190, 130),
-    _region(" 994 230 964 ", 210, 102, 420, 131),
+    _region(" 889 000 007 ", 210, 102, 420, 131),
     _region("MVA", 440, 99, 520, 129),
     _region("Telefon:", 40, 180, 180, 210),
     _region("22 33 44 55", 200, 182, 400, 212),
@@ -41,7 +41,7 @@ SIDE = [
 def test_tekst_er_byte_identisk_med_flett_regioner():
     tekst, _ = flett_regioner_med_register(SIDE)
     assert tekst == flett_regioner(SIDE)
-    assert tekst == "Org. Nr: 994 230 964 MVA\nTelefon: 22 33 44 55"
+    assert tekst == "Org. Nr: 889 000 007 MVA\nTelefon: 22 33 44 55"
 
 
 def test_register_peker_paa_noyaktig_regionens_tegn():
@@ -75,9 +75,9 @@ def test_leserekkefolge_bevart_i_registeret():
     venstre→høyre, og registeret skal følge LESE-rekkefølgen."""
     stokket = [SIDE[4], SIDE[1], SIDE[3], SIDE[0], SIDE[2]]
     tekst, register = flett_regioner_med_register(stokket)
-    assert tekst == "Org. Nr: 994 230 964 MVA\nTelefon: 22 33 44 55"
+    assert tekst == "Org. Nr: 889 000 007 MVA\nTelefon: 22 33 44 55"
     assert [r["tekst"].strip() for _, _, r in register] == \
-        ["Org. Nr:", "994 230 964", "MVA", "Telefon:", "22 33 44 55"]
+        ["Org. Nr:", "889 000 007", "MVA", "Telefon:", "22 33 44 55"]
 
 
 # ------------------------------------------------------------------ #
@@ -86,9 +86,9 @@ def test_leserekkefolge_bevart_i_registeret():
 
 def test_omraade_i_en_region():
     tekst, register = flett_regioner_med_register(SIDE)
-    start = tekst.index("994")
+    start = tekst.index("889")
     treff = regioner_for_omraade(register, start, start + 11)
-    assert [r["tekst"].strip() for r in treff] == ["994 230 964"]
+    assert [r["tekst"].strip() for r in treff] == ["889 000 007"]
 
 
 def test_omraade_over_flere_regioner():
@@ -96,12 +96,12 @@ def test_omraade_over_flere_regioner():
     start = tekst.index("Org")
     treff = regioner_for_omraade(register, start, tekst.index("MVA") + 3)
     assert [r["tekst"].strip() for r in treff] == \
-        ["Org. Nr:", "994 230 964", "MVA"]
+        ["Org. Nr:", "889 000 007", "MVA"]
 
 
 def test_omraade_paa_skilletegn_gir_tomt():
     tekst, register = flett_regioner_med_register(SIDE)
-    mellomrom = tekst.index(" 994")          # mellomrommet FØR tallet
+    mellomrom = tekst.index(" 889")          # mellomrommet FØR tallet
     assert regioner_for_omraade(register, mellomrom, mellomrom + 1) == []
 
 
@@ -119,7 +119,7 @@ def test_skalproven_orgnr_til_boks():
             if t == "organisasjonsnummer"]
     assert len(funn) == 1
     start, slutt, _ = funn[0]
-    assert tekst[start:slutt] == "994 230 964"
+    assert tekst[start:slutt] == "889 000 007"
     bokser = [r["boks"] for r in regioner_for_omraade(register, start, slutt)]
     assert bokser == [[210, 102, 420, 131]]
 
@@ -141,7 +141,7 @@ def test_funn_paa_side_gir_type_tekst_og_bokser():
     from delt.koordinater import funn_paa_side
     funn = funn_paa_side(SIDE)
     typer = {f["type"]: f for f in funn}
-    assert typer["organisasjonsnummer"]["tekst"] == "994 230 964"
+    assert typer["organisasjonsnummer"]["tekst"] == "889 000 007"
     assert typer["organisasjonsnummer"]["bokser"] == [[210, 102, 420, 131]]
     assert typer["telefon"]["bokser"] == [[200, 182, 400, 212]]
 
@@ -168,7 +168,7 @@ def test_ord_regioner_fra_pdfside():
     from delt.koordinater import funn_paa_side, ord_regioner_fra_pdfside
     doc = fitz.open()
     side = doc.new_page()
-    side.insert_text((72, 100), "Org. Nr: 994 230 964")
+    side.insert_text((72, 100), "Org. Nr: 889 000 007")
     side.insert_text((72, 140), "Telefon: 22 33 44 55")
     regioner = ord_regioner_fra_pdfside(side)
     assert all(r["tekst"].strip() for r in regioner)

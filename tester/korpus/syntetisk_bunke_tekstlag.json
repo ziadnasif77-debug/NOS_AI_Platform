@@ -1,0 +1,48 @@
+{
+  "fil": "syntetisk_bunke_tekstlag.pdf",
+  "beskrivelse": "10-siders SYNTETISK NAV-bunke med ekte tekstlag: vedtak, beregningstabell, faktura, egenerklæring, legeerklæring (fragmentert skrift), inntektsmelding, nesten tom side, bildeside uten tekstlag, nynorsk-klage fra en ANNEN person, returslipp. Hver side er merket «SYNTETISK TESTDOKUMENT — genererte data, ingen ekte personer».",
+  "fasit_lest_av": "menneske, fra dokumentets tekstlag 2026-08-03",
+  "merknad_personvern": "Alle verdier er syntetiske: fødselsnumrene bruker de offisielle syntetiske seriene (måned +80/+90), org.nr og kontonumre er konstruert sjekksum-gyldige. Ingenting kan spores til virkelige personer eller foretak.",
+  "felter": {
+    "felter.felter.saksnummer": "4417820",
+    "felter.felter.postnummer": "0607",
+    "felter.felter.poststed": "OSLO",
+    "felter.felter.totalbelop": 4812.0,
+    "felter.felter.forfallsdato": "24.06.2026",
+    "felter.felter.kid": "1002345678911",
+    "felter.felter.organisasjonsnummer": "889000007",
+    "struktur.identifikatorer.organisasjonsnummer": [
+      "889000007"
+    ],
+    "struktur.identifikatorer.kid": [
+      "1002345678911"
+    ],
+    "felter.dokumentdato.periode.flere_dokumenter": true
+  },
+  "felter_maa_inneholde": {
+    "struktur.identifikatorer.fodselsnummer": [
+      "14837840059",
+      "02919140189"
+    ],
+    "struktur.identifikatorer.kontonummer": [
+      "15031000006",
+      "60111000002"
+    ],
+    "struktur.kontakt.telefoner": [
+      "41288903"
+    ]
+  },
+  "tekst_maa_inneholde": [
+    "Saksnummer: 4417820",
+    "4 812,00",
+    "Marit Testperson",
+    "Sakstilvising: 5590114"
+  ],
+  "kjent_svakhet": {
+    "side8": "Siden er et innskannet BILDE uten tekstlag i en ellers tekstlagsbasert PDF — teksten på den forsvinner stille (hybridlesing per side er planlagt, se docs/plan_nye_evner.md).",
+    "side4_side5": "Kursivskriften er fragmentert i tekstlaget (én bokstav per posisjon) — datoer og navn i de partiene går tapt inntil fragmentsmelting er på plass.",
+    "felter.fodselsnummer": "Entallsfeltet gir bunkens FØRSTE fnr (Ola) — bunken har TO personer. Entallsfeltene er dokumentert som «første treff»; bruk struktur-listene eller koordinater=ja for alle."
+  },
+  "maks_sekunder": 5,
+  "merknad_dokumentdato": "Bunken inneholder 6+ daterte dokumenter — det finnes ikke ETT riktig dokumentdato-svar. Fasiten krever derfor at systemet deklarerer flere_dokumenter=true (med spenn og advarsel i svaret), i stedet for å låse en enkeltdato."
+}

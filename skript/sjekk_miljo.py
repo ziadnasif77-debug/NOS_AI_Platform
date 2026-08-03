@@ -130,7 +130,7 @@ def sjekk_ekte_kjoring():
         from delt.tekstuttrekk import strukturert_uttrekk
         r = strukturert_uttrekk(
             "Faktura\nDato: 12.03.2024\nBeløp: kr 1 234,00\n"
-            "Org. nr.: 912360113")
+            "Org. nr.: 889000007")
         antar = (r["datoer"] and r["belop"]
                  and r["identifikatorer"]["organisasjonsnummer"])
         (ok if antar else feil)(

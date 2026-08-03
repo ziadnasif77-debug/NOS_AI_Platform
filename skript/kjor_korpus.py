@@ -11,13 +11,16 @@ syntetiske testbilder som ikke lignet virkeligheten.
 Korpuset gjør «virker det?» om fra en mening til et tall.
 
 Slik brukes det:
-    python skript/kjor_korpus.py                 # kjør alt
-    python skript/kjor_korpus.py taxikvittering  # bare ett dokument
+    python skript/kjor_korpus.py                    # kjør alt
+    python skript/kjor_korpus.py syntetisk_bunke    # navnefilter
+
+Korpuset inneholder KUN syntetiske dokumenter (se tester/korpus/README.md
+— fasitene ligger i git, så ekte verdier ville blitt liggende i
+historikken for alltid).
 
 Fasitene ligger i tester/korpus/*.json og ER versjonert — de definerer
-hva «riktig» betyr. Selve dokumentene ligger i data/korpus/ som IKKE er
-i git: de inneholder ekte person- og betalingsopplysninger, og hører
-ikke hjemme i et kodelager. Mangler en fil, hoppes den over med beskjed
+hva «riktig» betyr. Selve dokumentene ligger i data/korpus/ (utenfor
+git, som resten av data/). Mangler en fil, hoppes den over med beskjed
 i stedet for å felle kjøringen.
 
 Se tester/korpus/README.md for hvordan du legger til et dokument.
@@ -111,9 +114,13 @@ def kjor_ett(fasit: dict) -> dict:
     with open(sti, "rb") as f:
         t0 = time.perf_counter()
         try:
-            svar = requests.post(BASE + "/uttrekk",
+            # Hovedveien (/dokument) med struktur=ja: fasitene kan da
+            # sjekke BÅDE entallsfeltene (felter.felter.*) og de komplette
+            # listene (struktur.identifikatorer.*) i samme svar.
+            svar = requests.post(BASE + "/dokument",
                                  files={"fil": (fasit["fil"], f,
                                                 "application/pdf")},
+                                 data={"struktur": "ja"},
                                  headers={"X-API-Key": _api_nokkel()},
                                  timeout=900)
         except Exception as exc:
@@ -135,6 +142,24 @@ def kjor_ett(fasit: dict) -> dict:
             feilet.append("%s: ventet %r, fikk %s"
                           % (sti_uttrykk, forventet, vist))
 
+    # Delmengde-sjekk for lister: fasiten krever at verdiene FINNES, uten
+    # å låse hele lista (rekkefølge/støy i OCR skal ikke felle en sjekk
+    # på noe annet enn det den faktisk gjelder).
+    for sti_uttrykk, forventede in (fasit.get("felter_maa_inneholde")
+                                    or {}).items():
+        faktisk = hent_sti(data, sti_uttrykk)
+        if not isinstance(faktisk, list):
+            vist = "(mangler)" if faktisk is MANGLER else repr(faktisk)
+            feilet.append("%s: ventet en liste, fikk %s"
+                          % (sti_uttrykk, vist))
+            continue
+        for v in forventede:
+            if v in faktisk:
+                bestatt.append("%s inneholder %r" % (sti_uttrykk, v))
+            else:
+                feilet.append("%s mangler %r (fikk %r)"
+                              % (sti_uttrykk, v, faktisk))
+
     tekst = ""
     for kandidat in ("tekst", "raatekst"):
         if isinstance(data.get(kandidat), str):
@@ -147,6 +172,13 @@ def kjor_ett(fasit: dict) -> dict:
             bestatt.append("tekst inneholder %r" % bit)
         else:
             feilet.append("tekst mangler %r" % bit)
+    # Negativ sjekk: tekst som IKKE skal finnes — vokter mot at OCR
+    # dikter innhold på (nesten) tomme sider.
+    for bit in fasit.get("tekst_maa_ikke_inneholde") or []:
+        if bit not in tekst:
+            bestatt.append("tekst er fri for %r" % bit)
+        else:
+            feilet.append("tekst inneholder %r — skal ikke finnes" % bit)
 
     # Tiden rapporteres, men felles ikke kjøringen: analysecachen svarer
     # på millisekunder når samme fil er kjørt før, og en grense som

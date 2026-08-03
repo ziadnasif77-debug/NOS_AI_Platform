@@ -89,7 +89,7 @@ def test_valutaord_ETTER_belopet(tekst, forventet):
     # Suffiks-regelen må ikke gjøre løpende tall til beløp: valutaordet
     # er ankeret, akkurat som i prefiks-regelen.
     "Saksnummer 900123 i systemet",
-    "Telefon 97335868",
+    "Telefon 41288903",
     "Året 2026 var bra",
     "Postnummer 0150 OSLO",
     "Født 03.04.1985",
@@ -170,7 +170,7 @@ def test_belop_etikett_og_tall_paa_hver_sin_linje(tekst, forventet):
 # 15,8 (kilometer) og rapportert det som kroner.
 TAXI = ("Kvittering for taxitur\n"
         "Total Km:\n15,8\n"
-        "Betalingskort: 553017******1641\n"
+        "Betalingskort: 999999******0000\n"
         "Pris Kr:\n463,00\n"
         "+ Utlegg Kr:\n23,00\n"
         "Herav MVA 12% Kr:\n52,07\n"
@@ -226,14 +226,14 @@ def test_totalbelop_som_plassholder_i_mal():
 
 
 def test_organisasjonsnummer_som_plassholder():
-    """Kvitteringen har «Org. Nr: NO994230964MVA». Nummeret er mod11-
+    """Kvitteringen har «Org. Nr: NO889000007MVA». Nummeret er mod11-
     validert av koden, men manglet i felter_flatt — malen fikk null og
     måtte spørre MODELLEN om noe koden kunne bevise."""
     from delt.tekstuttrekk import flett_mal, utvid_entiteter
-    tekst = "Mo I Rana Taxi\nOrg. Nr:\nNO994230964MVA\nTotal Kr:\n486,00"
-    assert utvid_entiteter(tekst, {})["organisasjonsnummer"] == "994230964"
+    tekst = "Testby Taxi AS\nOrg. Nr:\nNO889000007MVA\nTotal Kr:\n486,00"
+    assert utvid_entiteter(tekst, {})["organisasjonsnummer"] == "889000007"
     utfylt, rapport = flett_mal({"orgnr": "{organisasjonsnummer}"}, tekst)
-    assert utfylt == {"orgnr": "994230964"}
+    assert utfylt == {"orgnr": "889000007"}
     assert rapport["ukjente_felter"] == []
 
 
@@ -254,8 +254,8 @@ def test_ekte_orgnr_fra_modellen_beholdes():
     """Vakten skal bare fjerne det som ikke består matematikken."""
     from delt.tekstuttrekk import utvid_entiteter
     felter = utvid_entiteter("ingen nummer her",
-                             {"organisasjonsnummer": "994230964"})
-    assert felter["organisasjonsnummer"] == "994230964"
+                             {"organisasjonsnummer": "889000007"})
+    assert felter["organisasjonsnummer"] == "889000007"
 
 
 def test_belop_uendret_uten_totaletikett():
@@ -348,7 +348,7 @@ def test_normalisert_dato_avvises_ikke_av_tallvakten(rens):
     Utdraget er ordrett fra OCR-en av en ekte taxikvittering, der
     datolinjen øverst i tillegg var forvansket til «1970 12 06 2026».
     """
-    dok = ("TELEFON 97335868\n1970 12 06 2026\nKL START 14 28\n"
+    dok = ("TELEFON 41288903\n1970 12 06 2026\nKL START 14 28\n"
            "Bax 17415948-753230\n12/06/2026 14 :46\n")
     renset, avvik = rens({"dato": None}, {"dato": "12.06.2026"}, dok)
 

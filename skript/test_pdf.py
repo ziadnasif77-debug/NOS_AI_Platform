@@ -2,7 +2,7 @@
 Enkel test: analyser en PDF og skriv ut feltene — uten server, uten Docker.
 
 Bruk (fra mappen D:\\nav):
-    python skript/test_pdf.py "D:/nav/data/inntak/2254711543.pdf"
+    python skript/test_pdf.py "D:/nav/data/inntak/eksempel_dokument.pdf"
 
 Eller uten argument → bruker eksempelfilen:
     python skript/test_pdf.py
@@ -77,6 +77,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         sti = sys.argv[1]
     else:
-        sti = os.path.join(ROT, "data", "inntak", "2254711543.pdf")
+        sti = os.path.join(ROT, "data", "inntak", "eksempel_dokument.pdf")
         print("(ingen fil oppgitt — bruker eksempelfilen)\n")
     analyser(sti)
