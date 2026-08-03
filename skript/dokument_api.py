@@ -1009,10 +1009,27 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
 #  Strekkoder og QR-koder (pyzbar)                                    #
 # ------------------------------------------------------------------ #
 
-def les_strekkoder_bytes(data: bytes, maks_sider: int = 5, sider=None):
-    """Dekoder strekkoder (Code128, EAN m.fl.) og QR-koder fra
+# Sidetak for strekkodeskanning. Var 5 — med den grensen ble
+# arkivstrekkoden på side 10 i en 10-siders bunke ALDRI lest, uten et
+# ord om det i svaret. Returslipp/arkivkoder står nettopp bakerst, så
+# taket rammet systematisk den viktigste koden i skanneløypa. Nå følger
+# det OCR-taket, og trunkering MELDES.
+STREKKODE_MAKS_SIDER = int(os.environ.get("STREKKODE_MAKS_SIDER",
+                                          str(OCR_TAK_SIDER)))
+
+
+def les_strekkoder_bytes(data: bytes, maks_sider: int = None, sider=None,
+                         rapport: dict = None):
+    """Dekoder strekkoder (Code128, EAN m.fl.) og QR-koder fra ALLE
     PDF-sidene. Returnerer liste av {type, verdi, side} — tom liste
     hvis ingen finnes eller pyzbar mangler.
+
+    Flere koder på samme side gir flere oppføringer; rekkefølgen følger
+    sidene. Duplikater (samme type+verdi+side) fjernes — pyzbar melder
+    av og til samme kode to ganger på et støyete skann.
+
+    «rapport» fylles med {sider_skannet, sider_totalt, avkortet} når den
+    gis, slik at kalleren kan si ærlig fra om ikke alle sider ble sett.
 
     R55: `sider` er ferdig rendrede sidebilder (numpy RGB). Kjører OCR
     på det samme dokumentet, har sidene allerede blitt rendret én gang,
@@ -1020,6 +1037,8 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = 5, sider=None):
     en A4-side). Uten `sider` rendres de som før — det er tilfellet når
     dokumentet har tekstlag og OCR aldri kjøres.
     """
+    if maks_sider is None:
+        maks_sider = STREKKODE_MAKS_SIDER
     try:
         from PIL import Image
         from pyzbar.pyzbar import decode
@@ -1028,10 +1047,12 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = 5, sider=None):
     koder = []
     try:
         if sider is not None:
+            sider_totalt = len(sider)
             bilder = [Image.fromarray(s) for s in sider[:maks_sider]]
         else:
             import fitz
             doc = fitz.open(stream=data, filetype="pdf")
+            sider_totalt = doc.page_count
             bilder = []
             for i, side in enumerate(doc):
                 if i >= maks_sider:
@@ -1042,13 +1063,20 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = 5, sider=None):
                 bilder.append(
                     Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
             doc.close()
+        sett = set()
         for i, bilde in enumerate(bilder):
             for kode in decode(bilde):
-                koder.append({
-                    "type": kode.type,
-                    "verdi": kode.data.decode("utf-8", "replace"),
-                    "side": i + 1,
-                })
+                verdi = kode.data.decode("utf-8", "replace")
+                nokkel = (kode.type, verdi, i + 1)
+                if nokkel in sett:
+                    continue
+                sett.add(nokkel)
+                koder.append({"type": kode.type, "verdi": verdi,
+                              "side": i + 1})
+        if rapport is not None:
+            rapport.update(sider_skannet=len(bilder),
+                           sider_totalt=sider_totalt,
+                           avkortet=len(bilder) < sider_totalt)
     except Exception:
         pass
     return koder
@@ -1185,9 +1213,26 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
         except Exception as exc:
             return {"ok": False, "feil": f"OCR feilet: {exc}"}
 
+    strekkode_rapport = {}
     strekkoder = les_strekkoder_bytes(
-        data, sider=ocr_res["_sidebilder"] if ocr_res else None
+        data, sider=ocr_res["_sidebilder"] if ocr_res else None,
+        rapport=strekkode_rapport
     ) if les_strekkoder else []
+    # Ble ikke alle sidene skannet, skal det SIES. Går OCR-veien, er
+    # sidetallet fra rendrede sider — det ekte totalen er dokumentets.
+    if ocr_res is not None and strekkode_rapport:
+        strekkode_rapport["sider_totalt"] = ocr_res.get(
+            "sider_totalt", strekkode_rapport.get("sider_totalt", 0))
+        strekkode_rapport["avkortet"] = (
+            strekkode_rapport.get("sider_skannet", 0)
+            < strekkode_rapport["sider_totalt"])
+    strekkode_advarsel = None
+    if strekkode_rapport.get("avkortet"):
+        strekkode_advarsel = (
+            f"strekkoder: kun {strekkode_rapport['sider_skannet']} av "
+            f"{strekkode_rapport['sider_totalt']} sider ble skannet — "
+            "koder på de siste sidene (typisk arkiv-/returslipp) kan "
+            "mangle")
 
     if ocr_res is not None:
         ocr_tekst = ocr_res["tekst"]
@@ -1210,6 +1255,9 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             kv_tekst = "bildekvalitet: " + "; ".join(kvalitet["advarsler"])
             ocr_advarsel = (f"{ocr_advarsel} — {kv_tekst}"
                             if ocr_advarsel else kv_tekst)
+        if strekkode_advarsel:
+            ocr_advarsel = (f"{ocr_advarsel} — {strekkode_advarsel}"
+                            if ocr_advarsel else strekkode_advarsel)
         if len(ocr_tekst.strip()) < 5:
             melding = ("Fant ingen lesbar tekst i dokumentet — selv med OCR. "
                        "Men fant strekkoder/QR-koder (se 'strekkoder')."
@@ -1297,6 +1345,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
         # ekte opprettelsesdato, ikke en skannedato (ocr_brukt=False)
         "dokumentdato": finn_dokumentdato(tekstlag_datoer, ocr_brukt=False),
         "strekkoder": strekkoder,
+        "advarsel": strekkode_advarsel,
         "per_side": sider,
         "tekst": full_tekst,
         "antall_tegn": len(full_tekst),
