@@ -830,6 +830,13 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     side1_regioner = []
     side1_dim = None
     forbehandling_rapport = None
+    # Slanke regioner ({boks, tekst}) for ALLE leste sider — grunnlaget
+    # for koordinater per funn. Før ble side 2+ sine bokser regnet ut og
+    # KASTET etter konfidensstatistikken; å beholde dem koster ~kB per
+    # side, mens å regne dem ut på nytt koster en full OCR-kjøring på
+    # GPU. Derfor beholdes de alltid (ikke bak et flagg à la R55: flagget
+    # ville splittet cachen og utløst re-OCR når klienten ombestemmer seg).
+    sider_regioner = []
     for i, side in enumerate(doc):
         if i >= maks_sider:
             break
@@ -861,6 +868,13 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             side1_dim = (bilde.shape[1], bilde.shape[0])
             forbehandling_rapport = side_rapport
         tekster.append(resultat["tekst"])
+        sider_regioner.append({
+            "side": i + 1,
+            "bredde": bilde.shape[1], "hoyde": bilde.shape[0],
+            "regioner": [{"boks": r["boks"], "tekst": r["tekst"]}
+                         for r in resultat["regioner"]
+                         if (r.get("tekst") or "").strip()],
+        })
         for r in resultat["regioner"]:
             motorer[r["motor"]] = motorer.get(r["motor"], 0) + 1
             vekt = max(len((r.get("tekst") or "").strip()), 1)
@@ -885,6 +899,7 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             "_sidebilder": rendrede,
             "_side1_regioner": side1_regioner,
             "_side1_dim": side1_dim,
+            "_sider_regioner": sider_regioner,
             "forbehandling": forbehandling_rapport}
 
 
@@ -1218,6 +1233,11 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "trenger_ocr": False,
             "ocr_brukt": True,
             "kilde": "regionocr+deterministisk",
+            # Internt (understrek-konvensjonen): grunnlaget for
+            # koordinater per funn. Slanke {boks, tekst} per side —
+            # JSON-vennlig, men skal ikke ut i svar uten at klienten ba
+            # om koordinater.
+            "_sider_regioner": ocr_res.get("_sider_regioner") or [],
             "felter": felter_ut,
             "datoer": finn_alle_datoer(ocr_tekst),
             "datoer_detaljert": datoer_detaljert,
@@ -2340,6 +2360,7 @@ def _skjemaer() -> dict:
                 "skjema": {**ref("SkjemaDel"), "nullable": True},
                 "korriger": {"type": "object", "nullable": True},
                 "korrigert_tekst": s(nullable=True),
+                "koordinater": {**ref("KoordinatDel"), "nullable": True},
                 "strekkoder": {"type": "array", "items": s()},
                 "handskrift": {"type": "array", "items": s()},
                 "kvalitet": ref("Kvalitet"),
@@ -2407,6 +2428,43 @@ def _skjemaer() -> dict:
                                             "på norsk"),
                 "tid_sekunder": {"type": "number"},
                 "versjon": {"type": "object"}}},
+        "KoordinatFunn": {
+            "type": "object",
+            "description": "Ett bevist funn med posisjon på siden.",
+            "properties": {
+                "type": s(example="organisasjonsnummer"),
+                "tekst": s(description="Tegnene slik de står i dokumentet "
+                                       "(gruppering beholdt)",
+                           example="994 230 964"),
+                "bokser": {"type": "array",
+                           "items": {"type": "array",
+                                     "items": {"type": "number"}},
+                           "description": "[x0, y0, x1, y1] per boks. "
+                                          "Flere når OCR delte et gruppert "
+                                          "nummer i flere bokser."}}},
+        "KoordinatDel": {
+            "type": "object",
+            "description": "Svaret på «koordinater=ja»: beviste funn "
+                           "(samme finnere som /sladd — mod11/sjekksum/"
+                           "format, aldri modell) med bokser per side.",
+            "properties": {
+                "koordinatrom": s(
+                    enum=["forbehandlet_bilde_piksler", "pdf_punkter"],
+                    description="Rommet boksene lever i. OCR-dokumenter: "
+                                "piksler i det FORBEHANDLEDE sidebildet "
+                                "(perspektiv-/skjevhetsrettet). "
+                                "Tekstlags-PDF: PDF-punkter (72 per "
+                                "tomme). Uten dette kan ikke en utheving "
+                                "skaleres riktig."),
+                "sider": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "side": {"type": "integer", "example": 1},
+                        "bredde": {"type": "number"},
+                        "hoyde": {"type": "number"},
+                        "funn": {"type": "array",
+                                 "items": ref("KoordinatFunn")}}}},
+                "antall_funn": {"type": "integer"}}},
         "SladdSvar": {
             "type": "object",
             "description": "Sladdet tekst — KUN beviste identifikatorer "
@@ -2598,6 +2656,9 @@ def _openapi() -> dict:
                                                     "description": "modell=Borealis fyller alt (standard); felter=deterministisk fletting av {feltnavn}-plassholdere (rask, uten modell); auto=hybrid: deterministisk der regelen kan bevise, modell for resten (navn o.l.) med tallvakt"},
                                    "korriger": {"type": "string", "enum": ["ja", "nei"]},
                                    "tekst": {"type": "string", "enum": ["ja", "nei"]},
+                                   "koordinater": {"type": "string",
+                                                   "enum": ["ja", "nei"],
+                                                   "description": "ja → beviste funn (fnr/konto/orgnr/KID/telefon/epost) med bokser per side, i «koordinater». Standard nei (bokser kan mangedoble svaret)"},
                                    "operasjoner": {"type": "string",
                                                    "description": "ALTERNATIV til bryterne: en JSON-liste av operasjoner, f.eks. [{\"type\":\"felter\"},{\"type\":\"skjema\",\"motor\":\"auto\",\"mal\":{...}}]. Gyldige typer: tekst, felter, struktur, svar (+sporsmal), skjema (+mal, +motor felter/modell/auto), korriger. Svar: {ok, resultater:[{type, ok, ...}]}. Maks 20 per kall"},
                                    "maks_sider": {"type": "integer"}}}}}},
@@ -3751,6 +3812,46 @@ class Handler(BaseHTTPRequestHandler):
                         "uttrekk_regler": UTTREKK_REGEL_VERSJON},
         })
 
+    def _bygg_koordinater(self, ktx, slag, innhold, maks_ocr, advarsler):
+        """Koordinatdelen for /dokument (bryteren koordinater=ja).
+
+        To kilder, samme svarform (delt/koordinater):
+          * OCR kjørte → regionene per side, bokser i FORBEHANDLEDE
+            bildepiksler.
+          * Tekstlags-PDF → ordregister fra PyMuPDF, bokser i PDF-punkter.
+        Ren tekstopplasting har ingen sider — det sies ærlig i stedet
+        for å returnere et tomt objekt som ser ut som «ingen funn»."""
+        from delt.koordinater import (koordinater_for_sider,
+                                      ord_regioner_fra_pdfside)
+        if ktx.sider_regioner:
+            return koordinater_for_sider(ktx.sider_regioner,
+                                         "forbehandlet_bilde_piksler")
+        if slag == "pdf" and not ktx.ocr_brukt:
+            import fitz
+            try:
+                doc = fitz.open(stream=innhold, filetype="pdf")
+            except Exception:
+                advarsler.append("koordinater: klarte ikke å åpne PDF-en "
+                                 "på nytt for ordposisjoner")
+                return None
+            try:
+                tak = maks_ocr or OCR_MAKS_SIDER
+                sider = [{"side": i + 1,
+                          "bredde": round(side.rect.width, 1),
+                          "hoyde": round(side.rect.height, 1),
+                          "regioner": ord_regioner_fra_pdfside(side)}
+                         for i, side in enumerate(doc) if i < tak]
+                if len(doc) > tak:
+                    advarsler.append(
+                        f"koordinater: kun de første {tak} av {len(doc)} "
+                        "sider (samme grense som maks_sider)")
+            finally:
+                doc.close()
+            return koordinater_for_sider(sider, "pdf_punkter")
+        advarsler.append("koordinater: ren tekstopplasting har ingen "
+                         "sider — koordinater finnes ikke")
+        return None
+
     def _les_dokument(self, filnavn, slag, innhold, maks_ocr, les_strekkoder):
         """Leser dokumentet ÉN gang og pakker det i en DokumentKontekst —
         delt av bryter-veien OG operasjoner-veien, så begge leser likt.
@@ -3758,7 +3859,7 @@ class Handler(BaseHTTPRequestHandler):
         et (status, kropp)-par kalleren svarer med."""
         advarsler = []
         ocr_brukt, ocr_motorer, fra_cache = False, None, False
-        handskrift, strekkoder = [], []
+        handskrift, strekkoder, sider_regioner = [], [], []
         if slag == "tekst":
             raa_tekst = (innhold or "").strip()
         else:
@@ -3771,13 +3872,15 @@ class Handler(BaseHTTPRequestHandler):
             ocr_motorer = a.get("ocr_motorer")
             ocr_brukt = a.get("ocr_brukt", False)
             fra_cache = a.get("fra_cache", False)
+            sider_regioner = a.get("_sider_regioner") or []
             if a.get("advarsel"):
                 advarsler.append(a["advarsel"])
             if a.get("melding"):
                 advarsler.append(a["melding"])
         ktx = DokumentKontekst(raa_tekst, ocr_brukt=ocr_brukt,
                                handskrift=handskrift, strekkoder=strekkoder,
-                               ocr_motorer=ocr_motorer, fra_cache=fra_cache)
+                               ocr_motorer=ocr_motorer, fra_cache=fra_cache,
+                               sider_regioner=sider_regioner)
         return ktx, advarsler, None
 
     # Vern mot misbruk: en enkelt forespørsel kan ikke be om et ubegrenset
@@ -3945,6 +4048,10 @@ class Handler(BaseHTTPRequestHandler):
             "skjema": paa("skjema", False),
             "korriger": paa("korriger", False),
         }
+        # Koordinater er ikke en del av valg-kontrakten (den er urørt for
+        # eksisterende klienter) — egen bryter, standard AV: bokser per
+        # funn kan mangedoble svaret, og de fleste kall trenger dem ikke.
+        vil_ha_koordinater = paa("koordinater", False)
         if ukjente:
             return self._svar(400, {"ok": False, "feil": (
                 "Ukjent bryterverdi: " + ", ".join(ukjente)
@@ -4064,6 +4171,12 @@ class Handler(BaseHTTPRequestHandler):
         tom_feil = "Fant ingen lesbar tekst i dokumentet"
         deler = {}
 
+        # --- koordinater per bevist funn (egen bryter, standard av) ---
+        koordinater = None
+        if vil_ha_koordinater:
+            koordinater = self._bygg_koordinater(ktx, slag, innhold,
+                                                 maks_ocr, advarsler)
+
         def trygt(fn):
             """Kjør én del uten at en uventet feil river med seg resten —
             kontrakten er at delene feiler UAVHENGIG. Det realistiske
@@ -4181,6 +4294,7 @@ class Handler(BaseHTTPRequestHandler):
             "skjema": deler.get("skjema"),
             "korriger": deler.get("korriger"),
             "korrigert_tekst": korrigert,
+            "koordinater": koordinater,
             "strekkoder": strekkoder, "handskrift": handskrift,
             "kvalitet": {"ocr_brukt": ocr_brukt,
                          "ocr_motorer": ocr_motorer or {},
@@ -4518,7 +4632,12 @@ class Handler(BaseHTTPRequestHandler):
                     "tekst": tekst, "antall_tegn": len(tekst),
                 })
             resultat = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
-            return self._svar(200 if resultat.get("ok") else 400, resultat)
+            # Understrek-felter er interne (koordinatgrunnlag m.m.) og
+            # skal aldri ut i et JSON-svar usignert — /analyser dumper
+            # ellers hele analysedicten.
+            return self._svar(200 if resultat.get("ok") else 400,
+                              {k: v for k, v in resultat.items()
+                               if not k.startswith("_")})
 
         if sti == "/fyll_skjema":
             milde, omvendte = _sjekk_feltnavn(tekstfelter,
@@ -5172,13 +5291,18 @@ class DokumentKontekst:
     resten — les-en-gang, regn-en-gang."""
 
     def __init__(self, tekst, ocr_brukt=False, handskrift=None,
-                 strekkoder=None, ocr_motorer=None, fra_cache=False):
+                 strekkoder=None, ocr_motorer=None, fra_cache=False,
+                 sider_regioner=None):
         self.tekst = tekst or ""
         self.ocr_brukt = ocr_brukt
         self.handskrift = handskrift or []
         self.strekkoder = strekkoder or []
         self.ocr_motorer = ocr_motorer
         self.fra_cache = fra_cache
+        # OCR-regionene ({boks, tekst}) per side — koordinatgrunnlaget.
+        # Tom for tekstlags-PDF-er (der bygges ordregister fra fitz i
+        # stedet) og for rene tekstopplastinger (ingen sider finnes).
+        self.sider_regioner = sider_regioner or []
         self._felter = None
         self._datoer = None
         self._datoer_detaljert = None
@@ -5284,7 +5408,8 @@ def _sjekk_feltnavn(tekstfelter: dict, kjente: set):
 # et tekstfelt). Alt annet er ukjent — og en verdi-som-navn stoppes.
 _KJENTE_FELT_DOKUMENT = {
     "felter", "struktur", "svar", "skjema", "korriger", "tekst", "sporsmal",
-    "skjema_mal", "skjema_motor", "operasjoner", "maks_sider", "strekkoder"}
+    "skjema_mal", "skjema_motor", "operasjoner", "maks_sider", "strekkoder",
+    "koordinater"}
 _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}
