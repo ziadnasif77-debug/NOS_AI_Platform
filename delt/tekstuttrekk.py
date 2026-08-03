@@ -1275,7 +1275,13 @@ def finn_sladdeomraader(tekst: str, typer=None) -> list:
                 continue
             nummer = "".join(treff.groups())
             if nummer[0] not in "01":
-                funn.append((treff.start(), treff.end(), "telefon"))
+                start = treff.start()
+                # Uten +47-prefiks sluker [ ]? naboens mellomrom — trim,
+                # så funnet («tekst» i koordinater, sladdeområdet) ikke
+                # begynner med et blanktegn.
+                if tekst[start] == " ":
+                    start += 1
+                funn.append((start, treff.end(), "telefon"))
     if "epost" in valgte:
         for treff in re.finditer(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst):
             funn.append((treff.start(), treff.end(), "epost"))

@@ -52,6 +52,7 @@ uansett hvor mange deler du ber om.
 | `skjema_mal` | din JSON-mal | — | slår på `skjema` selv |
 | `skjema_motor` | `felter` / `auto` / `modell` | `modell` | se under |
 | `korriger` | ja/nei | nei | **ja** |
+| `koordinater` | ja/nei | nei | nei |
 | `maks_sider` | tall | — | nei |
 | `strekkoder` | ja/nei | ja | nei |
 | `operasjoner` | JSON-liste | — | avhenger av typene |
@@ -85,6 +86,33 @@ tid_sekunder, kilde, versjon
 
 Deler du ikke ba om er `null`. `kilde` sier om modellen faktisk kjørte
 (se [Ærlighetsfelter](#ærlighetsfelter)).
+
+### koordinater=ja — bokser per bevist funn
+
+Samme finnere som `/sladd` (mod11/sjekksum/format, aldri modell), med
+posisjon på siden:
+
+```json
+"koordinater": {
+  "koordinatrom": "pdf_punkter",
+  "sider": [{"side": 1, "bredde": 595.3, "hoyde": 841.9,
+             "funn": [{"type": "organisasjonsnummer",
+                       "tekst": "994 230 964",
+                       "bokser": [[331.7, 726.0, 408.9, 736.6]]}]}],
+  "antall_funn": 1
+}
+```
+
+- **`koordinatrom` må leses:** OCR-dokumenter gir bokser i
+  `forbehandlet_bilde_piksler` (perspektiv-/skjevhetsrettet bilde);
+  tekstlags-PDF-er gir `pdf_punkter` (72 per tomme). Sidedimensjonene
+  følger med i samme rom, så en utheving kan skaleres riktig.
+- `bokser` er en liste: OCR kan dele et gruppert nummer over flere
+  bokser.
+- Ren tekstopplasting har ingen sider — da er `koordinater` `null` og
+  grunnen står i `kvalitet.advarsler`.
+- Et funn som ikke består kontrollen finnes ikke — heller ikke her.
+  (OCR som leser orgnr-et feil ⇒ ingen boks, ikke en gal boks.)
 
 ---
 

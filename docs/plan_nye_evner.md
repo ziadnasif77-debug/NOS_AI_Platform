@@ -12,8 +12,16 @@ navn/adresser eksplisitt deklarert udekket i hvert svar, og
 OCR-forbeholdet (feillest siffer → sjekksum slår ikke til → står
 usladdet) som advarsel.
 
-Evne 3 (koordinater) er fortsatt ubesluttet — fortjener egen økt med
-korpuset som port. Slett dokumentet når alt er avgjort.
+**Evne 3 (koordinater) er også BYGGET** (samme dag): bryteren
+`koordinater=ja` på /dokument. Skalprøven (offset-register + oppslag)
+ble bevist FØR API-arbeidet, korpuset var port (24/24 begge ganger).
+Begge veier verifisert mot ekte dokumenter: tekstlags-PDF (pdf_punkter)
+og skannet kvittering (forbehandlet_bilde_piksler). Merk: funn som ikke
+består kontrollen får ingen boks — OCR som leser orgnr feil gir INGEN
+koordinat, ikke en gal en.
+
+Alt i planen er levert. Dokumentet kan slettes, men «De øvrige
+forslagene»-tabellen kan være verdt å beholde et annet sted først.
 
 Alle tre respekterer «ingen lagring»: de leser en forespørsel og svarer,
 uten å skrive noe om dokumentet til disk.

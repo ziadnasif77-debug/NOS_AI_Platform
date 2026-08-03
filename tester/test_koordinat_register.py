@@ -136,6 +136,56 @@ def test_skalproven_telefon_til_boks():
     assert [40, 180, 180, 210] not in bokser
 
 
+def test_funn_paa_side_gir_type_tekst_og_bokser():
+    """Modulen delt/koordinater: samme finnere som /sladd, med bokser."""
+    from delt.koordinater import funn_paa_side
+    funn = funn_paa_side(SIDE)
+    typer = {f["type"]: f for f in funn}
+    assert typer["organisasjonsnummer"]["tekst"] == "994 230 964"
+    assert typer["organisasjonsnummer"]["bokser"] == [[210, 102, 420, 131]]
+    assert typer["telefon"]["bokser"] == [[200, 182, 400, 212]]
+
+
+def test_koordinater_for_sider_teller_og_deklarerer_rommet():
+    from delt.koordinater import koordinater_for_sider
+    svar = koordinater_for_sider(
+        [{"side": 1, "bredde": 850, "hoyde": 1100, "regioner": SIDE},
+         {"side": 2, "bredde": 850, "hoyde": 1100, "regioner": []}],
+        "forbehandlet_bilde_piksler")
+    assert svar["koordinatrom"] == "forbehandlet_bilde_piksler"
+    assert svar["antall_funn"] == 2          # orgnr + telefon på side 1
+    assert [s["side"] for s in svar["sider"]] == [1, 2]
+    # side uten funn er MED — «ingen funn» er også et svar
+    assert svar["sider"][1]["funn"] == []
+
+
+def test_ord_regioner_fra_pdfside():
+    """Tekstlagsveien: ordene fra PyMuPDF blir regioner på samme form,
+    og kjeden helt til bokser virker på en ekte tekst-PDF."""
+    import pytest
+    fitz = pytest.importorskip("fitz")
+
+    from delt.koordinater import funn_paa_side, ord_regioner_fra_pdfside
+    doc = fitz.open()
+    side = doc.new_page()
+    side.insert_text((72, 100), "Org. Nr: 994 230 964")
+    side.insert_text((72, 140), "Telefon: 22 33 44 55")
+    regioner = ord_regioner_fra_pdfside(side)
+    assert all(r["tekst"].strip() for r in regioner)
+    funn = funn_paa_side(regioner)
+    typer = {f["type"] for f in funn}
+    assert "organisasjonsnummer" in typer
+    assert "telefon" in typer
+    for f in funn:
+        for boks in f["bokser"]:
+            assert len(boks) == 4
+            x0, y0, x1, y1 = boks
+            assert x1 > x0 and y1 > y0
+            # PDF-punkter: innenfor en A4-side (595×842)
+            assert 0 <= x0 <= 595 and 0 <= y1 <= 842
+    doc.close()
+
+
 def test_skalproven_treff_delt_over_to_regioner():
     """OCR deler ofte et gruppert nummer i to bokser — treffet skal da
     peke på BEGGE."""
