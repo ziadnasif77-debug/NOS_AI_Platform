@@ -97,7 +97,7 @@ posisjon på siden:
   "koordinatrom": "pdf_punkter",
   "sider": [{"side": 1, "bredde": 595.3, "hoyde": 841.9,
              "funn": [{"type": "organisasjonsnummer",
-                       "tekst": "994 230 964",
+                       "tekst": "889 000 007",
                        "bokser": [[331.7, 726.0, 408.9, 736.6]]}]}],
   "antall_funn": 1
 }

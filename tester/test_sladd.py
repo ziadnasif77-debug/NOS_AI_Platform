@@ -46,7 +46,7 @@ def _gyldig_fnr() -> str:
 
 
 FNR = _gyldig_fnr()
-ORGNR = "994230964"          # ekte format fra taxikvitteringen, mod11-ok
+ORGNR = "889000007"          # syntetisk (fra testbunken), mod11-gyldig
 
 
 # ------------------------------------------------------------------ #

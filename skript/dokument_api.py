@@ -1608,12 +1608,12 @@ def uverifiserte_tall(svar: str, kilde: str, ekstra_tokens: set = None) -> list:
     Modellen har regler mot å regne selv, men språkmodeller kan likevel
     finne på å summere («SUM 268,00» + mva → «296,71»). Hvert tall på
     3+ sifre i svaret må finnes igjen i kildeteksten (sammenlignet uten
-    mellomrom/punktum, så «45 18 68 73» matcher «45186873»). Returnerer
+    mellomrom/punktum, så «41 28 89 03» matcher «41288903»). Returnerer
     listen av tall som mangler — tom liste = alt verifisert."""
     # VIKTIG token-vakt: (1) eksakt token-match, ikke delstreng - ellers
     # ville "1777" passert som delstreng av "11777"; (2) monsteret tar
     # med komma-desimaler sa "268,00" ikke splittes til "268"+"00" og
-    # slipper endrede orebelop gjennom. Gruppering ("45 18 68 73") og
+    # slipper endrede orebelop gjennom. Gruppering ("41 28 89 03") og
     # NBSP fjernes symmetrisk i bade svar og kilde.
     monster = r"\d[\d . ]*\d(?:,\d+)?|\d(?:,\d+)?"
     rens = lambda t: re.sub(r"[ ., ]", "", t)
@@ -2263,7 +2263,7 @@ def _skjemaer() -> dict:
                 "fodselsnummer": s(description="mod11-validert"),
                 "kontonummer": s(description="mod11-validert"),
                 "organisasjonsnummer": s(description="mod11-validert",
-                                         example="994230964"),
+                                         example="889000007"),
                 "kid": s(description="Krever «KID»-etikett i teksten"),
                 "telefon": s(), "epost": s(),
                 "postnummer": s(), "poststed": s(), "fylke": s(),
@@ -2461,7 +2461,7 @@ def _skjemaer() -> dict:
                 "type": s(example="organisasjonsnummer"),
                 "tekst": s(description="Tegnene slik de står i dokumentet "
                                        "(gruppering beholdt)",
-                           example="994 230 964"),
+                           example="889 000 007"),
                 "bokser": {"type": "array",
                            "items": {"type": "array",
                                      "items": {"type": "number"}},
@@ -5016,7 +5016,7 @@ def fyll_skjema_kjerne(dok: str, mal: dict) -> dict:
 
     # R57: identifikatorene manglet også. På en taxikvittering står
     # både «TLF 07550» (kortnummer i toppteksten) og «TELEFON :
-    # 97335868»; modellen plukket det første, og kodevalideringen
+    # 41288903»; modellen plukket det første, og kodevalideringen
     # måtte tømme feltet. Den deterministiske parseren VET hvilket
     # av tallene som er et gyldig norsk telefonnummer — den
     # kunnskapen skal modellen få, ikke gjette seg til.

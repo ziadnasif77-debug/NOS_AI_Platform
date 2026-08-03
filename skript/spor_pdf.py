@@ -5,7 +5,7 @@ Kjører modellen rett på maskinen (GPU), leser modellen fra D:\\nav\\modeller
 (lokal disk = rask lasting). Ingen Docker, ingen server.
 
 Bruk (fra D:\\nav):
-    python skript/spor_pdf.py "D:/nav/data/inntak/2254711543.pdf" "Hva er totalbeløpet?"
+    python skript/spor_pdf.py "D:/nav/data/inntak/eksempel_dokument.pdf" "Hva er totalbeløpet?"
 
 Første kjøring laster Borealis inn på GPU (tar ~1-2 min, 4-bit). Deretter
 kan du stille flere spørsmål i samme økt (interaktiv modus hvis du ikke

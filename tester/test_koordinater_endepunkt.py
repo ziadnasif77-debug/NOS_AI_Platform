@@ -39,7 +39,7 @@ def _tekstlag_pdf() -> bytes:
     fitz = pytest.importorskip("fitz")
     doc = fitz.open()
     side = doc.new_page()
-    side.insert_text((72, 100), "Kvittering — Org. Nr: 994 230 964")
+    side.insert_text((72, 100), "Kvittering — Org. Nr: 889 000 007")
     side.insert_text((72, 140), "Telefon: 22 33 44 55 — Total Kr: 486,00")
     data = doc.tobytes()
     doc.close()
@@ -91,7 +91,7 @@ def test_funnene_stemmer_med_felter_delen():
 def test_ren_tekst_har_ingen_koordinater_og_sier_det():
     h, fanget = _fang_handler()
     h._dokument_samlet("notat.txt", "tekst",
-                       "Org. Nr: 994 230 964", None, {"koordinater": "ja"}, True)
+                       "Org. Nr: 889 000 007", None, {"koordinater": "ja"}, True)
     kropp = fanget["kropp"]
     assert kropp["koordinater"] is None
     assert any("koordinater" in a for a in kropp["kvalitet"]["advarsler"])
