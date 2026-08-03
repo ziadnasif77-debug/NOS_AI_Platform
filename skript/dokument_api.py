@@ -837,6 +837,8 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     # GPU. Derfor beholdes de alltid (ikke bak et flagg à la R55: flagget
     # ville splittet cachen og utløst re-OCR når klienten ombestemmer seg).
     sider_regioner = []
+    # Sider hoppet over av tomside-vakten (1-basert) — rapporteres ærlig
+    tomme_sider = []
     for i, side in enumerate(doc):
         if i >= maks_sider:
             break
@@ -861,6 +863,23 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
                                   full_bredde=fb, full_hoyde=fh,
                                   rapport=side_rapport)
         rendrede.append(bilde)
+        # Tomside-vakt FØR OCR: på en (nesten) blank side leser motorene
+        # støy og finner på tekst. Målt på en ekte skannet bunke: side 7
+        # hadde blekkandel 0,00064 (gjennomslag fra arket bak) og OCR
+        # «leste» to linjer som ikke finnes på siden — mens laveste
+        # innholdsside lå på 0,015. Terskelen (0,002) skiller med god
+        # margin. Siden rapporteres som tom i stedet — ærlig stillhet
+        # slår oppdiktet tekst.
+        from delt.forbehandling import TOM_SIDE_BLEKK, andel_blekk
+        if andel_blekk(bilde) < TOM_SIDE_BLEKK:
+            tomme_sider.append(i + 1)
+            tekster.append("")
+            sider_regioner.append({"side": i + 1, "bredde": bilde.shape[1],
+                                   "hoyde": bilde.shape[0], "regioner": []})
+            if i == 0:
+                side1_dim = (bilde.shape[1], bilde.shape[0])
+                forbehandling_rapport = side_rapport
+            continue
         resultat = ocr_side(bilde)
         if i == 0:
             side1_regioner = resultat["regioner"]
@@ -900,6 +919,7 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             "_side1_regioner": side1_regioner,
             "_side1_dim": side1_dim,
             "_sider_regioner": sider_regioner,
+            "tomme_sider": tomme_sider,
             "forbehandling": forbehandling_rapport}
 
 
@@ -1172,11 +1192,17 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
     if ocr_res is not None:
         ocr_tekst = ocr_res["tekst"]
         ocr_advarsel = None
+        if ocr_res.get("tomme_sider"):
+            hvilke = ", ".join(str(s) for s in ocr_res["tomme_sider"])
+            ocr_advarsel = (f"side {hvilke}: (nesten) tom — OCR hoppet "
+                            "over for å ikke lese støy som tekst")
         if ocr_res["sider_lest"] < ocr_res["sider_totalt"]:
-            ocr_advarsel = (
+            grense_tekst = (
                 f"OCR leste {ocr_res['sider_lest']} av {ocr_res['sider_totalt']} sider "
                 f"(synkron grense — øk med felt maks_sider inntil {OCR_TAK_SIDER}, "
                 "eller bruk POST /jobb for hele dokumentet)")
+            ocr_advarsel = (f"{ocr_advarsel} — {grense_tekst}"
+                            if ocr_advarsel else grense_tekst)
         # Ærlig bildekvalitet: uskarpt/mørkt/utbrent/lite bilde sies RETT UT
         # («ta et nytt bilde») i stedet for å levere stille søppel-OCR.
         kvalitet = (ocr_res.get("forbehandling") or {}).get("kvalitet") or {}

@@ -298,3 +298,34 @@ def test_verdi_som_feltnavn_gir_400():
     h, fanget = _fang_handler()
     h._forhandssjekk("brev.pdf", "pdf", _tekst_pdf(), {"ja": "maks_sider"})
     assert fanget["kode"] == 400
+
+
+# ------------------------------------------------------------------ #
+#  Tomside-vakten i selve OCR-løpet (gjenbruker andel_blekk)           #
+# ------------------------------------------------------------------ #
+
+def test_ocr_hopper_over_blanke_sider_uten_aa_dikte():
+    """Målt på en ekte skannet bunke: en nesten blank side (blekkandel
+    0,00064 — gjennomslag fra arket bak) fikk OCR til å «lese» to
+    linjer som ikke finnes. Vakten skal rapportere siden som tom i
+    stedet — og fordi ocr_side aldri kalles for blanke sider, trenger
+    testen ingen OCR-motorer."""
+    fitz = pytest.importorskip("fitz")
+    import cv2
+    px = np.full((1100, 850, 3), 255, np.uint8)
+    ok, png = cv2.imencode(".png", px)
+    assert ok
+    ut = fitz.open()
+    for _ in range(2):
+        b = fitz.open(stream=png.tobytes(), filetype="png")
+        ut.insert_pdf(fitz.open("pdf", b.convert_to_pdf()))
+    data = ut.tobytes()
+    ut.close()
+    res = api.ocr_pdf_bytes(data)
+    assert res["tomme_sider"] == [1, 2]
+    # Bare paginermerkene igjen — ikke ett dikta ord
+    innhold = [l for l in res["tekst"].splitlines()
+               if l.strip() and not l.startswith("[Side ")]
+    assert innhold == []
+    assert res["motorer"] == {}          # ingen motor ble noensinne kalt
+    assert [s["regioner"] for s in res["_sider_regioner"]] == [[], []]
