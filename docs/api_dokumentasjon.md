@@ -66,6 +66,13 @@ dokumentfakta, og tallvakten gjelder derfor ikke.
 
 ## Øvrige endepunkter
 
+Fullstendig referanse med felter inn/ut, hvilke som bruker modellen og
+hvor samme faktum ligger på hvert endepunkt:
+**[docs/endepunkter.md](endepunkter.md)**.
+
+- `POST /dokument` — ETT kall med brytere for alt under; dokumentet leses
+  én gang. Dette er hovedveien; de øvrige beholdes for eksisterende
+  integrasjoner
 - `POST /analyser` — deterministisk analyse: felter, alle datoer
   (klassifisert med begrunnelse), strekkoder/QR, håndskrift, full tekst
 - `POST /uttrekk` — komplett strukturert totaluttrekk med fast skjema:
@@ -74,6 +81,9 @@ dokumentfakta, og tallvakten gjelder derfor ikke.
   store skannede dokumenter: ubegrenset sideantall i bakgrunnen,
   fremdrift og tidsestimat, spørsmål besvares øyeblikkelig etterpå
 - `GET /jobb/{id}/tekst`, `POST /jobb/{id}/avbryt`
+- `POST /innsyn` → `GET /innsyn/{id}?fra=N` — direktevisning av lesingen
+- `POST /ekko` — diagnose: svarer med NØYAKTIG hva serveren mottok fra
+  deg. Bruk den før du gjetter på hvorfor et felt ikke kom fram
 
 ## Python-eksempel
 
