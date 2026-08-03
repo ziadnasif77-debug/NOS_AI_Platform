@@ -107,6 +107,22 @@ sideindekseringen (målt: svarte «Side 10 finnes ikke» på et 10-siders
 dokument der `[Side 10 av 10]` sto i klartekst). Sidetelling er
 matematikk, ikke språkforståelse.
 
+### Strekkode-/QR-spørsmål besvares også av koden
+
+| Spørsmål | Svar | Modell? |
+|---|---|---|
+| `hva er strekkoden?` | `CODE128 (side 3): 1002345678911` | **nei** |
+| `hent strekkoden fra side 1` | «Ingen strekkode på side 1. Dokumentet har strekkode på side 3.» | **nei** |
+
+Verdien er **dekodet** av en strekkodeleser — symbologien har egen
+sjekksum. Samme grunn som over: målt ga «hva er strekkoden?» svaret
+«Finnes ikke i dokumentet» mens den dekodede verdien lå i `strekkoder`
+i *samme* svar.
+
+Sendte du `strekkoder=nei`, går spørsmålet til modellen i stedet: en tom
+liste betyr da at vi ikke *så etter*, og «ingen funnet» ville vært en
+løgn.
+
 ### koordinater=ja — bokser per bevist funn
 
 Samme finnere som `/sladd` (mod11/sjekksum/format, aldri modell), med

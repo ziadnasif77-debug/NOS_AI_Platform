@@ -4165,7 +4165,7 @@ class Handler(BaseHTTPRequestHandler):
         # gjelder «delene feiler uavhengig» og vi svarer 200.
         rask_del = (valg["tekst"] or valg["felter"] or valg["struktur"]
                     or (valg["skjema"] and skjema_motor in ("felter", "auto"))
-                    or (valg["svar"] and er_ren_sidelesing(sporsmal)))
+                    or (valg["svar"] and kan_svares_uten_modell(sporsmal)))
         bare_modell = not rask_del
         vil_ha_modell = valg["svar"] or skjema_med_modell or valg["korriger"]
         if bare_modell and vil_ha_modell and _borealis["status"] != "klar":
@@ -4231,14 +4231,15 @@ class Handler(BaseHTTPRequestHandler):
         if valg["svar"]:
             # En ren sidelesing («les side 10») besvares deterministisk i
             # svar_paa_sporsmal — den skal virke selv når Borealis er nede
-            if not borealis_klar and not er_ren_sidelesing(sporsmal):
+            if not borealis_klar and not kan_svares_uten_modell(sporsmal):
                 deler["svar"] = {"ok": False, "feil": borealis_feil}
             elif tomt_dokument:
                 deler["svar"] = {"ok": False, "feil": tom_feil}
             else:
                 def _svar_del():
                     kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
-                                               handskrift, strekkoder)
+                                               handskrift, strekkoder,
+                                               les_strekkoder)
                     if kjerne["tom"]:
                         return {"ok": False, "feil": tom_feil}
                     advarsler.extend(kjerne["advarsler"])
@@ -4736,7 +4737,7 @@ class Handler(BaseHTTPRequestHandler):
         # Borealis-portene, ellers gir en nede-modell 503 på noe koden
         # kan svare på alene.
         deterministisk_svar = (innhold is not None
-                               and er_ren_sidelesing(sporsmal))
+                               and kan_svares_uten_modell(sporsmal))
         if (not tom_foresporsel and not deterministisk_svar
                 and _borealis["status"] == "laster"):
             return self._svar(503, {"ok": False, "feil": "Borealis laster fortsatt — prøv igjen om ett minutt", "borealis": "laster"})
@@ -4849,7 +4850,7 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
-                                   handskrift, strekkoder)
+                                   handskrift, strekkoder, les_strekkoder)
         if kjerne["tom"]:
             return self._svar(200, {
                 "ok": True, "filnavn": filnavn, "trenger_ocr": True,
@@ -5182,8 +5183,59 @@ def er_ren_sidelesing(sporsmal: str) -> bool:
     return bool(_REN_SIDELESING.match(sporsmal or ""))
 
 
+# Spørsmål som ber om strekkode-/QR-VERDIEN. Verdien er DEKODET av en
+# strekkodeleser (sjekksumsikret av selve symbologien) — det er
+# matematikk, ikke gjetning, og skal aldri gå veien om modellen.
+_STREKKODE_SPM = re.compile(
+    r"^\W*(?:(?:hva|hvilken|hvilke)\s+(?:er|st(?:å|aa)r)?\s*)?"
+    r"(?:(?:hent|vis|les|gi\s+meg|skriv(?:\s+ut)?)\s+)?"
+    r"(?:ut\s+)?(?:strekkode\w*|qr[\s-]?kode\w*|barcode\w*|kode\w*)"
+    r"(?:[^?]{0,40})?\W*\??\W*$", re.IGNORECASE)
+
+
+def er_strekkodesporsmal(sporsmal: str) -> bool:
+    """Ber spørsmålet om strekkode-/QR-verdien?
+
+    Målt: «hva er strekkoden?» ga «Finnes ikke i dokumentet» selv om
+    verdien lå ferdig dekodet i samme svar og var lagt inn i modellens
+    kontekst. Samme feilmodus som sidetelling — vi ba en 4B-modell
+    gjengi et tall den ikke trengte å tolke."""
+    return bool(_STREKKODE_SPM.match(sporsmal or ""))
+
+
+def _strekkodesvar(strekkoder: list, sideref=None, strekkoder_lest=True):
+    """Deterministisk svar på et strekkodespørsmål, eller None hvis
+    spørsmålet ikke kan besvares fra listen alene.
+
+    «strekkoder_lest=False» (klienten sendte strekkoder=nei) gir None:
+    en tom liste betyr da at vi ikke SÅ etter, ikke at det ikke finnes
+    noe — og «ingen funnet» ville vært en løgn."""
+    if not strekkoder_lest:
+        return None
+    aktuelle = strekkoder
+    if sideref is not None:
+        aktuelle = [k for k in strekkoder if k.get("side") == sideref]
+    if not aktuelle:
+        hvor = f" på side {sideref}" if sideref is not None else ""
+        if strekkoder and sideref is not None:
+            sider = ", ".join(str(k.get("side")) for k in strekkoder)
+            return (f"Ingen strekkode{hvor}. Dokumentet har strekkode på "
+                    f"side {sider}.")
+        return f"Ingen strekkoder eller QR-koder funnet i dokumentet{hvor}."
+    return "\n".join(
+        f"{k.get('type', 'ukjent')} (side {k.get('side')}): {k.get('verdi')}"
+        for k in aktuelle)
+
+
+def kan_svares_uten_modell(sporsmal: str) -> bool:
+    """Spørsmål koden kan besvare alene — de skal forbi Borealis-portene
+    så en nede modell ikke feller noe vi kan svare på deterministisk."""
+    return er_ren_sidelesing(sporsmal) or er_strekkodesporsmal(sporsmal)
+
+
 def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
-                      handskrift: list, strekkoder: list) -> dict:
+                      handskrift: list, strekkoder: list,
+                      strekkoder_lest: bool = True) -> dict:
     """Felles kjerne for /spor og /dokument: beriker dokumentteksten
     (håndskriftmerking, strekkoder, stort-dokument-supplement,
     datoklassifisering), spør Borealis og kjører ALLE vaktene
@@ -5201,6 +5253,21 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     # markørene er kodegenererte. Ren lesing besvares ordrett uten
     # modell; spørsmål OM en side gir modellen KUN den siden.
     sideref = _sporsmalets_sideref(sporsmal)
+
+    # Strekkode-/QR-verdien er DEKODET av en leser, ikke lest av en
+    # modell — svar rett fra listen. (Ligger før sideroutingen, så
+    # «strekkoden på side 3» filtreres på side i stedet for å bli et
+    # sideutsnitt.)
+    if er_strekkodesporsmal(sporsmal):
+        svar = _strekkodesvar(strekkoder or [], sideref,
+                              strekkoder_lest)
+        if svar is not None:
+            return {"tom": False, "modell_brukt": False, "svar": svar,
+                    "tall_verifisert": True,
+                    "tolket_sporsmal": ("strekkodeverdien gjengitt fra "
+                                        "dekoderen (deterministisk)"),
+                    "svar_avkortet": False, "advarsler": advarsler}
+
     if sideref is not None and len((raa_tekst or "").strip()) >= 5:
         antall_sider, sider = del_i_sider(raa_tekst)
         if sideref not in sider:
@@ -5623,7 +5690,7 @@ class SvarOperasjon(Operasjon):
     def _krever_borealis(self):
         # En ren sidelesing besvares deterministisk fra sidemarkørene —
         # den skal ikke telle som modelloperasjon i 503-porten
-        return not er_ren_sidelesing(self.sporsmal)
+        return not kan_svares_uten_modell(self.sporsmal)
 
     def utfor(self, ktx):
         if self._krever_borealis() and not _borealis_er_klar():

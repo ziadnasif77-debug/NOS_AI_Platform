@@ -166,3 +166,93 @@ def test_dokument_kilde_borealis_naar_modellen_faktisk_brukes(monkeypatch):
     assert fanget["kode"] == 200
     assert fanget["kropp"]["svar"]["modell_brukt"] is True
     assert fanget["kropp"]["kilde"] == "borealis+deterministisk"
+
+
+# ------------------------------------------------------------------ #
+#  Strekkode: verdien er DEKODET, ikke lest av en modell               #
+# ------------------------------------------------------------------ #
+
+KODER = [{"type": "CODE128", "verdi": "1002345678911", "side": 3}]
+
+
+@pytest.mark.parametrize("sporsmal", [
+    "hva er strekkoden?",
+    "strekkoden",
+    "hent strekkoden fra side 3",
+    "vis QR-koden",
+    "les strekkoden",
+    "hvilken strekkode staar paa side 3",
+])
+def test_strekkodesporsmal_kjennes_igjen(sporsmal):
+    assert api.er_strekkodesporsmal(sporsmal) is True
+
+
+@pytest.mark.parametrize("sporsmal", [
+    "hva er totalen?",
+    "les side 3",
+    "oppsummer dokumentet",
+    "hva er kontonummeret?",
+])
+def test_vanlige_sporsmal_rutes_ikke_som_strekkode(sporsmal):
+    assert api.er_strekkodesporsmal(sporsmal) is False
+
+
+def test_strekkodeverdi_uten_modell(monkeypatch):
+    """Regresjonen: «hva er strekkoden?» ga «Finnes ikke i dokumentet»
+    mens den dekodede verdien lå i SAMME svar."""
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hva er strekkoden?", False,
+                                   [], KODER)
+    assert kjerne["modell_brukt"] is False
+    assert "1002345678911" in kjerne["svar"]
+    assert "CODE128" in kjerne["svar"]
+
+
+def test_strekkode_filtreres_paa_side(monkeypatch):
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hent strekkoden fra side 3",
+                                   False, [], KODER)
+    assert "1002345678911" in kjerne["svar"]
+    # feil side → ærlig svar som PEKER på riktig side
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hent strekkoden fra side 1",
+                                   False, [], KODER)
+    assert "Ingen strekkode på side 1" in kjerne["svar"]
+    assert "side 3" in kjerne["svar"]
+
+
+def test_ingen_strekkoder_sies_aerlig(monkeypatch):
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hva er strekkoden?", False, [], [])
+    assert kjerne["modell_brukt"] is False
+    assert "Ingen strekkoder" in kjerne["svar"]
+
+
+def test_skanning_avslaatt_gir_ikke_ingen_funnet(monkeypatch):
+    """strekkoder=nei betyr at vi ikke SÅ etter — å svare «ingen funnet»
+    ville vært en løgn. Da skal spørsmålet gå til modellen i stedet."""
+    fanget = {}
+
+    def _fang(prompt, maks):
+        fanget["kalt"] = True
+        return "vet ikke", False
+
+    monkeypatch.setattr(api, "_borealis_generer", _fang)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hva er strekkoden?", False, [],
+                                   [], strekkoder_lest=False)
+    assert kjerne.get("modell_brukt") is True
+    assert fanget.get("kalt") is True
+
+
+def test_strekkodesporsmal_virker_uten_borealis(monkeypatch):
+    _forby_modell(monkeypatch)
+    monkeypatch.setitem(api._borealis, "status", "nede")
+    h, fanget = _fang_handler()
+    monkeypatch.setattr(api, "les_strekkoder_bytes", lambda *a, **kw: KODER)
+    h._dokument_samlet("bunke.txt", "tekst", BUNKE, None,
+                       {"sporsmal": "hva er strekkoden?", "tekst": "nei",
+                        "felter": "nei"}, True)
+    assert fanget["kode"] == 200
+    svar = fanget["kropp"]["svar"]
+    assert svar["ok"] is True
+    assert svar["modell_brukt"] is False
+    assert fanget["kropp"]["kilde"] == "deterministisk"
