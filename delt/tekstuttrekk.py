@@ -27,7 +27,14 @@ from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 # u5: «organisasjonsnummer» og «kid» eksponeres som felter/plassholdere.
 #     Begge var mod11-validerte fra før, men manglet i felter_flatt — en
 #     mal måtte derfor be MODELLEN om noe koden kunne BEVISE.
-UTTREKK_REGEL_VERSJON = "u5"
+# u6: målt på en 10-siders syntetisk NAV-bunke (vedtak+faktura+skjema+
+#     legeerklæring+inntektsmelding+klage): merket saksnummer vinner over
+#     NAV-skjemakode; Postboks-nummer er ikke postnummer; telefon fanger
+#     3-2-3-mobilform og avviser fakturanummer-etikett; merket kontonummer
+#     vinner over fnr-presedens når begge sjekksummer stemmer; totalbelop
+#     «beløp å betale» + tabellrad faller ikke videre til neste linje;
+#     nytt felt forfallsdato.
+UTTREKK_REGEL_VERSJON = "u6"
 
 # Versjon av den deterministiske malfletteren (flett_mal). Skilt fra
 # uttrekksreglene fordi flettingen kan endres uavhengig av hvordan de
@@ -846,16 +853,48 @@ def _gyldig_dato(d: int, m: int, y: int) -> bool:
         return False
 
 
-def finn_telefon(tekst: str):
-    """Norsk telefonnummer: 8 sifre, ev. +47/0047-prefiks og gruppering."""
-    for treff in re.finditer(
-        r"(?:\+47|0047)?[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})\b", tekst
-    ):
-        # Hopp over kandidater som er halen av et lengre tall (fnr/konto)
+# Telefongrupperinger som faktisk brukes i Norge: parvis «22 33 44 55»
+# OG mobilformen 3-2-3 «412 88 903». Målt på den syntetiske testbunken:
+# kun parvis ble fanget før, så personens mobil (+47 412 88 903) ble
+# aldri funnet — mens fakturanummeret 90114882 (åtte sifre i strekk)
+# BLE «telefon». Én delt skanner for finn_telefon, finn_alle_telefoner
+# og sladdingen, så de aldri kan være uenige.
+_TELEFON_MONSTER = re.compile(
+    r"(?:\+47|0047)?[ ]?(?:"
+    r"(\d{2})[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})"      # 2-2-2-2 / 8 i strekk
+    r"|(\d{3})[ ]?(\d{2})[ ]?(\d{3})"                # 3-2-3 (mobilform)
+    r")\b")
+
+# Etikett rett foran som betyr at tallet IKKE er en telefon.
+_IKKE_TELEFON_ETIKETT = re.compile(
+    r"(?:faktura(?:nummer|nr)?|kunde(?:nummer|nr)?|ordre(?:nummer|nr)?"
+    r"|saksnr\.?|saksnummer)[.:\s]*$", re.IGNORECASE)
+
+
+def _telefon_treff(tekst: str):
+    """Yielder (start, slutt, nummer) for hver telefonkandidat, med alle
+    vaktene: ikke halen av et lengre tall, ikke et tall etiketten foran
+    sier er noe annet, og norske abonnentnumre starter ikke på 0/1."""
+    for treff in _TELEFON_MONSTER.finditer(tekst):
         start = treff.start()
         if start > 0 and tekst[start - 1].isdigit():
             continue
-        return "".join(treff.groups())
+        nummer = "".join(g for g in treff.groups() if g)
+        if len(nummer) != 8 or nummer[0] in "01":
+            continue
+        if _IKKE_TELEFON_ETIKETT.search(tekst[max(0, start - 24):start]):
+            continue
+        # Uten +47-prefiks sluker [ ]? naboens mellomrom — trim
+        if tekst[start] == " ":
+            start += 1
+        yield start, treff.end(), nummer
+
+
+def finn_telefon(tekst: str):
+    """Norsk telefonnummer: 8 sifre, ev. +47/0047-prefiks og gruppering
+    (parvis eller 3-2-3)."""
+    for _, _, nummer in _telefon_treff(tekst):
+        return nummer
     return None
 
 
@@ -866,13 +905,20 @@ def finn_epost(tekst: str):
 
 def finn_postnummer_sted(tekst: str):
     """«0181 Oslo» → (postnummer, poststed). Flerords-steder med «i»
-    («8610 Mo i Rana») fanges også — uten å sluke neste setningsord."""
-    treff = re.search(
+    («8610 Mo i Rana») fanges også — uten å sluke neste setningsord.
+
+    «Postboks 6600 Etterstad» er IKKE et postnummer: 6600 er
+    postboksnummeret, og Etterstad navnet på postboksanlegget. Målt på
+    testbunken kom den fella FØRST i teksten (NAVs egen adresselinje) og
+    stjal feltet fra det ekte postnummeret på samme linje (0607 OSLO)."""
+    for treff in re.finditer(
         r"\b(\d{4})[ \t]+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+"
         r"(?:[ \t][iI][ \t][A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)?)\b",
         tekst,
-    )
-    if treff:
+    ):
+        forfelt = tekst[max(0, treff.start() - 12):treff.start()]
+        if re.search(r"(?i)postboks\s*$", forfelt):
+            continue
         return treff.group(1), treff.group(2)
     return None, None
 
@@ -978,9 +1024,11 @@ def finn_belop(tekst: str):
 # Etiketter som peker på dokumentets TOTALBELØP. «Total Km» kan aldri bli
 # et beløp — både fordi km ikke har valutaord og fordi beløpsmønsteret
 # krever to desimaler («15,8» er ikke et beløp).
+# «Beløp å betale» er fakturaformen: linja starter med «beløp», ikke med
+# total/sum, og falt derfor utenfor — kravbeløpet (kr 4 812,00) manglet.
 _TOTAL_ETIKETT = re.compile(
     r"^\W*(?:total(?:sum|t|beløp|belop)?|sum|å\s*betale|aa\s*betale"
-    r"|til\s*betaling)\b", re.IGNORECASE)
+    r"|til\s*betaling|bel(?:ø|oe?)p\s+(?:å|aa)\s+betale)\b", re.IGNORECASE)
 
 
 def finn_totalbelop(tekst: str):
@@ -1002,18 +1050,57 @@ def finn_totalbelop(tekst: str):
     for i, linje in enumerate(linjer):
         if not _TOTAL_ETIKETT.match(linje.strip()):
             continue
-        for kandidat in (linje, *linjer[i + 1:i + 2]):
+        verdi = finn_belop(linje)
+        if verdi is not None:
+            return verdi
+        # Neste linje KUN når etikettlinja selv er uten sifre («Total
+        # Kr:»-oppsettet). En tabellrad («SUM 128 100 8 550 …») har sifre
+        # som bare ikke lot seg tolke som beløp — å falle videre derfra
+        # gjorde NESTE linjes tall («Beregnet maanedsinntekt: kr 47 400»)
+        # til «totalbeløp» på testbunken. Raden svarer selv; den svarer
+        # bare ikke med et beløp.
+        if any(c.isdigit() for c in linje):
+            continue
+        for kandidat in linjer[i + 1:i + 2]:
             verdi = finn_belop(kandidat)
             if verdi is not None:
                 return verdi
     return None
 
 
+def finn_forfallsdato(tekst: str):
+    """Datoen et krav MÅ betales: «Forfallsdato 24.06.2026»,
+    «Betalingsfrist: 01.07.2026».
+
+    Skilt fra dokumentdato med vilje: på en faktura er forfallsdatoen
+    handlingsdatoen — den viktigste enkeltdatoen i dokumentet — mens
+    fakturadatoen bare sier når kravet ble skrevet. Testbunken hadde
+    beløpet og forfallet som det eneste utførbare i hele bunken, og
+    ingen av dem kom ut som felt."""
+    treff = re.search(r"(?:forfalls?dato|forfall|betalingsfrist)\b[:\s]*",
+                      tekst, re.IGNORECASE)
+    if not treff:
+        return None
+    return finn_dato(tekst[treff.end():treff.end() + 24])
+
+
 def finn_saksnummer(tekst: str):
-    """Saksreferanser: «saksnr 21/12345», «ref.: 2020/0456» og
-    NAV-skjemakoder som «NAV 04-01.03»."""
+    """Saksreferanser: «saksnr 21/12345», «Saksnummer: 4417820»,
+    «Sakstilvising: 5590114» (nynorsk) — og NAV-skjemakoder som
+    «NAV 04-01.03» som SISTE utvei.
+
+    Rekkefølgen er poenget (målt på testbunken): et merket, rent
+    saksnummer («Saksnummer: 4417820», gjentatt på fire sider) tapte
+    før mot skjemakoden «NAV 08-07.04» — skjemakoden identifiserer
+    BLANKETTEN, ikke saken, og er det svakeste beviset her."""
     treff = re.search(
         r"(?:saksnr\.?|saksnummer|ref\.?|referanse)[:\s]+([0-9]{2,4}/[0-9]{3,6})",
+        tekst, re.IGNORECASE,
+    )
+    if treff:
+        return treff.group(1)
+    treff = re.search(
+        r"(?:saksnr\.?|saksnummer|sakstilvising)[:\s]+(\d{5,9})\b",
         tekst, re.IGNORECASE,
     )
     if treff:
@@ -1175,13 +1262,45 @@ def _tallkandidater_med_posisjon(tekst: str, lengde: int):
             yield kompakt, treff.start(), treff.end()
 
 
+# Etiketter som avgjør hva et 11-sifret tall ER når BEGGE sjekksummene
+# stemmer. Reelt tilfelle fra testbunken: refusjonskontoen 60111000002
+# består OGSÅ fnr-kontrollen (gyldig som D-nummer), så fnr-presedensen
+# «stjal» den — den ble rapportert som fødselsnummer og MANGLET i
+# kontonummerlista. Etiketten («kontonummer:») foran står i dokumentet
+# og er beviset; uten etikett gjelder fnr-presedensen som før.
+_KONTO_ETIKETT = re.compile(r"konto(?:nummer|nr)?[.:\s]*$", re.IGNORECASE)
+_FNR_ETIKETT = re.compile(
+    r"(?:f(?:ø|oe?)dselsnummer|fnr|personnummer|d-?nummer)[.:\s]*$",
+    re.IGNORECASE)
+
+
+def _ellevesiffer_type(tekst: str, start: int, kompakt: str):
+    """«fodselsnummer», «kontonummer» eller None for en 11-sifret
+    kandidat — etiketten foran vinner når begge sjekksummene stemmer."""
+    fnr_ok = er_gyldig_fnr(kompakt)
+    konto_ok = er_gyldig_kontonummer(kompakt)
+    if fnr_ok and konto_ok:
+        forfelt = tekst[max(0, start - 28):start]
+        if _KONTO_ETIKETT.search(forfelt):
+            return "kontonummer"
+        return "fodselsnummer"
+    if fnr_ok:
+        return "fodselsnummer"
+    if konto_ok:
+        return "kontonummer"
+    return None
+
+
 def finn_alle_fodselsnummer(tekst: str) -> list:
-    return _unike(k for k in _tallkandidater(tekst, 11) if er_gyldig_fnr(k))
+    return _unike(
+        k for k, start, _ in _tallkandidater_med_posisjon(tekst, 11)
+        if _ellevesiffer_type(tekst, start, k) == "fodselsnummer")
 
 
 def finn_alle_kontonummer(tekst: str) -> list:
-    return _unike(k for k in _tallkandidater(tekst, 11)
-                  if er_gyldig_kontonummer(k) and not er_gyldig_fnr(k))
+    return _unike(
+        k for k, start, _ in _tallkandidater_med_posisjon(tekst, 11)
+        if _ellevesiffer_type(tekst, start, k) == "kontonummer")
 
 
 def finn_alle_organisasjonsnummer(tekst: str) -> list:
@@ -1200,19 +1319,9 @@ def finn_alle_kid(tekst: str) -> list:
 
 
 def finn_alle_telefoner(tekst: str) -> list:
-    """Alle norske telefonnumre (8 sifre, ev. +47 og gruppering).
-    Kandidater som er del av lengre tall utelukkes."""
-    ut = []
-    for treff in re.finditer(
-        r"(?:\+47|0047)?[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})\b", tekst
-    ):
-        if treff.start() > 0 and tekst[treff.start() - 1].isdigit():
-            continue
-        nummer = "".join(treff.groups())
-        # Norske abonnentnumre starter ikke på 0 eller 1
-        if nummer[0] not in "01":
-            ut.append(nummer)
-    return _unike(ut)
+    """Alle norske telefonnumre (8 sifre, ev. +47, parvis eller 3-2-3).
+    Deler skanner (og dermed vakter) med finn_telefon og sladdingen."""
+    return _unike(nummer for _, _, nummer in _telefon_treff(tekst))
 
 
 def finn_alle_eposter(tekst: str) -> list:
@@ -1248,12 +1357,9 @@ def finn_sladdeomraader(tekst: str, typer=None) -> list:
     funn = []
     if {"fodselsnummer", "kontonummer"} & valgte:
         for kompakt, start, slutt in _tallkandidater_med_posisjon(tekst, 11):
-            if er_gyldig_fnr(kompakt):
-                if "fodselsnummer" in valgte:
-                    funn.append((start, slutt, "fodselsnummer"))
-            elif er_gyldig_kontonummer(kompakt):
-                if "kontonummer" in valgte:
-                    funn.append((start, slutt, "kontonummer"))
+            type_ = _ellevesiffer_type(tekst, start, kompakt)
+            if type_ in valgte:
+                funn.append((start, slutt, type_))
     if "organisasjonsnummer" in valgte:
         for kompakt, start, slutt in _tallkandidater_med_posisjon(tekst, 9):
             if er_gyldig_orgnr(kompakt):
@@ -1266,22 +1372,9 @@ def finn_sladdeomraader(tekst: str, typer=None) -> list:
             if er_gyldig_kid(re.sub(r"[ .]", "", treff.group(1))):
                 funn.append((treff.start(1), treff.end(1), "kid"))
     if "telefon" in valgte:
-        # Samme mønster og vakter som finn_alle_telefoner
-        for treff in re.finditer(
-            r"(?:\+47|0047)?[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})\b",
-            tekst,
-        ):
-            if treff.start() > 0 and tekst[treff.start() - 1].isdigit():
-                continue
-            nummer = "".join(treff.groups())
-            if nummer[0] not in "01":
-                start = treff.start()
-                # Uten +47-prefiks sluker [ ]? naboens mellomrom — trim,
-                # så funnet («tekst» i koordinater, sladdeområdet) ikke
-                # begynner med et blanktegn.
-                if tekst[start] == " ":
-                    start += 1
-                funn.append((start, treff.end(), "telefon"))
+        # NØYAKTIG samme skanner som finn_telefon/finn_alle_telefoner
+        for start, slutt, _ in _telefon_treff(tekst):
+            funn.append((start, slutt, "telefon"))
     if "epost" in valgte:
         for treff in re.finditer(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst):
             funn.append((treff.start(), treff.end(), "epost"))
@@ -1490,6 +1583,7 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
                                 or [None])[0],
         "kid":           (finn_alle_kid(tekst) or [None])[0],
         "dato":          finn_dato(tekst),
+        "forfallsdato":  finn_forfallsdato(tekst),
         "telefon":       finn_telefon(tekst),
         "epost":         finn_epost(tekst),
         "belop":         finn_belop(tekst),
@@ -1532,6 +1626,7 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
         "telefon":    lambda v: bool(re.fullmatch(r"\+?\d[\d ]{6,14}", v.strip())),
         "epost":      lambda v: bool(re.fullmatch(r"[\w.+-]+@[\w-]+\.[\w.]{2,}", v.strip())),
         "dato":       lambda v: finn_dato(v) is not None,
+        "forfallsdato": lambda v: finn_dato(v) is not None,
         "saksnummer": lambda v: finn_saksnummer(f"saksnr {v}") is not None
                                 or bool(re.search(r"\d", v)),
     }
@@ -1623,6 +1718,7 @@ def felter_flatt(tekst: str, ocr_brukt: bool = False) -> dict:
         "totalbelop": ent.get("totalbelop"),
         # datoer
         "dato": ent.get("dato"),
+        "forfallsdato": ent.get("forfallsdato"),
         "dokumentdato": dd.get("dato"),
         "dokumentdato_type": dd.get("type"),
         "dokumentdato_kilde": dd.get("kilde"),
