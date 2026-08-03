@@ -22,6 +22,7 @@ Basis-URL lokalt: `http://localhost:8600`. Er serveren startet med
 | Ha komplett strukturert JSON med faste nøkler | `POST /uttrekk` |
 | Fylle din egen JSON-mal | `POST /dokument` med `skjema_mal` |
 | Behandle et STORT skannet dokument | `POST /jobb` → `GET /jobb/{id}` |
+| Avvise et dårlig skann FØR GPU-en brukes | `POST /forhandssjekk` |
 | Finne ut hva serveren FAKTISK mottok fra deg | `POST /ekko` |
 
 **`/dokument` er hovedveien.** De øvrige dokumentendepunktene er eldre og
@@ -186,6 +187,42 @@ får det som er nytt.
 
 Beregnet på GUI-et, som tegner lesingen LIVE. Sender **aldri** til Label
 Studio — ren inspeksjon. Gir ingen felter eller dokumentdato.
+
+---
+
+## POST /forhandssjekk — kvalitetsdom FØR prosessering
+
+Avviser dårlige skann på ~sekundet i stedet for å bruke 30 s GPU på
+søppel. Rendrer sidene ved samme oppløsning som OCR ville brukt og måler
+skarphet, lys, piksler og tomme sider — men kjører **aldri** OCR og
+rører aldri modellen.
+
+| Felt inn | Betyr |
+|---|---|
+| `fil` | dokumentet (påkrevd) |
+| `maks_sider` | hvor mange sider som vurderes (tak 10) |
+
+Svar: `dom` (`god`/`tvilsom`/`avvis`), `tekstlag`, `trenger_ocr`,
+`sider[]` (dpi, piksler, skarphet, lys, blekk_andel, tom, uleselig,
+advarsler per side), `anbefaling` på norsk.
+
+Bruk `dom` som port i roboten:
+
+```
+god     → POST /dokument
+tvilsom → prosesser, men flagg for menneskelig kontroll
+avvis   → be om nytt skann — ikke bruk GPU-en
+```
+
+Merk:
+
+- Dokumenter **med tekstlag** får alltid `god` uten sidevurderinger —
+  OCR kjøres aldri på dem, så skannkvalitet er irrelevant.
+- Dømmingen skjer på **rendrede piksler**, ikke nominell dpi: for et
+  opplastet bilde er dpi-en formatets antakelse (PNG=96), ikke en
+  egenskap ved bildet. `dpi` rapporteres som informasjon.
+- Én tom side blant innholdssider gir `tvilsom`, ikke `avvis` — tosidig
+  skanning legger rutinemessig inn blanke baksider.
 
 ---
 
