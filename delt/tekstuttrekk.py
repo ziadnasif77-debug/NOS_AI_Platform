@@ -24,7 +24,10 @@ from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 # u4: nytt felt «totalbelop» — beløpet på en Total-/Sum-/Å betale-linje.
 #     Additivt: «belop» (første beløp) er URØRT, fordi hvilket beløp som
 #     er riktig avhenger av dokumentet. Klienten velger.
-UTTREKK_REGEL_VERSJON = "u4"
+# u5: «organisasjonsnummer» og «kid» eksponeres som felter/plassholdere.
+#     Begge var mod11-validerte fra før, men manglet i felter_flatt — en
+#     mal måtte derfor be MODELLEN om noe koden kunne BEVISE.
+UTTREKK_REGEL_VERSJON = "u5"
 
 # Versjon av den deterministiske malfletteren (flett_mal). Skilt fra
 # uttrekksreglene fordi flettingen kan endres uavhengig av hvordan de
@@ -1377,6 +1380,14 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
     deterministiske = {
         "fodselsnummer": finn_fodselsnummer(tekst),
         "kontonummer":   finn_kontonummer(tekst),
+        # Orgnr og KID er sjekksumvaliderte (mod11) på lik linje med fnr og
+        # kontonummer, men manglet her — så en mal med {organisasjonsnummer}
+        # fikk null fra «felter»-motoren og måtte overlates til modellen,
+        # enda koden kunne BEVISE nummeret. KID krever i tillegg en
+        # «KID»-etikett i teksten, så et løst tall kan aldri bli KID.
+        "organisasjonsnummer": (finn_alle_organisasjonsnummer(tekst)
+                                or [None])[0],
+        "kid":           (finn_alle_kid(tekst) or [None])[0],
         "dato":          finn_dato(tekst),
         "telefon":       finn_telefon(tekst),
         "epost":         finn_epost(tekst),
@@ -1404,6 +1415,14 @@ def utvid_entiteter(tekst: str, entiteter: dict) -> dict:
     konto_verdi = re.sub(r"\D", "", str(resultat.get("kontonummer") or ""))
     if resultat.get("kontonummer") and not er_gyldig_kontonummer(konto_verdi):
         resultat.pop("kontonummer")
+    orgnr_verdi = re.sub(r"\D", "",
+                         str(resultat.get("organisasjonsnummer") or ""))
+    if (resultat.get("organisasjonsnummer")
+            and not er_gyldig_orgnr(orgnr_verdi)):
+        resultat.pop("organisasjonsnummer")
+    kid_verdi = re.sub(r"\D", "", str(resultat.get("kid") or ""))
+    if resultat.get("kid") and not er_gyldig_kid(kid_verdi):
+        resultat.pop("kid")
 
     # F3-2: mønsterfelter der deterministisk søk ikke fant noe, men modellen
     # likevel leverte en verdi — verifiser modellverdien mot samme format,
@@ -1486,6 +1505,8 @@ def felter_flatt(tekst: str, ocr_brukt: bool = False) -> dict:
         "epost": ent.get("epost"),
         "fodselsnummer": ent.get("fodselsnummer"),
         "kontonummer": ent.get("kontonummer"),
+        "organisasjonsnummer": ent.get("organisasjonsnummer"),
+        "kid": ent.get("kid"),
         # adresse
         "postnummer": ent.get("postnummer"),
         "poststed": ent.get("poststed"),

@@ -225,6 +225,39 @@ def test_totalbelop_som_plassholder_i_mal():
     assert "totalbelop" in rapport["tilgjengelige_felter"]
 
 
+def test_organisasjonsnummer_som_plassholder():
+    """Kvitteringen har «Org. Nr: NO994230964MVA». Nummeret er mod11-
+    validert av koden, men manglet i felter_flatt — malen fikk null og
+    måtte spørre MODELLEN om noe koden kunne bevise."""
+    from delt.tekstuttrekk import flett_mal, utvid_entiteter
+    tekst = "Mo I Rana Taxi\nOrg. Nr:\nNO994230964MVA\nTotal Kr:\n486,00"
+    assert utvid_entiteter(tekst, {})["organisasjonsnummer"] == "994230964"
+    utfylt, rapport = flett_mal({"orgnr": "{organisasjonsnummer}"}, tekst)
+    assert utfylt == {"orgnr": "994230964"}
+    assert rapport["ukjente_felter"] == []
+
+
+@pytest.mark.parametrize("felt,oppdiktet", [
+    ("organisasjonsnummer", "123456789"),   # 9 sifre, feil kontrollsiffer
+    ("kid", "1234"),                        # består ikke KID-sjekksummen
+])
+def test_oppdiktet_identifikator_fra_modellen_forkastes(felt, oppdiktet):
+    """Samme vakt som fnr/kontonummer: en modellverdi som ikke består
+    mod11 skal aldri nå klienten — den ville ellers kommet ut merket som
+    et deterministisk felt, og nettopp den merkingen desarmerer den
+    menneskelige kontrollen."""
+    from delt.tekstuttrekk import utvid_entiteter
+    assert felt not in utvid_entiteter("ingen nummer her", {felt: oppdiktet})
+
+
+def test_ekte_orgnr_fra_modellen_beholdes():
+    """Vakten skal bare fjerne det som ikke består matematikken."""
+    from delt.tekstuttrekk import utvid_entiteter
+    felter = utvid_entiteter("ingen nummer her",
+                             {"organisasjonsnummer": "994230964"})
+    assert felter["organisasjonsnummer"] == "994230964"
+
+
 def test_belop_uendret_uten_totaletikett():
     """Additivt: dokumenter uten Total-linje oppfører seg NØYAKTIG som før
     — «belop» er urørt og «totalbelop» settes ikke."""
