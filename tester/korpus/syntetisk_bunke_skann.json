@@ -10,7 +10,11 @@
     "felter.felter.forfallsdato": "24.06.2026",
     "felter.felter.kid": "1002345678911",
     "felter.felter.organisasjonsnummer": "889000007",
-    "felter.dokumentdato.periode.flere_dokumenter": true
+    "felter.dokumentdato.periode.flere_dokumenter": true,
+    "strekkoder.0.verdi": "1002345678911",
+    "strekkoder.0.side": 3,
+    "strekkoder.1.verdi": "NAV4417820-2026-06",
+    "strekkoder.1.side": 10
   },
   "felter_maa_inneholde": {
     "struktur.identifikatorer.fodselsnummer": [

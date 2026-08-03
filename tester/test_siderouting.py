@@ -347,3 +347,62 @@ def test_barkode_stavemaaten_rutes(monkeypatch):
                                    False, [], KODER)
     assert kjerne["modell_brukt"] is False
     assert "1002345678911" in kjerne["svar"]
+
+
+# ------------------------------------------------------------------ #
+#  ALLE strekkoder, ikke bare de på de første sidene                   #
+# ------------------------------------------------------------------ #
+
+FLERE_KODER = [
+    {"type": "CODE128", "verdi": "1002345678911", "side": 3},
+    {"type": "CODE128", "verdi": "NAV4417820-2026-06", "side": 10},
+]
+
+
+def test_strekkodetaket_dekker_hele_dokumentet():
+    """Taket var 5 sider. Arkivstrekkoden på side 10 i en 10-siders
+    bunke ble derfor ALDRI lest — og returslipp/arkivkoder står nettopp
+    bakerst, så grensen rammet systematisk den viktigste koden."""
+    assert api.STREKKODE_MAKS_SIDER >= 10
+
+
+def test_alle_strekkoder_listes(monkeypatch):
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hva er strekkoden?", False,
+                                   [], FLERE_KODER)
+    assert kjerne["modell_brukt"] is False
+    assert "1002345678911" in kjerne["svar"]
+    assert "NAV4417820-2026-06" in kjerne["svar"]
+    # side skal stå på hver, så leseren vet HVOR den er
+    assert "side 3" in kjerne["svar"]
+    assert "side 10" in kjerne["svar"]
+
+
+def test_strekkode_per_side_filtrerer_riktig(monkeypatch):
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hva er strekkoden paa side 10?",
+                                   False, [], FLERE_KODER)
+    assert "NAV4417820-2026-06" in kjerne["svar"]
+    assert "1002345678911" not in kjerne["svar"]
+
+
+def test_duplikater_fjernes():
+    """pyzbar melder av og til samme kode to ganger på et støyete skann."""
+    import numpy as np
+    rapport = {}
+    # tomme hvite sider → ingen koder, men rapporten skal fylles
+    sider = [np.full((60, 60, 3), 255, np.uint8)] * 3
+    koder = api.les_strekkoder_bytes(b"", sider=sider, rapport=rapport)
+    assert koder == []
+    assert rapport["sider_skannet"] == 3
+    assert rapport["avkortet"] is False
+
+
+def test_avkorting_meldes_i_rapporten():
+    import numpy as np
+    rapport = {}
+    sider = [np.full((60, 60, 3), 255, np.uint8)] * 8
+    api.les_strekkoder_bytes(b"", maks_sider=3, sider=sider, rapport=rapport)
+    assert rapport["sider_skannet"] == 3
+    assert rapport["sider_totalt"] == 8
+    assert rapport["avkortet"] is True
