@@ -23,6 +23,7 @@ Basis-URL lokalt: `http://localhost:8600`. Er serveren startet med
 | Fylle din egen JSON-mal | `POST /dokument` med `skjema_mal` |
 | Behandle et STORT skannet dokument | `POST /jobb` → `GET /jobb/{id}` |
 | Avvise et dårlig skann FØR GPU-en brukes | `POST /forhandssjekk` |
+| Sladde beviste identifikatorer (fnr, konto, …) | `POST /sladd` |
 | Finne ut hva serveren FAKTISK mottok fra deg | `POST /ekko` |
 
 **`/dokument` er hovedveien.** De øvrige dokumentendepunktene er eldre og
@@ -223,6 +224,38 @@ Merk:
   egenskap ved bildet. `dpi` rapporteres som informasjon.
 - Én tom side blant innholdssider gir `tvilsom`, ikke `avvis` — tosidig
   skanning legger rutinemessig inn blanke baksider.
+
+---
+
+## POST /sladd — sladd beviste identifikatorer
+
+Sladder **kun det som kan bevises**: fødselsnummer, kontonummer og
+organisasjonsnummer (mod11), KID (sjekksum + etikettkrav), telefon og
+epost (format). Matematikk, aldri modell. Hvert funn erstattes synlig
+med `[SLADDET type]`.
+
+| Felt inn | Betyr |
+|---|---|
+| `fil` | dokumentet (påkrevd) |
+| `typer` | kommaseparert utvalg, f.eks. `fodselsnummer,telefon`. Standard: alle |
+| `maks_sider` | OCR-sidegrense for skannede dokumenter |
+
+Svar: `sladdet_tekst`, `funn` (type + antall), `antall_sladdet`,
+`typer_valgt`, `ikke_dekket`, `advarsel`, `advarsler`, `kilde`.
+
+**Grensene deklareres i hvert svar, ikke bare her:**
+
+- `ikke_dekket: ["navn", "adresser"]` — de kan ikke bevises
+  deterministisk (NER er fjernet med vilje), og en gjettet sladding som
+  ser fullført ut er farligere enn ingen. Sladdingen er derfor **ikke
+  alene tilstrekkelig for offentliggjøring** (offentleglova).
+- OCR-forbeholdet: på skannede dokumenter kan et feillest siffer gjøre
+  at sjekksummen ikke slår til — nummeret blir da stående **usladdet**.
+  Meldes i `advarsler` når OCR ble brukt.
+
+Dato-/beløpsvakten fra feltuttrekket gjelder også her: «01.01.2024 114
+kroner» kan aldri limes sammen til et «fødselsnummer» og sladdes — en
+falsk positiv i sladding fjerner lovlig saksinnhold.
 
 ---
 
