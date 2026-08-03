@@ -87,6 +87,26 @@ tid_sekunder, kilde, versjon
 Deler du ikke ba om er `null`. `kilde` sier om modellen faktisk kjørte
 (se [Ærlighetsfelter](#ærlighetsfelter)).
 
+### Sidespørsmål besvares av KODEN
+
+Peker spørsmålet på en side («les side 10», «sida 3», «s. 2»), ruter
+koden det deterministisk — sidemarkørene `[Side i av n]` er
+kodegenererte og dermed pålitelige:
+
+| Spørsmål | Hva skjer | Modell? |
+|---|---|---|
+| `les side 10` | Siden gjengis **ordrett** | **nei** |
+| `les side 99` (finnes ikke) | «Dokumentet har 10 sider — side 99 finnes ikke.» | **nei** |
+| `hva er beløpet på side 3?` | Modellen får **kun side 3** | ja |
+
+De to første virker **selv når Borealis er nede** — de går forbi
+503-porten. `svar.modell_brukt` og `kilde` sier hvilken vei som ble tatt.
+
+Bakgrunn: en liten modell som får hele bunken roter bort
+sideindekseringen (målt: svarte «Side 10 finnes ikke» på et 10-siders
+dokument der `[Side 10 av 10]` sto i klartekst). Sidetelling er
+matematikk, ikke språkforståelse.
+
 ### koordinater=ja — bokser per bevist funn
 
 Samme finnere som `/sladd` (mod11/sjekksum/format, aldri modell), med

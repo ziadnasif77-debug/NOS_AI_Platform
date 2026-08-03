@@ -1,0 +1,168 @@
+"""
+Deterministisk siderouting i svar-flyten.
+
+Målt på den syntetiske bunken: modellen fikk HELE teksten (7 335 tegn —
+godt under grensen, med «[Side 10 av 10]» i klartekst) og svarte likevel
+«Side 10 finnes ikke i dokumentet» på «les side 10». Sideindeksering er
+nettopp den typen jobb en liten modell roter bort og koden gjør perfekt:
+markørene er kodegenererte.
+
+Reglene som testes:
+  * ren sidelesing («les side 10») → ordrett utsnitt, ALDRI modell
+  * side utenfor dokumentet → ærlig deterministisk svar, ALDRI modell
+  * spørsmål OM en side («hva er beløpet på side 3?») → modellen får
+    KUN den siden
+  * kilde/modell_brukt sier ærlig at modellen ikke ble brukt
+"""
+import sys
+import types
+
+sys.path.insert(0, ".")
+sys.path.insert(0, "skript")
+
+import pytest
+
+import dokument_api as api
+
+BUNKE = ("[Side 1 av 3]\nVedtak om sykepenger\nSaksnummer: 4417820\n"
+         "[Side 2 av 3]\nBeloep aa betale kr 4 812,00\nForfallsdato 24.06.2026\n"
+         "[Side 3 av 3]\nReturslipp - dokumentkontroll\nTalet paa sider: 3")
+
+
+# ------------------------------------------------------------------ #
+#  Byggeklossene                                                       #
+# ------------------------------------------------------------------ #
+
+def test_del_i_sider():
+    antall, sider = api.del_i_sider(BUNKE)
+    assert antall == 3
+    assert sider[1].startswith("Vedtak")
+    assert sider[2].startswith("Beloep")
+    assert sider[3].startswith("Returslipp")
+
+
+def test_del_i_sider_uten_markorer_er_ettsidig():
+    antall, sider = api.del_i_sider("bare litt tekst")
+    assert (antall, sider) == (1, {1: "bare litt tekst"})
+
+
+@pytest.mark.parametrize("sporsmal,forventet", [
+    ("les side 10", 10),
+    ("Vis sida 2", 2),
+    ("hva er beløpet på side 3?", 3),
+    ("s. 7", 7),
+    ("hva er totalen?", None),
+    ("les hele dokumentet", None),
+])
+def test_sideref(sporsmal, forventet):
+    assert api._sporsmalets_sideref(sporsmal) == forventet
+
+
+@pytest.mark.parametrize("sporsmal,ren", [
+    ("les side 10", True),
+    ("vis sida 2", True),
+    ("Side 3", True),
+    ("skriv ut side 1", True),
+    ("hva står på side 6", True),
+    ("hva er beløpet på side 3?", False),   # spørsmål OM siden → modell
+    ("les side 2 og oppsummer", False),
+])
+def test_ren_sidelesing(sporsmal, ren):
+    assert api.er_ren_sidelesing(sporsmal) is ren
+
+
+# ------------------------------------------------------------------ #
+#  Kjernen — modellen skal ALDRI kalles på de deterministiske veiene   #
+# ------------------------------------------------------------------ #
+
+def _forby_modell(monkeypatch):
+    def _eksploder(*a, **kw):
+        raise AssertionError("modellen ble kalt på en deterministisk vei")
+    monkeypatch.setattr(api, "_borealis_generer", _eksploder)
+
+
+def test_ren_lesing_gir_ordrett_side_uten_modell(monkeypatch):
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "les side 3", False, [], [])
+    assert kjerne["modell_brukt"] is False
+    assert kjerne["svar"].startswith("Returslipp")
+    assert "Talet paa sider: 3" in kjerne["svar"]
+    assert "deterministisk" in kjerne["tolket_sporsmal"]
+
+
+def test_side_utenfor_dokumentet_uten_modell(monkeypatch):
+    """Regresjonen — men nå med RIKTIG begrunnelse: side 10 finnes
+    faktisk ikke i et 3-siders dokument, og KODEN sier det."""
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "les side 10", False, [], [])
+    assert kjerne["modell_brukt"] is False
+    assert "3 sider" in kjerne["svar"]
+    assert "side 10 finnes ikke" in kjerne["svar"]
+
+
+def test_sporsmal_om_side_gir_modellen_kun_den_siden(monkeypatch):
+    fanget = {}
+
+    def _fang(prompt, maks):
+        fanget["prompt"] = prompt
+        return "kr 4 812,00", False
+
+    monkeypatch.setattr(api, "_borealis_generer", _fang)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "hva er beløpet på side 2?",
+                                   False, [], [])
+    assert kjerne["modell_brukt"] is True
+    assert "Beloep aa betale" in fanget["prompt"]
+    # sidene rundt skal IKKE være med
+    assert "Vedtak om sykepenger" not in fanget["prompt"]
+    assert "Returslipp" not in fanget["prompt"]
+
+
+# ------------------------------------------------------------------ #
+#  Endepunktet: virker uten Borealis, og kilden er ærlig               #
+# ------------------------------------------------------------------ #
+
+def _fang_handler():
+    h = api.Handler.__new__(api.Handler)
+    h.headers = {}
+    h.path = "/dokument"
+    h.command = "POST"
+    h.client_address = ("127.0.0.1", 4321)
+    fanget = {}
+    h.send_response = lambda k: fanget.__setitem__("kode", k)
+    h.send_header = lambda n, v: None
+    h.end_headers = lambda: None
+    h.wfile = types.SimpleNamespace(
+        write=lambda b: fanget.__setitem__(
+            "kropp", __import__("json").loads(b)))
+    h._cors_origin = lambda: None
+    return h, fanget
+
+
+def test_dokument_ren_sidelesing_virker_uten_borealis(monkeypatch):
+    """Selv med modellen NEDE skal «les side 2» besvares — og kilden
+    skal si «deterministisk», ikke late som Borealis bidro."""
+    _forby_modell(monkeypatch)
+    monkeypatch.setitem(api._borealis, "status", "nede")
+    h, fanget = _fang_handler()
+    h._dokument_samlet("bunke.txt", "tekst", BUNKE, None,
+                       {"sporsmal": "les side 2", "tekst": "nei",
+                        "felter": "nei"}, True)
+    assert fanget["kode"] == 200
+    svar = fanget["kropp"]["svar"]
+    assert svar["ok"] is True
+    assert svar["modell_brukt"] is False
+    assert svar["svar"].startswith("Beloep")
+    assert fanget["kropp"]["kilde"] == "deterministisk"
+
+
+def test_dokument_kilde_borealis_naar_modellen_faktisk_brukes(monkeypatch):
+    monkeypatch.setattr(api, "_borealis_generer",
+                        lambda p, m: ("4 812,00", False))
+    monkeypatch.setitem(api._borealis, "status", "klar")
+    h, fanget = _fang_handler()
+    h._dokument_samlet("bunke.txt", "tekst", BUNKE, None,
+                       {"sporsmal": "hva er beløpet på side 2?",
+                        "tekst": "nei", "felter": "nei"}, True)
+    assert fanget["kode"] == 200
+    assert fanget["kropp"]["svar"]["modell_brukt"] is True
+    assert fanget["kropp"]["kilde"] == "borealis+deterministisk"

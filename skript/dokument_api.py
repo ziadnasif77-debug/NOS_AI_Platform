@@ -4164,7 +4164,8 @@ class Handler(BaseHTTPRequestHandler):
         # der alt innholdet er feilobjekter. Er en rask del også bedt om,
         # gjelder «delene feiler uavhengig» og vi svarer 200.
         rask_del = (valg["tekst"] or valg["felter"] or valg["struktur"]
-                    or (valg["skjema"] and skjema_motor in ("felter", "auto")))
+                    or (valg["skjema"] and skjema_motor in ("felter", "auto"))
+                    or (valg["svar"] and er_ren_sidelesing(sporsmal)))
         bare_modell = not rask_del
         vil_ha_modell = valg["svar"] or skjema_med_modell or valg["korriger"]
         if bare_modell and vil_ha_modell and _borealis["status"] != "klar":
@@ -4228,7 +4229,9 @@ class Handler(BaseHTTPRequestHandler):
 
         # --- modelldeler (kun på forespørsel) ---
         if valg["svar"]:
-            if not borealis_klar:
+            # En ren sidelesing («les side 10») besvares deterministisk i
+            # svar_paa_sporsmal — den skal virke selv når Borealis er nede
+            if not borealis_klar and not er_ren_sidelesing(sporsmal):
                 deler["svar"] = {"ok": False, "feil": borealis_feil}
             elif tomt_dokument:
                 deler["svar"] = {"ok": False, "feil": tom_feil}
@@ -4241,6 +4244,7 @@ class Handler(BaseHTTPRequestHandler):
                     advarsler.extend(kjerne["advarsler"])
                     return {"ok": True, "sporsmal": sporsmal,
                             "svar": kjerne["svar"],
+                            "modell_brukt": kjerne.get("modell_brukt", True),
                             "tall_verifisert": kjerne["tall_verifisert"],
                             "tolket_sporsmal": kjerne["tolket_sporsmal"],
                             "svar_avkortet": kjerne["svar_avkortet"]}
@@ -4298,9 +4302,18 @@ class Handler(BaseHTTPRequestHandler):
         # Borealis hadde fylt et felt, og klienten kunne ikke se forskjell
         # på et bevist og et gjettet svar. /fyll_skjema gjorde det allerede
         # riktig; dette retter opp forskjellen mellom de to veiene.
+        # Samme ærlighet for svar-delen: en ren sidelesing besvares uten
+        # modell (modell_brukt=False fra kjernen), og da skal kilden si
+        # «deterministisk» selv om svar=ja var på.
         skjema_del = deler.get("skjema")
-        modell_kjorte = vil_ha_modell or (isinstance(skjema_del, dict)
-                                          and skjema_del.get("modell_brukt"))
+        svar_del = deler.get("svar")
+        svar_med_modell = (valg["svar"]
+                           and not (isinstance(svar_del, dict)
+                                    and svar_del.get("modell_brukt") is False))
+        modell_kjorte = (svar_med_modell or skjema_med_modell
+                         or valg["korriger"]
+                         or (isinstance(skjema_del, dict)
+                             and skjema_del.get("modell_brukt")))
 
         # Feil i en del skal også være synlig for den som bare leser
         # advarslene (GUI-et, en enkel klient) — ikke bare i deltreet
@@ -4718,9 +4731,17 @@ class Handler(BaseHTTPRequestHandler):
                                               maks_ocr, mal_kandidat,
                                               via_spor=True,
                                               les_strekkoder=les_strekkoder)
-        if not tom_foresporsel and _borealis["status"] == "laster":
+        # En ren sidelesing («les side 10») besvares deterministisk fra
+        # sidemarkørene og trenger ikke modellen — slipp den forbi
+        # Borealis-portene, ellers gir en nede-modell 503 på noe koden
+        # kan svare på alene.
+        deterministisk_svar = (innhold is not None
+                               and er_ren_sidelesing(sporsmal))
+        if (not tom_foresporsel and not deterministisk_svar
+                and _borealis["status"] == "laster"):
             return self._svar(503, {"ok": False, "feil": "Borealis laster fortsatt — prøv igjen om ett minutt", "borealis": "laster"})
-        if not tom_foresporsel and _borealis["status"] != "klar":
+        if (not tom_foresporsel and not deterministisk_svar
+                and _borealis["status"] != "klar"):
             return self._svar(503, {"ok": False, "feil": f"Borealis er ikke tilgjengelig ({_borealis['status']}): {_borealis['feil']}", "borealis": _borealis["status"]})
 
         # Rent spørsmål uten dokument → generelt modellsvar, ærlig merket.
@@ -4863,7 +4884,10 @@ class Handler(BaseHTTPRequestHandler):
             "advarsel": advarsel,
             "fra_cache": fra_cache,
             "tid_sekunder": round(time.time() - t0, 1),
-            "kilde": ("borealis_" + (_borealis["motor"] or "ukjent")
+            # Ærlig kilde: en ren sidelesing gikk aldri innom modellen
+            "kilde": (("deterministisk_sideutsnitt"
+                       if kjerne.get("modell_brukt") is False
+                       else "borealis_" + (_borealis["motor"] or "ukjent"))
                       + ("+regionocr" if ocr_brukt else "")),
             "versjon": {"api": API_VERSJON, "prompt": PROMPT_VERSJON,
                         "modell": _borealis["modellfil"] or _borealis["motor"]},
@@ -5118,6 +5142,46 @@ def flett_mal_hybrid(dok: str, mal, ocr_brukt: bool = False,
     }
 
 
+# «[Side i av n]»-markørene er KODE-genererte (analyser_bytes/OCR) og
+# dermed pålitelige ankere for siderouting.
+_SIDE_MARKOR = re.compile(r"^\[Side (\d+) av (\d+)\]$", re.MULTILINE)
+# Sidehenvisning i et spørsmål: «side 10», «sida 3» (nynorsk), «s. 2»
+_SIDEREF = re.compile(r"\bs(?:ide|ida|\.)\s*(\d{1,3})\b", re.IGNORECASE)
+# En REN lesebestilling («les side 10», «vis sida 2», «side 4», «hva
+# står på side 6») besvares ordrett av koden — aldri av modellen.
+_REN_SIDELESING = re.compile(
+    r"^\W*(?:(?:les|vis|hent|gi\s+meg|skriv(?:\s+ut)?)\s+)?(?:hele\s+)?"
+    r"s(?:ide|ida)\s*\d{1,3}\W*$"
+    r"|^\W*hva\s+st(?:å|aa)r\s+p(?:å|aa)\s+s(?:ide|ida)\s*\d{1,3}\W*\??\W*$",
+    re.IGNORECASE)
+
+
+def del_i_sider(tekst: str):
+    """(antall_sider, {sidenr: sidetekst}) fra sidemarkørene. Tekst uten
+    markører er ett-sidig: hele teksten er side 1."""
+    treff = list(_SIDE_MARKOR.finditer(tekst or ""))
+    if not treff:
+        return 1, {1: (tekst or "").strip()}
+    sider = {}
+    for i, m in enumerate(treff):
+        slutt = treff[i + 1].start() if i + 1 < len(treff) else len(tekst)
+        sider[int(m.group(1))] = tekst[m.end():slutt].strip()
+    antall = max(max(int(m.group(2)) for m in treff), max(sider))
+    return antall, sider
+
+
+def _sporsmalets_sideref(sporsmal: str):
+    m = _SIDEREF.search(sporsmal or "")
+    return int(m.group(1)) if m else None
+
+
+def er_ren_sidelesing(sporsmal: str) -> bool:
+    """Kan spørsmålet besvares HELT uten modell (ordrett sideutsnitt)?
+    Brukes også av 503-portene: en ren sidelesing skal virke selv når
+    Borealis er nede."""
+    return bool(_REN_SIDELESING.match(sporsmal or ""))
+
+
 def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                       handskrift: list, strekkoder: list) -> dict:
     """Felles kjerne for /spor og /dokument: beriker dokumentteksten
@@ -5128,6 +5192,39 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     {"tom": False, "svar", "tall_verifisert", "tolket_sporsmal",
      "svar_avkortet", "advarsler"}."""
     advarsler = []
+
+    # --- deterministisk siderouting -----------------------------------
+    # Målt: modellen fikk hele bunken (7 335 tegn — godt under grensen,
+    # med «[Side 10 av 10]» i klartekst) og svarte likevel «Side 10
+    # finnes ikke» på «les side 10». Sideindeksering er nettopp den
+    # typen jobb en liten modell roter bort og koden gjør perfekt —
+    # markørene er kodegenererte. Ren lesing besvares ordrett uten
+    # modell; spørsmål OM en side gir modellen KUN den siden.
+    sideref = _sporsmalets_sideref(sporsmal)
+    if sideref is not None and len((raa_tekst or "").strip()) >= 5:
+        antall_sider, sider = del_i_sider(raa_tekst)
+        if sideref not in sider:
+            return {"tom": False, "modell_brukt": False,
+                    "svar": (f"Dokumentet har {antall_sider} "
+                             + ("side" if antall_sider == 1 else "sider")
+                             + f" — side {sideref} finnes ikke."),
+                    "tall_verifisert": True,
+                    "tolket_sporsmal": ("sidetallet sjekket deterministisk "
+                                        "mot sidemarkørene"),
+                    "svar_avkortet": False, "advarsler": advarsler}
+        if er_ren_sidelesing(sporsmal):
+            return {"tom": False, "modell_brukt": False,
+                    "svar": sider[sideref] or "(siden er tom)",
+                    "tall_verifisert": True,
+                    "tolket_sporsmal": (f"side {sideref} gjengitt ordrett "
+                                        "(deterministisk, uten modell)"),
+                    "svar_avkortet": False, "advarsler": advarsler}
+        # Spørsmål OM en bestemt side → modellen får kun den siden
+        raa_tekst = f"[Side {sideref} av {antall_sider}]\n{sider[sideref]}"
+        advarsler.append(
+            f"Spørsmålet peker på side {sideref} — modellen fikk kun den "
+            "siden (deterministisk utsnitt)")
+
     tekst = raa_tekst
     # Merk håndskriftregioner så Borealis kan skille dem fra trykt
     # tekst («hvilket navn står med håndskrift?» blir svarbart)
@@ -5295,7 +5392,8 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
             f"Svaret nådde maksimal lengde ({MAKS_SVAR_TOKENS} tokens) og "
             "kan være avkortet — hele dokumentteksten finnes alltid "
             "uavkortet i /analyser-feltet 'tekst'.")
-    return {"tom": False, "svar": svar, "tall_verifisert": tall_verifisert,
+    return {"tom": False, "modell_brukt": True,
+            "svar": svar, "tall_verifisert": tall_verifisert,
             "tolket_sporsmal": tolket_sporsmal,
             "svar_avkortet": svar_avkortet, "advarsler": advarsler}
 
@@ -5523,10 +5621,12 @@ class SvarOperasjon(Operasjon):
         self.sporsmal = sporsmal
 
     def _krever_borealis(self):
-        return True
+        # En ren sidelesing besvares deterministisk fra sidemarkørene —
+        # den skal ikke telle som modelloperasjon i 503-porten
+        return not er_ren_sidelesing(self.sporsmal)
 
     def utfor(self, ktx):
-        if not _borealis_er_klar():
+        if self._krever_borealis() and not _borealis_er_klar():
             return {"type": "svar", "ok": False, "feil": _borealis_nede_feil()}
         if ktx.er_tom():
             return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
@@ -5536,6 +5636,7 @@ class SvarOperasjon(Operasjon):
             return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
         return {"type": "svar", "ok": True, "sporsmal": self.sporsmal,
                 "svar": kjerne["svar"],
+                "modell_brukt": kjerne.get("modell_brukt", True),
                 "tall_verifisert": kjerne["tall_verifisert"],
                 "tolket_sporsmal": kjerne["tolket_sporsmal"],
                 "svar_avkortet": kjerne["svar_avkortet"],
