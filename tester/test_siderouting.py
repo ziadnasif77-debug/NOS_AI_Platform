@@ -256,3 +256,94 @@ def test_strekkodesporsmal_virker_uten_borealis(monkeypatch):
     assert svar["ok"] is True
     assert svar["modell_brukt"] is False
     assert fanget["kropp"]["kilde"] == "deterministisk"
+
+
+# ------------------------------------------------------------------ #
+#  Sjekksumvaliderte identifikatorer svares av uttrekket               #
+# ------------------------------------------------------------------ #
+
+# Bunken har TO fødselsnumre og TO kontonumre — modellen ville valgt ett
+IDENT_TEKST = (
+    "[Side 1 av 2]\nFoedselsnummer: 12345678910\n"
+    "Kontonummer: 12345678910\nKID-nummer 1002345678911\n"
+    "Organisasjonsnummer: 889000007\n"
+    "[Side 2 av 2]\nFoedselsnummer: 12345678910\n"
+    "Refusjon utbetales til kontonummer: 12345678910")
+
+
+@pytest.mark.parametrize("sporsmal,felt", [
+    ("hva er KID?", "kid"),
+    ("hva er KID-nummeret?", "kid"),
+    ("hent kid", "kid"),
+    ("hva er kontonummeret?", "kontonummer"),
+    ("hva er foedselsnummeret?", "fodselsnummer"),
+    ("hva er organisasjonsnummeret", "organisasjonsnummer"),
+    ("hva er telefonnummeret?", "telefon"),
+    ("hva er eposten?", "epost"),
+])
+def test_identsporsmal_kjennes_igjen(sporsmal, felt):
+    assert api.identsporsmalets_felt(sporsmal) == felt
+
+
+@pytest.mark.parametrize("sporsmal", [
+    "hva er totalen?",
+    "oppsummer dokumentet",
+    "naar er brevet datert?",
+    "hvem har signert?",
+])
+def test_vanlige_sporsmal_rutes_ikke_som_identifikator(sporsmal):
+    assert api.identsporsmalets_felt(sporsmal) is None
+
+
+def test_kid_hentes_uten_modell(monkeypatch):
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(IDENT_TEKST, "hva er KID?", False, [], [])
+    assert kjerne["modell_brukt"] is False
+    assert kjerne["svar"] == "1002345678911"
+
+
+def test_alle_forekomster_listes_ikke_bare_en(monkeypatch):
+    """Modellen ville valgt ETT nummer. Bunken har to av hver — koden
+    svarer med begge, og sier hvor mange."""
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(IDENT_TEKST, "hva er foedselsnummeret?",
+                                   False, [], [])
+    assert "12345678910" in kjerne["svar"]
+    assert "12345678910" in kjerne["svar"]
+    assert kjerne["svar"].startswith("2 ")
+
+    kjerne = api.svar_paa_sporsmal(IDENT_TEKST, "hva er kontonummeret?",
+                                   False, [], [])
+    assert "12345678910" in kjerne["svar"]
+    assert "12345678910" in kjerne["svar"]
+
+
+def test_identsporsmal_respekterer_side(monkeypatch):
+    """«kontonummeret på side 2» søker i side 2 — ikke i hele bunken."""
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(IDENT_TEKST,
+                                   "hva er kontonummeret paa side 2?",
+                                   False, [], [])
+    assert kjerne["svar"] == "12345678910"
+    assert "12345678910" not in kjerne["svar"]
+
+
+def test_ingen_gyldig_identifikator_sies_aerlig(monkeypatch):
+    """Et nummer som ikke består kontrollsifferet utelates — og koden
+    forklarer hvorfor, i stedet for å la modellen gjette et tall."""
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(
+        "[Side 1 av 1]\nReferanse 12345678910 i saken", 
+        "hva er foedselsnummeret?", False, [], [])
+    assert kjerne["modell_brukt"] is False
+    assert "Fant ingen" in kjerne["svar"]
+    assert "kontrollsifferet" in kjerne["svar"]
+
+
+def test_barkode_stavemaaten_rutes(monkeypatch):
+    """«barkode» (uten c) er vanlig — den gikk til modellen før."""
+    _forby_modell(monkeypatch)
+    kjerne = api.svar_paa_sporsmal(BUNKE, "les barkode i side 3",
+                                   False, [], KODER)
+    assert kjerne["modell_brukt"] is False
+    assert "1002345678911" in kjerne["svar"]

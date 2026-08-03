@@ -123,6 +123,30 @@ Sendte du `strekkoder=nei`, går spørsmålet til modellen i stedet: en tom
 liste betyr da at vi ikke *så etter*, og «ingen funnet» ville vært en
 løgn.
 
+### Identifikatorspørsmål besvares av uttrekket
+
+Spør du etter en **sjekksumvalidert** identifikator, svarer koden fra
+uttrekket — samme finnere som `/sladd` og `koordinater=ja`:
+
+| Spørsmål | Svar |
+|---|---|
+| `hva er KID?` | `1002345678911` |
+| `hva er kontonummeret?` | `2 kontonummer: 12345678910, 12345678910` |
+| `hva er fødselsnummeret?` | `2 fødselsnummer: 12345678910, 12345678910` |
+| `hva er kontonummeret på side 2?` | bare side 2 sitt |
+
+Dekker `fødselsnummer`, `kontonummer`, `organisasjonsnummer`, `KID`
+(mod11/Luhn) og `telefon`/`epost` (format).
+
+To grunner til at dette er bedre enn modellen:
+
+1. **Alle treff, ikke ett.** En bunke kan gjelde flere personer — den
+   over har to av hver. Modellen velger én; koden svarer med begge og
+   sier hvor mange.
+2. **Ingen gjetning ved feil.** Består ikke kontrollsifferet, finnes
+   ikke nummeret — og svaret sier hvorfor, i stedet for å levere et tall
+   som *ser* riktig ut.
+
 ### koordinater=ja — bokser per bevist funn
 
 Samme finnere som `/sladd` (mod11/sjekksum/format, aldri modell), med

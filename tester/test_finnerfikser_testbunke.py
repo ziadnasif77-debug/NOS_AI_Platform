@@ -11,6 +11,8 @@ import sys
 
 sys.path.insert(0, ".")
 
+import pytest
+
 from delt.tekstuttrekk import (finn_alle_fodselsnummer,
                                finn_alle_kontonummer, finn_alle_telefoner,
                                finn_forfallsdato, finn_postnummer_sted,
@@ -177,3 +179,34 @@ def test_forfallsdato_er_med_i_felteruttrekket():
 
 def test_uten_forfall_ingen_dato():
     assert finn_forfallsdato("Dato: 12.05.2026") is None
+
+
+# ------------------------------------------------------------------ #
+#  KID-etiketten: «KID-nummer» er standardformen på norske fakturaer   #
+# ------------------------------------------------------------------ #
+
+@pytest.mark.parametrize("tekst", [
+    "KID: 1002345678911",
+    "KID-nummer 1002345678911",
+    "KID-nummer: 1002345678911",
+    "KIDnummer 1002345678911",
+    "KID nr. 1002345678911",
+])
+def test_kid_etikettformer(tekst):
+    """«KID-nummer 1002345678911» ga INGEN treff — fakturaen i bunken ble
+    bare reddet av at samme side tilfeldigvis også har en bar «KID:»."""
+    from delt.tekstuttrekk import finn_alle_kid
+    assert finn_alle_kid(tekst) == ["1002345678911"]
+
+
+def test_kid_uten_etikett_er_ikke_kid():
+    """Et løst tall er for tvetydig — etikettkravet står."""
+    from delt.tekstuttrekk import finn_alle_kid
+    assert finn_alle_kid("referanse 1002345678911 i saken") == []
+
+
+def test_sladding_dekker_kid_nummer_formen():
+    sladdet, antall = sladd_tekst("KID-nummer 1002345678911")
+    assert "1002345678911" not in sladdet
+    assert "KID" in sladdet          # etiketten står igjen
+    assert antall["kid"] == 1
