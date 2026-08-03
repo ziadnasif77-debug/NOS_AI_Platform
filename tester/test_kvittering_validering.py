@@ -145,6 +145,22 @@ def test_alle_belop_paa_kvitteringstekst():
         "et beløp ble hundredoblet: %r" % verdier)
 
 
+@pytest.mark.parametrize("tekst,forventet", [
+    # R62, funnet på en ekte taxikvittering testet via UiPath fra en
+    # annen maskin: etikett og tall står på HVER SIN LINJE («Total
+    # Kr:\n486,00»), ikke på samme linje som «PRIS NOK 463 00». Verken
+    # prefiks-regelen («kr»+tall) eller suffiks-regelen (tall+«kr») når
+    # over linjeskiftet, så finn_belop ga None — «felter.belop» forsvant
+    # stille fra strukturert uttrekk selv om finn_alle_belop fant beløpet
+    # fint (den hadde alt et rent øre-desimal-fallback som finn_belop
+    # manglet).
+    ("Total Kr:\n486,00", 486.0),
+    ("Pris Kr:\n463,00\n+ Utlegg Kr:\n23,00", 463.0),
+])
+def test_belop_etikett_og_tall_paa_hver_sin_linje(tekst, forventet):
+    assert finn_belop(tekst) == forventet
+
+
 # ------------------------------------------------------------------ #
 #  2) og 3) Validering i skjemautfyllingen                            #
 # ------------------------------------------------------------------ #
