@@ -19,7 +19,9 @@ from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
 # Versjon av det deterministiske regelverket. Bumpes når mønstre/vakter
 # endres, så hvert svar kan spores til reglene som produserte det (§4).
 # u2: R61 — beløp med internasjonalt punktum-desimalformat («6380.00»)
-UTTREKK_REGEL_VERSJON = "u2"
+# u3: R62 — finn_belop fanger beløp der etikett og tall står på hver sin
+#     linje («Total Kr:\n486,00»), likt finn_alle_belop
+UTTREKK_REGEL_VERSJON = "u3"
 
 # Versjon av den deterministiske malfletteren (flett_mal). Skilt fra
 # uttrekksreglene fordi flettingen kan endres uavhengig av hvordan de
