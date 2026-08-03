@@ -2226,22 +2226,238 @@ def _openapi() -> dict:
                      "description": "Optimistisk låsing: 409 hvis jobben er endret siden denne versjonen"}],
                 "responses": {"200": {"description": "status avbrytes + versjon"},
                               "409": {"description": "Versjonskonflikt eller jobben er i en sluttilstand"}}}},
+            # /innsyn og /ekko manglet i spekken selv om de er fullverdige
+            # ruter. For /ekko var det verst: det er DIAGNOSE-endepunktet
+            # man trenger nettopp når noe ikke kommer fram — og det var
+            # usynlig i Swagger, så ingen fant det uten å lese koden.
+            "/innsyn": {"post": {
+                "summary": "Direktevisning: strømmer lesingen hendelse for hendelse",
+                "description":
+                    "Starter en inspeksjonsøkt. Dokumentet behandles i en "
+                    "bakgrunnstråd som strømmer hendelser (side rendret, "
+                    "forbehandlet, hver region lest, andrepasset ...). "
+                    "Poll GET /innsyn/{id}?fra=N. Sender ALDRI til Label "
+                    "Studio — ren inspeksjon.",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "properties": {"fil": fil_felt}}}}},
+                "responses": {"200": {"description": "innsyn_id"}}}},
+            "/innsyn/{id}": {"get": {
+                "summary": "Hendelsesstrømmen for en innsynsøkt",
+                "parameters": [
+                    {"name": "id", "in": "path", "required": True,
+                     "schema": {"type": "string"}},
+                    {"name": "fra", "in": "query", "required": False,
+                     "schema": {"type": "integer"},
+                     "description": "Indeks å hente fra — bruk «neste» fra "
+                                    "forrige svar, så får du bare det nye"}],
+                "responses": {"200": {"description":
+                    "status, hendelser, neste, resultat, feil"}}}},
+            "/ekko": {"post": {
+                "summary": "Diagnose: svarer med NØYAKTIG hva serveren mottok fra deg",
+                "description":
+                    "Behandler ikke dokumentet. «raa_deler» viser hver "
+                    "multipart-dels Content-Disposition slik den FAKTISK "
+                    "kom, og «parser_ser» hva parseren fikk ut av den. "
+                    "Bruk denne FØR du gjetter på klientoppsettet: kommer "
+                    "et tekstfelt ikke fram, ser du her om det ble sendt i "
+                    "det hele tatt, og med hvilket feltnavn.",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object",
+                    "properties": {"fil": fil_felt}}}}},
+                "responses": {"200": {"description":
+                    "content_type, body_lengde, antall_deler, parser_ser "
+                    "(fil, fil_bytes, tekstfelt_navn, tekstfelter), raa_deler"}}}},
         },
     }
 
+
+# Endepunktguiden som vises UNDER endepunktlista på /dokumentasjon.
+#
+# Hvorfor under og ikke i info.description: Swagger UI plasserer
+# beskrivelsen ØVERST, før lista. Den som blar gjennom endepunktene og
+# lurer på «hvilket av disse skal jeg bruke, og hvorfor» er da ferdig med
+# å lese før spørsmålet melder seg. Guiden hører hjemme der spørsmålet
+# faktisk oppstår — rett under lista.
+#
+# Ren HTML med innebygde stiler, ingen markdown-bibliotek: prosjektet
+# skal kunne kopieres og kjøre uten nedlastinger (CLAUDE.md §1).
+_ENDEPUNKTGUIDE_HTML = """
+<div class="veiledning">
+<h2>Hvilket endepunkt skal jeg bruke?</h2>
+<table>
+<tr><th>Vil du …</th><th>Bruk</th></tr>
+<tr><td>Ha ETT kall som gjør alt du trenger</td><td><b>POST /dokument</b> ← anbefalt</td></tr>
+<tr><td>Bare lese teksten ordrett</td><td>POST /spor (uten <code>sporsmal</code>)</td></tr>
+<tr><td>Ha komplett strukturert JSON med faste nøkler</td><td>POST /uttrekk</td></tr>
+<tr><td>Fylle din egen JSON-mal</td><td>POST /dokument med <code>skjema_mal</code></td></tr>
+<tr><td>Behandle et STORT skannet dokument</td><td>POST /jobb → GET /jobb/{id}</td></tr>
+<tr><td>Se lesingen skje LIVE</td><td>POST /innsyn</td></tr>
+<tr><td>Finne ut hva serveren FAKTISK mottok fra deg</td><td><b>POST /ekko</b></td></tr>
+</table>
+
+<p><b>POST /dokument er hovedveien.</b> De andre dokumentendepunktene er
+eldre og beholdes bevisst for ikke å bryte eksisterende integrasjoner.
+De gir stort sett SAMME fakta, men i ULIKE JSON-former.</p>
+
+<p class="advarsel">Endepunktene deler bare <code>ok</code>,
+<code>tekst</code> og <code>strekkoder</code> på toppnivå. Bytter du
+endepunkt, brekker klientens JSON-stier. Velg ett og bli der.</p>
+
+<h2>Endepunktene — hva, hvordan og hvorfor</h2>
+
+<h3>POST /dokument — samlet endepunkt</h3>
+<p><b>Hva:</b> Ett kall med brytere. Dokumentet leses <b>én gang</b>
+uansett hvor mange deler du ber om.</p>
+<pre>fil=@dokument.pdf
+felter=ja                              # standard: på
+struktur=ja                            # alt /uttrekk gir, under «struktur»
+sporsmal=Hva er totalbeløpet?          # slår på «svar» av seg selv
+skjema_mal={"total":"{totalbelop}"}    # slår på «skjema» av seg selv
+skjema_motor=auto                      # felter | auto | modell</pre>
+<p><b>Hvorfor:</b> Modelldelene er AV som standard, så det raske forblir
+raskt. Du slipper å velge mellom endepunkter, og JSON-stiene dine flytter
+seg ikke når du senere trenger mer.</p>
+
+<h3>POST /uttrekk — fast, komplett skjema</h3>
+<p><b>Hva:</b> Alle nøkler ALLTID til stede; tomt er <code>""</code> /
+<code>[]</code>. Aldri modell.</p>
+<p><b>Hvorfor:</b> Når klienten din ikke tåler at en nøkkel mangler.</p>
+<p><b>Merk formen:</b> <code>belop</code> er en LISTE av objekter med
+kontekst, ikke ett tall:
+<code>[{"verdi": 463.0, "raatekst": "463,00", "kontekst": "…"}]</code>.
+Dokumentets EGEN dato ligger i <code>dokument.dokumentdato</code> — i
+<code>datoer</code> ligger datoene dokumentet HANDLER om.</p>
+
+<h3>POST /analyser — deterministisk analyse</h3>
+<p><b>Hva:</b> Felter, alle datoer klassifisert med begrunnelse,
+strekkoder, håndskrift, full tekst. Aldri modell.</p>
+<p><b>Hvorfor:</b> <code>trenger_ocr</code> finnes ikke noe annet sted.</p>
+
+<h3>POST /spor — den eldste veien</h3>
+<table>
+<tr><th>Du sender</th><th>Du får</th><th>Modell?</th></tr>
+<tr><td><code>fil</code> alene</td><td>HELE teksten ordrett</td><td><b>nei</b> (R47)</td></tr>
+<tr><td><code>fil</code> + <code>sporsmal</code></td><td>Svar fra Borealis med tallvakt</td><td>ja</td></tr>
+<tr><td><code>fil</code> + JSON-mal i <code>sporsmal</code></td><td>Rutes til skjemautfylling</td><td>ja</td></tr>
+<tr><td><code>sporsmal</code> alene</td><td>Generelt svar, merket <code>uten_dokument</code></td><td>ja</td></tr>
+<tr><td><code>jobb_id</code> + <code>sporsmal</code></td><td>Svar mot en ferdig jobb</td><td>ja</td></tr>
+</table>
+<p><b>Hvorfor:</b> Fil uten spørsmål er korteste vei til ren tekst.
+Trenger du både svar OG felter i samme kall, bruk /dokument.</p>
+
+<h3>POST /fyll_skjema — fyll din egen mal</h3>
+<p class="advarsel">Feltet heter <code>skjema</code> her — ikke
+<code>skjema_mal</code>. Motorfeltet heter <code>skjema_motor</code> på
+begge endepunktene. Dette er den vanligste fella.</p>
+<p><b>De tre motorene (gjelder også /dokument):</b></p>
+<table>
+<tr><th>Motor</th><th>Modell?</th><th>Hva den gjør</th></tr>
+<tr><td><code>felter</code></td><td>nei</td><td>Fletter <code>{feltnavn}</code> deterministisk. Virker selv om Borealis er nede.</td></tr>
+<tr><td><code>auto</code></td><td>delvis</td><td>Regel der den kan BEVISE, modell for resten. Gir <code>kilde_per_felt</code>.</td></tr>
+<tr><td><code>modell</code></td><td>ja</td><td>Borealis fyller, koden validerer. Standard.</td></tr>
+</table>
+<p><b>Hvorfor <code>auto</code> som regel:</b> du får bevis der bevis
+finnes, og <code>kilde_per_felt</code> sier nøyaktig hvilke felter som er
+gjettet.</p>
+
+<h3>POST /jobb → GET /jobb/{id} — store dokumenter</h3>
+<p><b>Hva:</b> OCR av hele dokumentet i bakgrunnen. <code>jobb_id</code>
+med en gang, fremdrift og tidsestimat underveis, og <code>felter</code>
+/ <code>datoer</code> / <code>dokumentdato</code> når den er ferdig.</p>
+<p><b>Hvordan:</b> POST /jobb → poll GET /jobb/{id} → POST /spor med
+<code>jobb_id</code> for å spørre uten å sende fila på nytt.</p>
+<p><b>Hvorfor:</b> Når dokumentet er for stort til å vente på i ett kall.
+Send <code>Idempotency-Key</code> for retry-trygghet: samme nøkkel gir
+samme jobb, aldri en dublett.</p>
+
+<h3>POST /innsyn — direktevisning</h3>
+<p><b>Hva:</b> Strømmer lesingen hendelse for hendelse (side rendret,
+forbehandlet, hver region lest, andrepasset …).</p>
+<p><b>Hvordan:</b> POST /innsyn → poll GET /innsyn/{id}?fra=N. Bruk
+<code>neste</code> fra forrige svar som <code>fra</code>, så får du bare
+det nye.</p>
+<p><b>Hvorfor:</b> Laget for GUI-et, som tegner prosessen live. Sender
+ALDRI til Label Studio — ren inspeksjon.</p>
+
+<h3>POST /ekko — diagnose</h3>
+<p><b>Hva:</b> Svarer med NØYAKTIG hva serveren mottok. Behandler ikke
+dokumentet.</p>
+<p><b>Hvorfor:</b> Kommer et felt ikke fram, viser <code>raa_deler</code>
+den rå Content-Disposition slik den FAKTISK kom, og
+<code>parser_ser</code> hva parseren fikk ut. <b>Bruk denne før du gjetter
+på klientoppsettet</b> — det er forskjellen på å se problemet og å gjette
+på det.</p>
+
+<h2>Er svaret BEVIST eller GJETTET?</h2>
+<table>
+<tr><th>Felt</th><th>Betyr</th></tr>
+<tr><td><code>kilde</code></td><td>Inneholder «borealis» ⇒ modellen bidro. Ellers rent deterministisk.</td></tr>
+<tr><td><code>kilde_per_felt</code></td><td>(<code>auto</code>) Hvilke felter som er bevist, hvilke som er gjettet</td></tr>
+<tr><td><code>tall_verifisert</code></td><td>Hvert tall i svaret står ORDRETT i dokumentet</td></tr>
+<tr><td><code>avvik</code></td><td>Hva kodevalideringen måtte gripe inn i</td></tr>
+<tr><td><code>advarsler</code></td><td>Bl.a. ukjente felt som ble ignorert</td></tr>
+<tr><td><code>versjon.uttrekk_regler</code></td><td>Hvilken regelversjon som svarte</td></tr>
+</table>
+<p>Raskeste sjekk en robot kan gjøre: <code>kilde</code> inneholder
+«borealis» ⇒ la et menneske se på det. <code>kilde</code> er
+«deterministisk» ⇒ regex + mod11, ingen gjetning.</p>
+
+<h2>Klientfeller (UiPath / .NET)</h2>
+<p><b>Argumentrekkefølge — BEGGE tar verdien først, navnet sist:</b></p>
+<pre>New FileFormDataPart(filsti, "fil")
+New TextFormDataPart("auto", "skjema_motor")</pre>
+<p>Snur du det, kaster UiPath «The format of value '{…}' is invalid» FØR
+requesten sendes — andre argument er NAVNET og må være et gyldig token.
+Slipper en verdi likevel gjennom som feltnavn, svarer API-et 400 med
+presis retting.</p>
+<p><b>Ukjent feltnavn</b> gir aldri stille tap: du får en linje i
+<code>advarsler</code> (eller <code>kvalitet.advarsler</code>) som sier
+hva som ble ignorert og hvilke felt endepunktet kjenner.</p>
+</div>
+"""
 
 _SWAGGER_HTML = """<!DOCTYPE html>
 <html lang="no"><head><meta charset="utf-8">
 <title>NAV dokument-API — dokumentasjon</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+<style>
+.veiledning{max-width:1460px;margin:0 auto;padding:8px 20px 60px;
+  font-family:sans-serif;color:#3b4151;line-height:1.6}
+.veiledning h2{font-size:22px;margin:34px 0 10px;padding-top:16px;
+  border-top:1px solid #e0e2e6}
+.veiledning h3{font-size:16px;margin:22px 0 6px;color:#3b4151}
+.veiledning table{border-collapse:collapse;width:100%;margin:10px 0 16px}
+.veiledning th,.veiledning td{border:1px solid #e0e2e6;padding:7px 10px;
+  text-align:left;vertical-align:top;font-size:14px}
+.veiledning th{background:#f7f7f7;font-weight:600}
+.veiledning code{background:#f2f3f4;padding:1px 5px;border-radius:3px;
+  font-family:monospace;font-size:13px}
+.veiledning pre{background:#333;color:#fff;padding:12px 14px;
+  border-radius:4px;overflow-x:auto;font-size:13px;line-height:1.5}
+.veiledning pre code{background:none;color:inherit;padding:0}
+.veiledning p{margin:8px 0}
+.veiledning .advarsel{border-left:4px solid #d9822b;background:#fdf6ec;
+  padding:9px 13px;margin:12px 0;border-radius:0 3px 3px 0}
+@media (prefers-color-scheme:dark){
+  .veiledning{color:#d7dade}
+  .veiledning h2,.veiledning h3{color:#e8eaed}
+  .veiledning h2{border-top-color:#3a3f44}
+  .veiledning th,.veiledning td{border-color:#3a3f44}
+  .veiledning th{background:#2a2e33}
+  .veiledning code{background:#2a2e33}
+  .veiledning .advarsel{background:#332a1c;border-left-color:#d9822b}
+}
+</style>
 </head><body>
 <div id="swagger-ui"></div>
+__VEILEDNING__
 <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
 <script>
 SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui",
                  docExpansion: "list", defaultModelsExpandDepth: -1});
 </script>
-</body></html>"""
+</body></html>""".replace("__VEILEDNING__", _ENDEPUNKTGUIDE_HTML)
 
 
 # ------------------------------------------------------------------ #
