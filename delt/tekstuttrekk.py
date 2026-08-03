@@ -1157,6 +1157,14 @@ def _tallkandidater(tekst: str, lengde: int):
     «organisasjonsnummer». Entallsvarianten finn_fodselsnummer har alltid
     hatt det stramme mønsteret (6+5) og fant ingen av delene — dette var
     en inkonsistens, ikke et bevisst design."""
+    for kompakt, _, _ in _tallkandidater_med_posisjon(tekst, lengde):
+        yield kompakt
+
+
+def _tallkandidater_med_posisjon(tekst: str, lengde: int):
+    """Som _tallkandidater, men yielder (kompakt, start, slutt) — samme
+    mønster og samme dato-/beløpsvakt, slik at sladding og feltuttrekk
+    aldri kan være uenige om hva som er en identifikator."""
     opptatt = _opptatte_omraader(tekst)
     for treff in re.finditer(r"(?<!\d)\d(?:[ .]?\d)+(?!\d)", tekst):
         if any(treff.start() < slutt and start < treff.end()
@@ -1164,7 +1172,7 @@ def _tallkandidater(tekst: str, lengde: int):
             continue
         kompakt = re.sub(r"[ .]", "", treff.group(0))
         if len(kompakt) == lengde:
-            yield kompakt
+            yield kompakt, treff.start(), treff.end()
 
 
 def finn_alle_fodselsnummer(tekst: str) -> list:
@@ -1209,6 +1217,93 @@ def finn_alle_telefoner(tekst: str) -> list:
 
 def finn_alle_eposter(tekst: str) -> list:
     return _unike(re.findall(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst))
+
+
+# ------------------------------------------------------------------ #
+#  Sladding — kun det som kan BEVISES                                  #
+# ------------------------------------------------------------------ #
+
+# Typene sladderen kan fjerne. Alle er sjekksum-/formatvaliderte — navn
+# og adresser er BEVISST utelatt: de kan ikke bevises deterministisk
+# (NER er fjernet), og en gjettet sladding som ser fullført ut er
+# farligere enn ingen sladding.
+SLADD_TYPER = ("fodselsnummer", "kontonummer", "organisasjonsnummer",
+               "kid", "telefon", "epost")
+
+
+def finn_sladdeomraader(tekst: str, typer=None) -> list:
+    """Tegnområder som skal sladdes: [(start, slutt, type), …], sortert
+    og uten overlapp.
+
+    Gjenbruker NØYAKTIG samme mønstre og vakter som finnerne — spesielt
+    dato-/beløpsvakten fra _tallkandidater, så «01.01.2024 114 kroner»
+    aldri kan sladdes som et «fødselsnummer». En falsk positiv i
+    sladding FJERNER lovlig innhold, så vaktene er like viktige her som
+    i uttrekket.
+
+    Ved overlapp (et KID-nummer som også består kontonummer-kontrollen)
+    beholdes området som starter først; ved samme start det lengste.
+    Typemerkingen kan da variere, men sladdet blir det uansett."""
+    valgte = set(typer or SLADD_TYPER)
+    funn = []
+    if {"fodselsnummer", "kontonummer"} & valgte:
+        for kompakt, start, slutt in _tallkandidater_med_posisjon(tekst, 11):
+            if er_gyldig_fnr(kompakt):
+                if "fodselsnummer" in valgte:
+                    funn.append((start, slutt, "fodselsnummer"))
+            elif er_gyldig_kontonummer(kompakt):
+                if "kontonummer" in valgte:
+                    funn.append((start, slutt, "kontonummer"))
+    if "organisasjonsnummer" in valgte:
+        for kompakt, start, slutt in _tallkandidater_med_posisjon(tekst, 9):
+            if er_gyldig_orgnr(kompakt):
+                funn.append((start, slutt, "organisasjonsnummer"))
+    if "kid" in valgte:
+        # Kun selve nummeret sladdes — «KID»-etiketten står igjen, så
+        # leseren ser at det STO et KID der.
+        for treff in re.finditer(r"(?i)\bkid[.:\s-]*((?:\d[ .]?){2,30}\d)",
+                                 tekst):
+            if er_gyldig_kid(re.sub(r"[ .]", "", treff.group(1))):
+                funn.append((treff.start(1), treff.end(1), "kid"))
+    if "telefon" in valgte:
+        # Samme mønster og vakter som finn_alle_telefoner
+        for treff in re.finditer(
+            r"(?:\+47|0047)?[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})[ ]?(\d{2})\b",
+            tekst,
+        ):
+            if treff.start() > 0 and tekst[treff.start() - 1].isdigit():
+                continue
+            nummer = "".join(treff.groups())
+            if nummer[0] not in "01":
+                funn.append((treff.start(), treff.end(), "telefon"))
+    if "epost" in valgte:
+        for treff in re.finditer(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst):
+            funn.append((treff.start(), treff.end(), "epost"))
+
+    # Fjern overlapp: først i teksten vinner; ved samme start den lengste
+    funn.sort(key=lambda o: (o[0], -(o[1] - o[0])))
+    rene, siste_slutt = [], -1
+    for start, slutt, type_ in funn:
+        if start >= siste_slutt:
+            rene.append((start, slutt, type_))
+            siste_slutt = slutt
+    return rene
+
+
+def sladd_tekst(tekst: str, typer=None):
+    """Sladder alle beviste identifikatorer i teksten.
+
+    Returnerer (sladdet_tekst, antall_per_type). Hvert funn erstattes
+    med «[SLADDET type]» — synlig sladd, ikke stille fjerning: leseren
+    skal SE at noe er tatt bort, og hva slags noe det var."""
+    omraader = finn_sladdeomraader(tekst or "", typer)
+    ut = tekst or ""
+    antall: dict = {}
+    # Bakfra, så posisjonene foran ikke forskyves av erstatningene
+    for start, slutt, type_ in reversed(omraader):
+        ut = ut[:start] + "[SLADDET " + type_ + "]" + ut[slutt:]
+        antall[type_] = antall.get(type_, 0) + 1
+    return ut, antall
 
 
 def finn_alle_belop(tekst: str, maks: int = 100) -> list:

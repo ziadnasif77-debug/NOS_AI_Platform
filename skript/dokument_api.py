@@ -103,9 +103,9 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_dokumentdato, finn_koder_med_kontekst,
                                felter_flatt, flett_mal, klassifiser_datoer,
                                refererte_felt, sett_dato_roller,
-                               strukturert_uttrekk,
+                               sladd_tekst, strukturert_uttrekk,
                                utvid_entiteter, FLETT_REGEL_VERSJON,
-                               UTTREKK_REGEL_VERSJON)
+                               SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 
 # UTF-8-trygg utskrift: norsk (æøå) skal ikke krasje når stdout er en fil/
 # pipe med ikke-UTF-8-kodesett (cp1256) — f.eks. når tjeneste-wrapperen
@@ -324,7 +324,8 @@ _kapasitet_port = _Kapasitetsport()
 # Endepunkter som gjør tungt arbeid SYNKRONT. /jobb er utelatt med vilje:
 # den svarer 202 med en gang og har allerede én arbeidstråd som grense.
 # /innsyn svarer også med en gang (arbeidet skjer i egen tråd).
-_TUNGE_STIER = ("/analyser", "/spor", "/uttrekk", "/fyll_skjema", "/dokument")
+_TUNGE_STIER = ("/analyser", "/spor", "/uttrekk", "/fyll_skjema", "/dokument",
+                "/sladd")
 _rate_lock = threading.Lock()
 _rate_teller = {}   # klient-ip -> [vindu_minutt, antall]
 
@@ -2406,6 +2407,41 @@ def _skjemaer() -> dict:
                                             "på norsk"),
                 "tid_sekunder": {"type": "number"},
                 "versjon": {"type": "object"}}},
+        "SladdSvar": {
+            "type": "object",
+            "description": "Sladdet tekst — KUN beviste identifikatorer "
+                           "(mod11/sjekksum/format). Les «ikke_dekket» og "
+                           "«advarsel» FØR dokumentet deles videre: navn "
+                           "og adresser sladdes ikke.",
+            "properties": {
+                "ok": b(),
+                "filnavn": s(),
+                "sladdet_tekst": s(description="Teksten med hvert funn "
+                                               "erstattet av «[SLADDET "
+                                               "type]» — synlig sladd, "
+                                               "ikke stille fjerning"),
+                "antall_tegn": {"type": "integer"},
+                "funn": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"type": s(example="fodselsnummer"),
+                                   "antall": {"type": "integer"}}}},
+                "antall_sladdet": {"type": "integer"},
+                "typer_valgt": {"type": "array", "items": s()},
+                "ikke_dekket": {"type": "array", "items": s(),
+                                "description": "Det sladdingen IKKE "
+                                               "dekker — alltid navn og "
+                                               "adresser"},
+                "advarsel": s(description="Fast: sladdingen er ikke alene "
+                                          "tilstrekkelig for "
+                                          "offentliggjøring"),
+                "advarsler": {"type": "array", "items": s(),
+                              "description": "Bl.a. OCR-forbeholdet: et "
+                                             "feillest siffer kan la et "
+                                             "nummer stå usladdet"},
+                "fra_cache": b(),
+                "tid_sekunder": {"type": "number"},
+                "kilde": s(example="deterministisk"),
+                "versjon": {"type": "object"}}},
         "EkkoSvar": {
             "type": "object",
             "description": "Diagnose: nøyaktig hva serveren mottok. "
@@ -2715,6 +2751,44 @@ def _openapi() -> dict:
                                 "$ref": "#/components/schemas/"
                                         "ForhandssjekkSvar"}}}},
                     "400": {"description": "Manglende fil eller korrupt PDF",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
+            "/sladd": {"post": {
+                "summary": "Sladd beviste identifikatorer — fnr, konto, orgnr, KID, telefon, epost",
+                "description":
+                    "Sladder KUN det som kan BEVISES: fødselsnummer, "
+                    "kontonummer og organisasjonsnummer er mod11-validert, "
+                    "KID sjekksumvalidert (med etikettkrav), telefon og "
+                    "epost formatvalidert. Matematikk, aldri modell. Hvert "
+                    "funn erstattes synlig med «[SLADDET type]».\n\n"
+                    "**Grensen sies i hvert svar:** navn og adresser "
+                    "sladdes IKKE — de kan ikke bevises deterministisk, og "
+                    "en gjettet sladding som ser fullført ut er farligere "
+                    "enn ingen. Sladdingen er derfor ikke alene "
+                    "tilstrekkelig for offentliggjøring (offentleglova); "
+                    "manuell gjennomgang er påkrevd.\n\n"
+                    "For skannede dokumenter kjøres OCR først. Merk "
+                    "OCR-forbeholdet i «advarsler»: et feillest siffer gjør "
+                    "at sjekksummen ikke slår til, og nummeret blir stående "
+                    "usladdet.",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "properties": {
+                        "fil": fil_felt,
+                        "typer": {"type": "string",
+                                  "description": "Kommaseparert utvalg, "
+                                                 "f.eks. «fodselsnummer,"
+                                                 "telefon». Standard: alle. "
+                                                 "Gyldige: fodselsnummer, "
+                                                 "kontonummer, "
+                                                 "organisasjonsnummer, kid, "
+                                                 "telefon, epost"},
+                        "maks_sider": {"type": "integer"}}}}}},
+                "responses": {
+                    "200": {"description": "Sladdet tekst + funn",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/SladdSvar"}}}},
+                    "400": {"description": "Manglende fil eller ukjent type i 'typer'",
                             "content": {"application/json": {"schema": {
                                 "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/ekko": {"post": {
@@ -3596,6 +3670,87 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             doc.close()
 
+    # Fast tekst i HVERT /sladd-svar — ikke bare i dokumentasjonen: den
+    # som tror sladdingen alene er nok for offentliggjøring, skal møte
+    # grensen i selve svaret, før dokumentet forlater huset.
+    SLADD_ADVARSEL = (
+        "Navn og adresser sladdes IKKE — de kan ikke bevises "
+        "deterministisk. Denne sladdingen er derfor IKKE alene "
+        "tilstrekkelig for offentliggjøring (offentleglova); manuell "
+        "gjennomgang er påkrevd.")
+
+    def _sladd(self, filnavn, slag, innhold, maks_ocr, tekstfelter):
+        """POST /sladd — sladder KUN det som kan BEVISES.
+
+        Fødselsnummer, kontonummer og organisasjonsnummer er
+        mod11-validert, KID sjekksumvalidert med etikettkrav, telefon og
+        epost formatvalidert — matematikk og format, aldri modell.
+        Hvert funn erstattes synlig med «[SLADDET type]».
+
+        Grensen sies høyt i hvert svar (SLADD_ADVARSEL): navn og
+        adresser dekkes ikke, for de kan ikke bevises — og en gjettet
+        sladding som SER fullført ut er farligere enn ingen."""
+        t0 = time.time()
+        milde, omvendte = _sjekk_feltnavn(tekstfelter, _KJENTE_FELT_SLADD)
+        if omvendte:
+            return self._svar(400, _omvendt_felt_feil(omvendte,
+                                                      _KJENTE_FELT_SLADD))
+        advarsler = _ukjent_felt_advarsel(milde, _KJENTE_FELT_SLADD)
+
+        # Valgfritt utvalg av typer (kommaseparert). Ukjent type er 400 —
+        # en klient som ber om «personnummer» og får 200 ville trodd det
+        # ble sladdet.
+        typer = None
+        typer_raa = tekstfelter.get("typer", "").strip()
+        if typer_raa:
+            typer = [t.strip().lower() for t in typer_raa.split(",")
+                     if t.strip()]
+            ukjente_typer = [t for t in typer if t not in SLADD_TYPER]
+            if ukjente_typer:
+                return self._svar(400, {
+                    "ok": False,
+                    "feil": (f"Ukjente sladdetyper: {', '.join(ukjente_typer)}. "
+                             f"Gyldige: {', '.join(SLADD_TYPER)}"),
+                    "felter_feil": [{"pointer": "/typer",
+                                     "message": "Ukjent type"}]})
+
+        # Strekkoder er irrelevante for sladding — spar skanningen
+        ktx, les_advarsler, feil = self._les_dokument(
+            filnavn, slag, innhold, maks_ocr, les_strekkoder=False)
+        if feil:
+            return self._svar(*feil)
+        advarsler.extend(les_advarsler)
+
+        sladdet, antall_per_type = sladd_tekst(ktx.tekst, typer)
+        if ktx.ocr_brukt:
+            # Ærlig grense nr. 2: mod11 er en tveegget vakt på OCR-tekst.
+            # Ett feillest siffer → kontrollen slår ikke til → nummeret
+            # blir stående USLADDET.
+            advarsler.append(
+                "Teksten kommer fra OCR: et feillest siffer gjør at "
+                "sjekksumkontrollen ikke slår til, og et nummer kan bli "
+                "stående usladdet. Kontroller resultatet manuelt.")
+
+        return self._svar(200, {
+            "ok": True, "filnavn": filnavn,
+            "sladdet_tekst": sladdet,
+            "antall_tegn": len(sladdet),
+            "funn": [{"type": t, "antall": antall_per_type[t]}
+                     for t in SLADD_TYPER if t in antall_per_type],
+            "antall_sladdet": sum(antall_per_type.values()),
+            "typer_valgt": typer or list(SLADD_TYPER),
+            "ikke_dekket": ["navn", "adresser"],
+            "advarsel": self.SLADD_ADVARSEL,
+            "advarsler": advarsler,
+            "kvalitet": {"ocr_brukt": ktx.ocr_brukt,
+                         "ocr_motorer": ktx.ocr_motorer or {}},
+            "fra_cache": ktx.fra_cache,
+            "tid_sekunder": round(time.time() - t0, 1),
+            "kilde": "deterministisk",
+            "versjon": {"api": API_VERSJON,
+                        "uttrekk_regler": UTTREKK_REGEL_VERSJON},
+        })
+
     def _les_dokument(self, filnavn, slag, innhold, maks_ocr, les_strekkoder):
         """Leser dokumentet ÉN gang og pakker det i en DokumentKontekst —
         delt av bryter-veien OG operasjoner-veien, så begge leser likt.
@@ -4116,7 +4271,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
                        "/fyll_skjema", "/innsyn", "/dokument", "/ekko",
-                       "/forhandssjekk"):
+                       "/forhandssjekk", "/sladd"):
             return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
@@ -4218,6 +4373,15 @@ class Handler(BaseHTTPRequestHandler):
         # ingen eksisterende klient mister noe uten å be om det.
         les_strekkoder = tekstfelter.get(
             "strekkoder", "ja").strip().lower() not in ("nei", "0", "false", "av")
+
+        # Sladding: leser dokumentet (med OCR ved behov) og sladder alt
+        # som kan bevises. Rutes etter maks_ocr-parsingen fordi OCR kan
+        # være del av jobben.
+        if sti == "/sladd":
+            if innhold is None:
+                return self._svar(400, {
+                    "ok": False, "feil": "Ingen fil funnet (felt 'fil')"})
+            return self._sladd(filnavn, slag, innhold, maks_ocr, tekstfelter)
 
         # R58: kom forespørselen mens OCR-motorene lastes, ville den blitt
         # stående på motorlåsen i opptil et halvt minutt. Si fra med en
@@ -5124,6 +5288,7 @@ _KJENTE_FELT_DOKUMENT = {
 _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}
+_KJENTE_FELT_SLADD = {"typer", "maks_sider"}
 
 
 def _ukjent_felt_advarsel(milde: list, kjente: set) -> list:

@@ -1,12 +1,19 @@
 # Plan: tre foreslåtte evner — vurdert mot koden
 
-Skrevet 2026-08-03. **Status: evne 1 (/forhandssjekk) er BYGGET** samme
-dag — se `docs/endepunkter.md` og `tester/test_forhandssjekk.py`.
-Kalibreringen avdekket at dømming på nominell dpi var feil (PNG=96 er
-formatets antakelse, ikke bildets egenskap); dommen skjer på rendrede
-piksler. Orientering (90°/180°) ble utsatt som planlagt.
+Skrevet 2026-08-03. **Status: evne 1 (/forhandssjekk) og evne 2 (/sladd)
+er BYGGET** samme dag — se `docs/endepunkter.md` og
+`tester/test_forhandssjekk.py` / `tester/test_sladd.py`.
 
-Evne 2 og 3 er fortsatt ubesluttede. Slett dokumentet når alt er avgjort.
+Lærdommer fra byggingen: (1) dømming på nominell dpi var feil — PNG=96
+er formatets antakelse, ikke bildets egenskap; dommen skjer på rendrede
+piksler. Orientering (90°/180°) utsatt som planlagt. (2) /sladd ble
+levert i den avgrensede formen: kun beviste identifikatorer, med
+navn/adresser eksplisitt deklarert udekket i hvert svar, og
+OCR-forbeholdet (feillest siffer → sjekksum slår ikke til → står
+usladdet) som advarsel.
+
+Evne 3 (koordinater) er fortsatt ubesluttet — fortjener egen økt med
+korpuset som port. Slett dokumentet når alt er avgjort.
 
 Alle tre respekterer «ingen lagring»: de leser en forespørsel og svarer,
 uten å skrive noe om dokumentet til disk.
