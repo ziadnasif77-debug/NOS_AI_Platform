@@ -2039,6 +2039,310 @@ def _jobb_arbeider() -> None:
 #  OpenAPI-spesifikasjon + Swagger UI (GET /openapi.json, /dokumentasjon)
 # ------------------------------------------------------------------ #
 
+def _skjemaer() -> dict:
+    """Svarmodellene, slik Swagger UI kan vise dem under «Schemas».
+
+    Formene her er hentet fra FAKTISKE svar fra en kjørende server, ikke
+    skrevet ut fra hukommelsen. Poenget er at en integrator skal kunne
+    lese seg til feltnavn og typer uten å måtte kalle API-et først —
+    særlig de stedene der typen overrasker: «belop» er et TALL i
+    felter-delen, men en LISTE av objekter med kontekst i struktur-delen.
+
+    Merk at API-et er en «tolerant reader»-kontrakt: vi UTVIDER svar med
+    nye felter uten å regne det som en brytende endring. Modellene under
+    er derfor ikke uttømmende låser, men en beskrivelse av det du kan
+    regne med finnes."""
+    s = lambda **kw: {"type": "string", **kw}          # noqa: E731
+    b = lambda **kw: {"type": "boolean", **kw}         # noqa: E731
+    ref = lambda navn: {"$ref": f"#/components/schemas/{navn}"}  # noqa: E731
+
+    return {
+        "Kodet": {
+            "type": "object",
+            "description": "Maskinkode + menneskelig term. Bruk «kode» i "
+                           "logikk, «term» i grensesnitt.",
+            "properties": {"kode": s(example="brevdato_sannsynlig"),
+                           "term": s(example="Sannsynlig brevdato "
+                                             "(øverst i dokumentet)")}},
+        "Datospenn": {
+            "type": "object",
+            "description": "Datospennet i dokumentet. «flere_dokumenter» "
+                           "varsler at fila trolig inneholder mer enn ett "
+                           "dokument — da er én dokumentdato misvisende.",
+            "properties": {
+                "fra": s(format="dd.MM.yyyy", example="12.06.2026"),
+                "til": s(format="dd.MM.yyyy", example="12.06.2026"),
+                "antall": {"type": "integer", "example": 1},
+                "per_side": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"side": {"type": "integer"},
+                                   "dato": s(), "type": s()}}},
+                "flere_dokumenter": b(example=False)}},
+        "Dokumentdato": {
+            "type": "object",
+            "description": "Dokumentets EGEN dato, valgt blant alle datoene "
+                           "i teksten og begrunnet. Skilt fra datoene "
+                           "dokumentet HANDLER om. Alltid deterministisk.",
+            "properties": {
+                "dato": s(format="dd.MM.yyyy", example="12.06.2026"),
+                "type": s(example="brevdato_sannsynlig"),
+                "type_kodet": ref("Kodet"),
+                "rolle_kodet": ref("Kodet"),
+                "kilde": s(description="Hva valget bygger på: «etikett» "
+                                       "(merket i teksten), «posisjon» "
+                                       "(plassering), «pdf_metadata»",
+                           example="posisjon"),
+                "konfidens": s(enum=["hoy", "middels", "lav"],
+                               example="middels"),
+                "begrunnelse": s(description="Hvorfor nettopp denne datoen "
+                                             "ble valgt — les den når "
+                                             "konfidens ikke er «hoy»"),
+                "side": {"type": "integer", "example": 1},
+                "periode": ref("Datospenn"),
+                "alternativer": {"type": "array", "items": ref("Kodet"),
+                                 "description": "Datoer som også var "
+                                                "kandidater"},
+                "advarsel": s(nullable=True)}},
+        "DatoDetaljert": {
+            "type": "object",
+            "description": "Én dato med klassifisering og kontekst.",
+            "properties": {
+                "dato": s(example="12.06.2026"),
+                "raatekst": s(description="Slik datoen sto i dokumentet"),
+                "type": s(example="brevdato_sannsynlig"),
+                "etikett": s(nullable=True,
+                             description="Teksten som merket datoen, f.eks. "
+                                         "«Frist:»"),
+                "begrunnelse": s(),
+                "side": {"type": "integer"},
+                "kontekst": s(description="Tekstutdrag rundt treffet"),
+                "i_lopende_tekst": b(),
+                "aar_antatt": b(description="Årstallet manglet og ble utledet"),
+                "rolle": s(example="dokument"),
+                "type_kodet": ref("Kodet"),
+                "rolle_kodet": ref("Kodet")}},
+        "Belop": {
+            "type": "object",
+            "description": "Ett kronebeløp med konteksten det ble lest i. "
+                           "Konteksten er ofte avgjørende: «Pris», «MVA» og "
+                           "«Total» ser like ut som tall.",
+            "properties": {
+                "verdi": {"type": "number", "format": "double",
+                          "example": 463.0},
+                "raatekst": s(example="463,00"),
+                "kontekst": s(example="… Pris Kr: 463,00 + Utlegg Kr: …")}},
+        "DeterministiskeFelter": {
+            "type": "object",
+            "description": "Felter funnet med mønstre og sjekksummer — "
+                           "ALDRI modellgjetning. Identifikatorer er "
+                           "mod11-validert; består de ikke matematikken, "
+                           "utelates de helt. Et felt som ikke ble funnet "
+                           "MANGLER (nøkkelen er ikke null).",
+            "properties": {
+                "dato": s(example="12.06.2026"),
+                "belop": {"type": "number", "example": 463.0,
+                          "description": "FØRSTE beløp i teksten"},
+                "totalbelop": {"type": "number", "example": 486.0,
+                               "description": "Beløpet på en Total-/Sum-/"
+                                              "Å betale-linje. Ofte et ANNET "
+                                              "tall enn «belop»."},
+                "fodselsnummer": s(description="mod11-validert"),
+                "kontonummer": s(description="mod11-validert"),
+                "organisasjonsnummer": s(description="mod11-validert",
+                                         example="994230964"),
+                "kid": s(description="Krever «KID»-etikett i teksten"),
+                "telefon": s(), "epost": s(),
+                "postnummer": s(), "poststed": s(), "fylke": s(),
+                "saksnummer": s(), "ytelse": s(), "kontornavn": s()}},
+        "FelterDel": {
+            "type": "object",
+            "description": "Svaret på «felter=ja».",
+            "properties": {
+                "felter": ref("DeterministiskeFelter"),
+                "datoer": {"type": "array", "items": s(),
+                           "description": "Alle datoer, bare som tekst"},
+                "datoer_detaljert": {"type": "array",
+                                     "items": ref("DatoDetaljert")},
+                "dokumentdato": ref("Dokumentdato")}},
+        "StrukturDel": {
+            "type": "object",
+            "description": "Svaret på «struktur=ja» — samme innhold som "
+                           "POST /uttrekk. Alle nøkler alltid til stede; "
+                           "tomt er \"\" eller [].",
+            "properties": {
+                "dokument": {"type": "object", "properties": {
+                    "tittel": s(), "dokumenttype": s(example="kvittering"),
+                    "sprak": s(), "kontornavn": s(), "fylke": s(),
+                    "ytelse": s()}},
+                "identifikatorer": {"type": "object", "properties": {
+                    "fodselsnummer": {"type": "array", "items": s()},
+                    "kontonummer": {"type": "array", "items": s()},
+                    "organisasjonsnummer": {"type": "array", "items": s()},
+                    "kid": {"type": "array", "items": s()},
+                    "saksnummer": s()}},
+                "kontakt": {"type": "object", "properties": {
+                    "telefoner": {"type": "array", "items": s()},
+                    "eposter": {"type": "array", "items": s()}}},
+                "adresser": {"type": "array", "items": s()},
+                "datoer": {"type": "array", "items": ref("DatoDetaljert")},
+                "perioder": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"fra": s(), "til": s()}}},
+                "belop": {"type": "array", "items": ref("Belop"),
+                          "description": "MERK: liste av objekter — ikke ett "
+                                         "tall som i felter-delen"}}},
+        "SvarDel": {
+            "type": "object",
+            "description": "Svaret på «sporsmal». Dette er den ENE delen som "
+                           "alltid går via modellen.",
+            "properties": {
+                "ok": b(),
+                "sporsmal": s(),
+                "svar": s(example="486,00"),
+                "tall_verifisert": b(
+                    description="Hvert tall i svaret står ORDRETT i "
+                                "dokumentet. false ⇒ modellen kan ha "
+                                "funnet på et tall — ikke stol på svaret."),
+                "tolket_sporsmal": s(nullable=True,
+                                     description="Satt hvis et uklart "
+                                                 "spørsmål måtte tolkes om"),
+                "svar_avkortet": b()}},
+        "SkjemaDel": {
+            "type": "object",
+            "description": "Svaret på «skjema_mal» — din egen mal utfylt.",
+            "properties": {
+                "ok": b(),
+                "motor": s(enum=["felter", "auto", "modell"]),
+                "skjema": {"type": "object",
+                           "description": "Malen din, utfylt. Samme struktur "
+                                          "som du sendte inn."},
+                "kilde_per_felt": {
+                    "type": "object",
+                    "additionalProperties": s(enum=["deterministisk",
+                                                    "modell"]),
+                    "description": "Kun «auto»: hvilke felter som er BEVIST "
+                                   "og hvilke som er gjettet"},
+                "modell_brukt": b(description="Kun «auto»: om modellen "
+                                              "faktisk ble kalt"),
+                "avvik": {"type": "array", "items": s(),
+                          "description": "Hva kodevalideringen grep inn i"},
+                "ukjente_felter": {"type": "array", "items": s(),
+                                   "description": "Plassholdere i malen din "
+                                                  "som ikke finnes"},
+                "tilgjengelige_felter": {"type": "array", "items": s(),
+                                         "description": "Alle gyldige "
+                                                        "plassholdernavn"}}},
+        "Valg": {
+            "type": "object",
+            "description": "Hva serveren FAKTISK utførte. Sammenlign med det "
+                           "du ba om — avviker den, ble et felt ikke forstått.",
+            "properties": {"tekst": b(), "felter": b(), "struktur": b(),
+                           "svar": b(), "skjema": b(), "korriger": b()}},
+        "Kvalitet": {
+            "type": "object",
+            "properties": {
+                "ocr_brukt": b(),
+                "ocr_motorer": {"type": "object"},
+                "advarsler": {"type": "array", "items": s(),
+                              "description": "Bl.a. ukjente feltnavn som ble "
+                                             "ignorert. LES DENNE."}}},
+        "Versjon": {
+            "type": "object",
+            "description": "Hva som svarte. «uttrekk_regler» endres når de "
+                           "deterministiske mønstrene endres, så et svar kan "
+                           "spores til reglene som produserte det.",
+            "properties": {
+                "api": s(example="1.3.0"), "prompt": s(example="p10"),
+                "uttrekk_regler": s(example="u5"),
+                "ocr_konfidens_terskel": {"type": "number", "example": 0.85},
+                "norhand": s(), "modell": s()}},
+        "DokumentSvar": {
+            "type": "object",
+            "description": "Svaret fra POST /dokument. Deler du ikke ba om "
+                           "er null.",
+            "properties": {
+                "ok": b(),
+                "filnavn": s(),
+                "valg": ref("Valg"),
+                "tekst": s(nullable=True),
+                "antall_tegn": {"type": "integer"},
+                "felter": {**ref("FelterDel"), "nullable": True},
+                "struktur": {**ref("StrukturDel"), "nullable": True},
+                "svar": {**ref("SvarDel"), "nullable": True},
+                "skjema": {**ref("SkjemaDel"), "nullable": True},
+                "korriger": {"type": "object", "nullable": True},
+                "korrigert_tekst": s(nullable=True),
+                "strekkoder": {"type": "array", "items": s()},
+                "handskrift": {"type": "array", "items": s()},
+                "kvalitet": ref("Kvalitet"),
+                "fra_cache": b(description="Teksten kom fra cache — samme fil "
+                                           "er analysert før"),
+                "tid_sekunder": {"type": "number", "example": 0.6},
+                "kilde": s(
+                    example="borealis+deterministisk",
+                    description="Inneholder «borealis» ⇒ modellen bidro til "
+                                "svaret. Ellers rent deterministisk (regex + "
+                                "mod11). Raskeste toppnivåsjekk en robot kan "
+                                "gjøre for å avgjøre om et menneske bør se "
+                                "på svaret."),
+                "versjon": ref("Versjon")}},
+        "EkkoSvar": {
+            "type": "object",
+            "description": "Diagnose: nøyaktig hva serveren mottok. "
+                           "Sammenlign «raa_deler» (slik det FAKTISK kom) "
+                           "med «parser_ser» (hva parseren fikk ut).",
+            "properties": {
+                "ok": b(),
+                "melding": s(),
+                "content_type": s(),
+                "body_lengde": {"type": "integer"},
+                "antall_deler": {"type": "integer"},
+                "parser_ser": {"type": "object", "properties": {
+                    "fil": s(nullable=True),
+                    "fil_bytes": {"type": "integer"},
+                    "tekstfelt_navn": {"type": "array", "items": s(),
+                                       "description": "Feltnavnene serveren "
+                                                      "faktisk fant. Mangler "
+                                                      "et felt du sendte, "
+                                                      "ligger feilen hos "
+                                                      "klienten."},
+                    "tekstfelter": {"type": "object"}}},
+                "raa_deler": {"type": "array", "items": {
+                    "type": "object", "properties": {
+                        "content_disposition": s(),
+                        "innhold_lengde": {"type": "integer"},
+                        "innhold_start": s()}}}}},
+        "ProblemDetails": {
+            "type": "object",
+            "description": "RFC 9457 Problem Details — samme standard som "
+                           "NAV Oppgave-APIet.",
+            "properties": {
+                "type": s(example="https://nav-dokument-api/problems/"
+                                  "ugyldig-input"),
+                "title": s(example="Ugyldig input"),
+                "status": {"type": "integer", "format": "int32",
+                           "example": 400},
+                "detail": s(),
+                "traceId": s(),
+                "errors": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"pointer": s(example="/skjema_motor"),
+                                   "message": s()}}}}},
+        "Feilsvar": {
+            "type": "object",
+            "description": "Feil bærer BÅDE de enkle feltene og et "
+                           "RFC 9457-objekt. Bruk det du trenger.",
+            "properties": {
+                "ok": b(example=False),
+                "feil": s(),
+                "uuid": s(description="Korrelasjons-ID for support"),
+                "felter_feil": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {"pointer": s(), "message": s()}}},
+                "problem": ref("ProblemDetails")}},
+    }
+
+
 def _openapi() -> dict:
     fil_felt = {"type": "string", "format": "binary",
                 "description": "Dokumentet: PDF, bilde (JPG/PNG/TIFF/BMP/WEBP), DOCX, XLSX/XLSM, CSV eller TXT"}
@@ -2074,6 +2378,7 @@ def _openapi() -> dict:
                 "hvis noen andre har endret jobben i mellomtiden."),
         },
         "components": {
+            "schemas": _skjemaer(),
             "securitySchemes": {"ApiKeyAuth": {
                 "type": "apiKey", "in": "header", "name": "X-API-Key",
                 "description": "Kreves kun når serveren er startet med API_NOKKEL"}},
@@ -2142,13 +2447,17 @@ def _openapi() -> dict:
                                    "maks_sider": {"type": "integer"}}}}}},
                 "responses": {
                     "200": {"description":
-                        "valg, tekst, felter, struktur, svar, skjema, korriger, korrigert_tekst, "
-                        "strekkoder, handskrift, kvalitet (ocr_brukt/ocr_motorer/advarsler), "
-                        "tid_sekunder, versjon"},
+                        "Delene du ba om. Deler du ikke ba om er null.",
+                        "content": {"application/json": {"schema": {
+                            "$ref": "#/components/schemas/DokumentSvar"}}}},
                     "400": {"description": "Ukjent bryterverdi, manglende sporsmal/skjema_mal, "
                                            "ugyldig JSON-mal, eller JSON-mal sendt i 'skjema' "
-                                           "(bruk 'skjema_mal')"},
-                    "503": {"description": "Bare modelldeler bedt om mens Borealis er nede"}}}},
+                                           "(bruk 'skjema_mal')",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}},
+                    "503": {"description": "Bare modelldeler bedt om mens Borealis er nede",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/spor": {"post": {
                 "summary": "Spørsmål/innhold fra dokument — eller rent spørsmål",
                 "description": (
@@ -2185,9 +2494,10 @@ def _openapi() -> dict:
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object", "required": ["fil"],
                     "properties": {"fil": fil_felt}}}}},
-                "responses": {"200": {"description":
-                    "dokument, identifikatorer (sjekksumvalidert), kontakt, adresser, datoer, perioder, "
-                    "belop, strekkoder, handskrift, tekst, kvalitet, versjon"}}}},
+                "responses": {"200": {
+                    "description": "Alle nøkler alltid til stede; tomt er \"\" / []",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/StrukturDel"}}}}}}},
             "/fyll_skjema": {"post": {
                 "summary": "Fyll DIN egen JSON-mal fra dokumentet — kodevalidert felt for felt",
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
@@ -2197,7 +2507,13 @@ def _openapi() -> dict:
                                    "skjema_motor": {"type": "string",
                                                     "enum": ["modell", "felter", "auto"],
                                                     "description": "modell=Borealis fyller (standard); felter=deterministisk fletting av {feltnavn} (rask, uten modell); auto=hybrid med tallvakt"}}}}}},
-                "responses": {"200": {"description": "skjema (utfylt), motor, avvik; for felter/auto også ukjente_felter (+ kilde_per_felt/modell_brukt for auto)"}}}},
+                "responses": {
+                    "200": {"description": "Malen din, utfylt",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/SkjemaDel"}}}},
+                    "400": {"description": "Manglende/ugyldig 'skjema', eller ukjent 'skjema_motor'",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/jobb": {"post": {
                 "summary": "Asynkron OCR av store dokumenter (ubegrenset antall sider)",
                 "parameters": [{"name": "Idempotency-Key", "in": "header", "required": False,
@@ -2265,9 +2581,10 @@ def _openapi() -> dict:
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object",
                     "properties": {"fil": fil_felt}}}}},
-                "responses": {"200": {"description":
-                    "content_type, body_lengde, antall_deler, parser_ser "
-                    "(fil, fil_bytes, tekstfelt_navn, tekstfelter), raa_deler"}}}},
+                "responses": {"200": {
+                    "description": "Nøyaktig hva serveren mottok",
+                    "content": {"application/json": {"schema": {
+                        "$ref": "#/components/schemas/EkkoSvar"}}}}}}},
         },
     }
 
@@ -2284,10 +2601,11 @@ def _openapi() -> dict:
 # skal kunne kopieres og kjøre uten nedlastinger (CLAUDE.md §1).
 _ENDEPUNKTGUIDE_HTML = """
 <div class="veiledning">
+<section>
 <h2>Hvilket endepunkt skal jeg bruke?</h2>
 <table>
 <tr><th>Vil du …</th><th>Bruk</th></tr>
-<tr><td>Ha ETT kall som gjør alt du trenger</td><td><b>POST /dokument</b> ← anbefalt</td></tr>
+<tr><td>Ha ETT kall som gjør alt du trenger</td><td><code>POST /dokument</code> <span class="anbefalt">← anbefalt</span></td></tr>
 <tr><td>Bare lese teksten ordrett</td><td>POST /spor (uten <code>sporsmal</code>)</td></tr>
 <tr><td>Ha komplett strukturert JSON med faste nøkler</td><td>POST /uttrekk</td></tr>
 <tr><td>Fylle din egen JSON-mal</td><td>POST /dokument med <code>skjema_mal</code></td></tr>
@@ -2303,7 +2621,9 @@ De gir stort sett SAMME fakta, men i ULIKE JSON-former.</p>
 <p class="advarsel">Endepunktene deler bare <code>ok</code>,
 <code>tekst</code> og <code>strekkoder</code> på toppnivå. Bytter du
 endepunkt, brekker klientens JSON-stier. Velg ett og bli der.</p>
+</section>
 
+<section>
 <h2>Endepunktene — hva, hvordan og hvorfor</h2>
 
 <h3>POST /dokument — samlet endepunkt</h3>
@@ -2388,7 +2708,9 @@ den rå Content-Disposition slik den FAKTISK kom, og
 <code>parser_ser</code> hva parseren fikk ut. <b>Bruk denne før du gjetter
 på klientoppsettet</b> — det er forskjellen på å se problemet og å gjette
 på det.</p>
+</section>
 
+<section>
 <h2>Er svaret BEVIST eller GJETTET?</h2>
 <table>
 <tr><th>Felt</th><th>Betyr</th></tr>
@@ -2402,7 +2724,9 @@ på det.</p>
 <p>Raskeste sjekk en robot kan gjøre: <code>kilde</code> inneholder
 «borealis» ⇒ la et menneske se på det. <code>kilde</code> er
 «deterministisk» ⇒ regex + mod11, ingen gjetning.</p>
+</section>
 
+<section>
 <h2>Klientfeller (UiPath / .NET)</h2>
 <p><b>Argumentrekkefølge — BEGGE tar verdien først, navnet sist:</b></p>
 <pre>New FileFormDataPart(filsti, "fil")
@@ -2414,6 +2738,7 @@ presis retting.</p>
 <p><b>Ukjent feltnavn</b> gir aldri stille tap: du får en linje i
 <code>advarsler</code> (eller <code>kvalitet.advarsler</code>) som sier
 hva som ble ignorert og hvilke felt endepunktet kjenner.</p>
+</section>
 </div>
 """
 
@@ -2422,31 +2747,46 @@ _SWAGGER_HTML = """<!DOCTYPE html>
 <title>NAV dokument-API — dokumentasjon</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
 <style>
-.veiledning{max-width:1460px;margin:0 auto;padding:8px 20px 60px;
-  font-family:sans-serif;color:#3b4151;line-height:1.6}
-.veiledning h2{font-size:22px;margin:34px 0 10px;padding-top:16px;
-  border-top:1px solid #e0e2e6}
-.veiledning h3{font-size:16px;margin:22px 0 6px;color:#3b4151}
+/* Følger Swagger UI sitt formspråk: samme bredde (.wrapper = 1460px),
+   samme skriftstakk, samme kortflate med kant og skygge som
+   .opblock-tag-section, og samme tekstfarge (#3b4151). Guiden skal se
+   ut som en del av siden, ikke som noe limt på etterpå. */
+.veiledning{max-width:1460px;margin:0 auto;padding:0 20px 60px;
+  box-sizing:border-box;
+  font-family:"Open Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
+  color:#3b4151;line-height:1.6;font-size:14px}
+.veiledning section{background:#fff;border:1px solid rgba(59,65,81,.3);
+  border-radius:4px;box-shadow:0 1px 2px rgba(0,0,0,.15);
+  padding:14px 20px 20px;margin:20px 0}
+.veiledning h2{font-family:"Titillium Web","Open Sans",sans-serif;
+  font-size:24px;font-weight:700;color:#3b4151;margin:0 0 12px}
+.veiledning h3{font-family:"Titillium Web","Open Sans",sans-serif;
+  font-size:17px;font-weight:600;color:#3b4151;
+  margin:22px 0 6px;padding-bottom:5px;border-bottom:1px solid #ebebeb}
 .veiledning table{border-collapse:collapse;width:100%;margin:10px 0 16px}
-.veiledning th,.veiledning td{border:1px solid #e0e2e6;padding:7px 10px;
-  text-align:left;vertical-align:top;font-size:14px}
-.veiledning th{background:#f7f7f7;font-weight:600}
-.veiledning code{background:#f2f3f4;padding:1px 5px;border-radius:3px;
-  font-family:monospace;font-size:13px}
-.veiledning pre{background:#333;color:#fff;padding:12px 14px;
-  border-radius:4px;overflow-x:auto;font-size:13px;line-height:1.5}
-.veiledning pre code{background:none;color:inherit;padding:0}
+.veiledning th,.veiledning td{border-bottom:1px solid #ebebeb;
+  padding:8px 10px;text-align:left;vertical-align:top}
+.veiledning th{font-family:"Titillium Web","Open Sans",sans-serif;
+  font-weight:700;color:#3b4151;border-bottom:2px solid #ebebeb}
+.veiledning tr:last-child td{border-bottom:none}
+.veiledning code{background:rgba(0,0,0,.05);padding:1px 5px;
+  border-radius:3px;font-family:"Source Code Pro",monospace;font-size:12px;
+  color:#9012fe}
+.veiledning pre{background:#41444e;color:#fff;padding:12px 14px;
+  border-radius:4px;overflow-x:auto;font-size:12px;line-height:1.6;
+  font-family:"Source Code Pro",monospace}
 .veiledning p{margin:8px 0}
-.veiledning .advarsel{border-left:4px solid #d9822b;background:#fdf6ec;
-  padding:9px 13px;margin:12px 0;border-radius:0 3px 3px 0}
+.veiledning .advarsel{border-left:4px solid #fca130;background:#fcf3e6;
+  padding:10px 14px;margin:12px 0;border-radius:0 4px 4px 0}
+.veiledning .anbefalt{color:#49cc90;font-weight:700}
 @media (prefers-color-scheme:dark){
   .veiledning{color:#d7dade}
-  .veiledning h2,.veiledning h3{color:#e8eaed}
-  .veiledning h2{border-top-color:#3a3f44}
-  .veiledning th,.veiledning td{border-color:#3a3f44}
-  .veiledning th{background:#2a2e33}
-  .veiledning code{background:#2a2e33}
-  .veiledning .advarsel{background:#332a1c;border-left-color:#d9822b}
+  .veiledning section{background:#1f2226;border-color:#3a3f44;
+    box-shadow:none}
+  .veiledning h2,.veiledning h3,.veiledning th{color:#e8eaed}
+  .veiledning h3,.veiledning th,.veiledning td{border-color:#3a3f44}
+  .veiledning code{background:rgba(255,255,255,.08);color:#c792ea}
+  .veiledning .advarsel{background:#332a1c;border-left-color:#fca130}
 }
 </style>
 </head><body>
@@ -2454,8 +2794,21 @@ _SWAGGER_HTML = """<!DOCTYPE html>
 __VEILEDNING__
 <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
 <script>
+// defaultModelsExpandDepth: 0 viser «Schemas»-seksjonen under endepunkt-
+// lista med hver modell sammenslått. -1 (som før) skjuler den helt — da
+// fantes svarmodellene bare i koden, og en integrator måtte kalle API-et
+// for å se hva feltene het.
 SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui",
-                 docExpansion: "list", defaultModelsExpandDepth: -1});
+                 docExpansion: "list", defaultModelsExpandDepth: 0,
+                 onComplete: function () {
+                   // Seksjonen rendres sammenslått, så modellnavnene er
+                   // usynlige til man vet at man skal klikke. Åpne den én
+                   // gang ved lasting: lista over navn er hele poenget.
+                   var k = document.querySelector(".models-control");
+                   if (k && k.getAttribute("aria-expanded") === "false") {
+                     k.click();
+                   }
+                 }});
 </script>
 </body></html>""".replace("__VEILEDNING__", _ENDEPUNKTGUIDE_HTML)
 
