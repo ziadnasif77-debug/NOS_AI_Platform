@@ -21,6 +21,9 @@ if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 HER = Path(__file__).resolve().parent
+# Prosjektroten (nav/). ALT som installeres skal havne her, aldri i en
+# brukerprofil — se CLAUDE.md §1.
+ROT = HER.parent
 # offline_pakke kan være HER selv, eller en undermappe
 PAKKE = HER if (HER / "wheels").is_dir() else HER / "offline_pakke"
 WHEELS = PAKKE / "wheels"
@@ -53,7 +56,12 @@ def main():
 
     print("\n[2/3] Legger EasyOCR-modeller på plass ...")
     kilde = PAKKE / "easyocr_modeller"
-    mal = Path.home() / ".EasyOCR" / "model"
+    # INNE i prosjektet (CLAUDE.md §1). Målet var Path.home()/.EasyOCR —
+    # altså brukerprofilen — men portabilitetsvakten setter
+    # EASYOCR_MODULE_PATH til nav/.EasyOCR, så serveren lette et helt
+    # annet sted enn installasjonen la vektene. På en fersk offline
+    # server ga det OCR som feilet uten at noe pekte på hvorfor.
+    mal = ROT / ".EasyOCR" / "model"
     if kilde.is_dir() and any(kilde.glob("*.pth")):
         mal.mkdir(parents=True, exist_ok=True)
         for f in kilde.glob("*.pth"):

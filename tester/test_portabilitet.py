@@ -134,3 +134,28 @@ def test_ingen_hardkodet_c_sti_i_driftskoden():
                 if monster.search(strippet):
                     mistenkt.append(f"{os.path.basename(f)}:{nr}")
     assert mistenkt == [], f"hardkodet C:-sti i driftskode: {mistenkt}"
+
+
+def test_offline_flyten_bruker_prosjektmappa_ikke_brukerprofilen():
+    """CLAUDE.md §1: modeller skal ligge i nav/, aldri i brukerprofilen.
+
+    Funnet i revisjon: installer_offline la EasyOCR-vektene i
+    Path.home()/.EasyOCR mens portabilitetsvakten peker
+    EASYOCR_MODULE_PATH til nav/.EasyOCR — installasjonen la altså
+    vektene et helt annet sted enn serveren leter. Og pakk_for_offline
+    lette samme feil sted, så pakken ble bygget UTEN OCR-vekter. Hele
+    offline-OCR-veien var brutt i begge ender."""
+    import re
+    rot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    inst = open(os.path.join(rot, "skript", "installer_offline.py"),
+                encoding="utf-8").read()
+    assert 'mal = ROT / ".EasyOCR"' in inst, \
+        "installer_offline må legge vektene i nav/.EasyOCR"
+    assert not re.search(r'mal\s*=\s*Path\.home\(\)', inst), \
+        "installer_offline skriver til brukerprofilen"
+
+    pakk = open(os.path.join(rot, "skript", "pakk_for_offline.py"),
+                encoding="utf-8").read()
+    assert 'ROT / ".EasyOCR"' in pakk, \
+        "pakk_for_offline må lete i nav/.EasyOCR først"
