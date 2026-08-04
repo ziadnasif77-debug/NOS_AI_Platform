@@ -76,14 +76,30 @@ def _last_ned_hjul():
            "-r", str(KRAV)])
 
 
+def _easyocr_kilde():
+    """Hvor EasyOCR-vektene FAKTISK ligger.
+
+    Portabilitetsvakten setter EASYOCR_MODULE_PATH til nav/.EasyOCR, så
+    det er der de havner på en riktig oppsatt maskin. Brukerprofilen
+    sjekkes som fallback for maskiner satt opp før vakten kom — men
+    prosjektmappa har forrang, ellers pakker vi vekter fra feil sted."""
+    for kandidat in (ROT / ".EasyOCR" / "model",
+                     Path.home() / ".EasyOCR" / "model"):
+        if kandidat.is_dir() and any(kandidat.glob("*.pth")):
+            return kandidat
+    return None
+
+
 def _kopier_easyocr():
-    kilde = Path.home() / ".EasyOCR" / "model"
+    kilde = _easyocr_kilde()
     mal = PAKKE / "easyocr_modeller"
-    if not kilde.is_dir() or not any(kilde.glob("*.pth")):
-        print("\n  ADVARSEL: EasyOCR-modeller ikke funnet i ~/.EasyOCR/model.")
+    if kilde is None:
+        print("\n  ADVARSEL: EasyOCR-modeller ikke funnet — verken i "
+              f"{ROT / '.EasyOCR' / 'model'} eller ~/.EasyOCR/model.")
         print("  Kjør en OCR én gang på denne maskinen først (så lastes de ned),")
         print("  og kjør dette skriptet på nytt. Uten dem feiler OCR offline.\n")
         return 0
+    print(f"  Fant EasyOCR-modeller i {kilde}")
     mal.mkdir(parents=True, exist_ok=True)
     n = 0
     for f in kilde.glob("*.pth"):
