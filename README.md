@@ -11,9 +11,14 @@ Kildedokumentene er allerede arkivert et annet sted.
 > `localhost` med tunneladressen.
 
 Brukes fra GUI-er ([skript/api_klient_gui.py](skript/api_klient_gui.py)),
-UiPath, curl eller egne skript. Full brukerdok:
-[docs/api_dokumentasjon.md](docs/api_dokumentasjon.md) · komplett
-regelverk (R1–R60): [docs/regler_lokal_api.md](docs/regler_lokal_api.md).
+UiPath, curl eller egne skript.
+
+| Dokumentasjon | Hva |
+|---|---|
+| [docs/endepunkter.md](docs/endepunkter.md) | **Komplett endepunktreferanse** — felter inn/ut, hvilke som bruker modellen, klientfeller |
+| [docs/api_dokumentasjon.md](docs/api_dokumentasjon.md) | Arbeidsflyter og eksempler |
+| [docs/regler_lokal_api.md](docs/regler_lokal_api.md) | Regelverket R1–R67 |
+| `GET /dokumentasjon` | Swagger UI med svarmodeller og innebygd veiledning |
 
 ---
 
@@ -35,14 +40,47 @@ data bevares, og bare midlertidig, til finjusteringen har kjørt.
 
 ## Endepunkter
 
+**`POST /dokument` er hovedveien** — ett kall med brytere for alt under.
+Dokumentet leses én gang uansett hvor mange deler du ber om, og
+modelldelene er AV som standard, så det raske forblir raskt.
+
+```bash
+curl -X POST http://localhost:8600/dokument \
+     -F "fil=@dokument.pdf" \
+     -F "struktur=ja" -F "koordinater=ja" \
+     -F "sporsmal=Hva er totalbeløpet?"
+```
+
+| Bryter | Gjør | Modell? |
+|---|---|---|
+| `tekst` (standard på) | Hele den utleste teksten | nei |
+| `felter` (standard på) | Deterministiske felter + datoer med begrunnelse | nei |
+| `struktur` | Komplett strukturert uttrekk (som `/uttrekk`) | nei |
+| `koordinater` | Beviste funn med bokser per side — til utheving i en GUI | nei |
+| `sporsmal` | Fritt spørsmål med tallvakt | ja* |
+| `skjema_mal` + `skjema_motor` | Din JSON-mal utfylt (`felter`/`auto`/`modell`) | avhenger |
+| `korriger` | LLM-korrigert OCR-tekst ved siden av den rå | ja |
+
+\* Sidespørsmål (`les side 10`), strekkodespørsmål og spørsmål etter
+sjekksumvaliderte identifikatorer besvares av **koden**, ikke modellen —
+de virker også når Borealis er nede. `kilde` i svaret sier hvilken vei
+som ble tatt.
+
+**Øvrige endepunkter:**
+
 | Endepunkt | Gjør |
 |---|---|
-| `POST /spor` | fil + spørsmål → svar fra Borealis · fil UTEN spørsmål → hele teksten ordrett · valgfritt `korriger=ja` |
-| `POST /analyser` | fil → deterministiske felter, alle datoer (med begrunnelse), strekkoder, håndskriftdeteksjon, full tekst |
-| `POST /uttrekk` | fil → komplett strukturert JSON: alle nøkler alltid til stede, identifikatorer sjekksumvalidert |
-| `POST /fyll_skjema` | fil + din egen JSON-mal → malen utfylt fra dokumentet, kodevalidert felt for felt (avvik rapporteres) |
-| `POST /jobb` | fil → `jobb_id` med en gang; OCR av HELE dokumentet kjører i bakgrunnen (store skanninger) |
+| `POST /forhandssjekk` | Kvalitetsdom FØR prosessering (dpi, skarphet, tomme sider) — **uten GPU**. `dom`: god/tvilsom/avvis |
+| `POST /sladd` | Sladder det som kan BEVISES (fnr, konto, orgnr, KID, telefon, epost). Navn/adresser deklareres udekket |
+| `POST /ekko` | Diagnose: svarer med NØYAKTIG hva serveren mottok. Bruk den før du gjetter på klientoppsettet |
+| `POST /jobb` → `GET /jobb/{id}` | Store skanninger: `jobb_id` med en gang, OCR i bakgrunnen |
+| `POST /innsyn` → `GET /innsyn/{id}` | Direktevisning: strømmer lesingen hendelse for hendelse |
+| `POST /spor`, `/analyser`, `/uttrekk`, `/fyll_skjema` | Eldre veier, beholdt for eksisterende integrasjoner |
 | `GET /dokumentasjon` · `/openapi.json` · `/hjelp` | Swagger UI · maskinlesbart skjema · tjenestestatus |
+
+⚠️ Endepunktene deler bare `ok`, `tekst` og `strekkoder` på toppnivå.
+Bytter du endepunkt, brekker klientens JSON-stier — velg ett og bli der.
+Detaljer: [docs/endepunkter.md](docs/endepunkter.md).
 
 ---
 
@@ -58,7 +96,18 @@ data bevares, og bare midlertidig, til finjusteringen har kjørt.
   tallvakt (tall i svar må stå ordrett i dokumentet), mod11-validering
   (fnr/konto/orgnr), KID (mod10/mod11), aritmetisk konsistens i
   skjemautfylling, aldri stille trunkering. Modellen foreslår, koden
-  verifiserer — mattematikk slår gjetning for strukturerte felter.
+  verifiserer — matematikk slår gjetning for strukturerte felter.
+- **Koden svarer der koden VET** — en 4B-modell skal ikke telle sider
+  eller gjengi sifre den ikke trenger å tolke. Sidespørsmål,
+  strekkodeverdier og sjekksumvaliderte identifikatorer rutes
+  deterministisk forbi modellen, og virker også når Borealis er nede.
+  Identifikatorsvar lister ALLE treff (en bunke kan gjelde flere
+  personer) — modellen ville valgt ett.
+- **Koordinater per funn** (`koordinater=ja`): hvert beviste funn med
+  boks og side, i et deklarert koordinatrom — så en GUI kan uthevet
+  treffet i dokumentet og saksbehandleren slipper å lete manuelt.
+  Fungerer både på OCR-veien (bildepiksler) og tekstlags-PDF
+  (PDF-punkter).
 - **Borealis 4B** (Nasjonalbibliotekets GGUF Q8 via llama.cpp/CUDA):
   filhash-cache gjør oppfølgingsspørsmål på samme dokument øyeblikkelige.
 - **Brukerstyrt uten kodeendring:** [egne_regler.txt](egne_regler.txt)
@@ -171,7 +220,12 @@ python skript/api_klient_gui.py          # GUI-klienten (kobler til :8600)
 
 Miljøvariabler (alle valgfrie): `API_NOKKEL` (krev X-API-Key),
 `CORS_ORIGINS`, `DOKUMENT_API_PORT` (standard 8600), `BOREALIS_KONTEKST`,
-`OCR_MOTOR` (auto/easy/rapid). Se [.env.example](.env.example).
+`OCR_MOTOR` (auto/easy/rapid), `OCR_MAKS_SIDER`/`OCR_TAK_SIDER`,
+`STREKKODE_MAKS_SIDER`, `FORHANDSSJEKK_MAKS_SIDER`,
+`RATE_LIMIT_PER_MIN`. Se [.env.example](.env.example).
+
+> Serveren binder til `0.0.0.0`, altså er den nåbar fra andre maskiner på
+> nettet med en gang. Sett `API_NOKKEL` før du eksponerer den.
 
 **Kjør som tjeneste** (starter ved oppstart, restarter ved krasj — uten
 Docker): [skript/tjeneste/LES_MEG.md](skript/tjeneste/LES_MEG.md).
@@ -192,13 +246,21 @@ Full guide: [docs/offline_installasjon.md](docs/offline_installasjon.md).
 ## Testing
 
 ```bash
-python -m pytest tester/ -q             # 71 enhetstester (server stoppet, så GPU er fri)
-python skript/kjor_korpus.py            # regresjonskorpus: ekte dokumenter mot fasit
+python -m pytest tester/ -q             # 505 enhetstester (server stoppet, så GPU er fri)
+python skript/kjor_korpus.py            # regresjonskorpus mot kjørende server
 ```
 
-Korpuset ([tester/korpus/](tester/korpus/)) kjører ekte dokumenter mot en
+Korpuset ([tester/korpus/](tester/korpus/)) kjører dokumenter mot en
 fasit skrevet av et menneske og rapporterer treffprosent — «virker det?»
-som et tall, ikke en magefølelse.
+som et tall, ikke en magefølelse. Fasitene ligger i git; dokumentene
+gjør ikke.
+
+**Korpuset inneholder KUN syntetiske dokumenter.** Fasit-verdier lever
+evig i git-historikken, så et ekte dokument ville lekket person- og
+betalingsopplysninger inn i kodelageret — også når selve filen holdes
+utenfor. Trenger du et vanskelig trekk (skjev skanning, termopapir,
+håndskrift), gjenskap trekket syntetisk. Se
+[tester/korpus/README.md](tester/korpus/README.md).
 
 ---
 

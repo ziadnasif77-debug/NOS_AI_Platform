@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R47 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R67 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 Basis-URL lokalt: `http://localhost:8600`. Er serveren startet med

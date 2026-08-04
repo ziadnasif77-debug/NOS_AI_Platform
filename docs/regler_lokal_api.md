@@ -35,6 +35,15 @@ på ID-en — så oppdateres koden tilsvarende.
 | R45 | Skjemautfylling mot brukerens egen JSON-mal (`POST /fyll_skjema`): modellen fyller, koden validerer — struktur-lås, tallvakt per felt, feltnavndrevne typesjekker (beløp/orgnr/telefon) og aritmetisk konsistens (enhetspris×antall−rabatt=sum). Alle inngrep rapporteres i `avvik` — ingen stille tømming. | KODE |
 | R46 | Nye ord for nye dokumenttyper krever ALDRI kodeendring: dato-etiketter kan legges til i `egne_etiketter.txt` («ord = type», virker umiddelbart, sjekkes før de innebygde). Ukjente etiketter gir fortsatt ærlig «ukjent» — aldri gjetting. | BRUKER |
 | R47 | Fil sendt UTEN spørsmål (`/spor` uten/med tomt `sporsmal`-felt) → svaret er hele den utleste teksten, ORDRETT og deterministisk (aldri modell) — uten tillegg eller utelatelser. Fil MED tekst → bestillingen utføres. | KODE |
+| R48 | Eksklusjoner i spørsmålet («uten adresse/telefon/epost/dato/fødselsnummer/tall») håndheves av KODE: svaret sjekkes med de deterministiske detektorene; ved brudd én streng ny runde, deretter ærlig varsling i advarsel. Små modeller er svake på negasjoner — derfor kode, ikke tillit. | KODE |
+| R49 | Ber du om en JSON-mal, er `svar`-feltet NØYAKTIG den utfylte malen — ren, parsebar JSON uten påheng. Malens nøkler låses (ingen ekstra felter fra modellen), og eventuelle kodeinngrep ligger separat i `avvik`, aldri limt på JSON-en. Du får nøyaktig det du ba om, ikke mer. | KODE |
+| R50 | Et rent spørsmål uten dokument besvares DIREKTE. Små modeller ber ellers om «mer kontekst» på åpne oversiktsspørsmål i stedet for å svare; svaret merkes `uten_dokument: true`, og tallvakten gjelder ikke (det er modellkunnskap, ikke dokumentfakta). | KODE |
+| R56 | «23,00» og «23» er samme beløp. Tallvakten normaliserer før den sammenligner, ellers ville matriseskrift-kvitteringer fått gyldige tall avvist som «ikke i dokumentet». | KODE |
+| R57 | Identifikatorer leses også når de står uten etikett, med sjekksummen som bevis — men et treff som ikke består mod11 UTELATES helt. Et nummer vi ikke kan bevise, finnes ikke. | KODE |
+| R59 | Modellrettet tekst legges i sitt EGET felt (`korrigert_tekst`), aldri i stedet for den rå. Klienten skal alltid kunne se hva maskinen faktisk leste. | KODE |
+| R63 | Multipart-parsingen godtar klientvariasjon: feltnavn med og uten anførselstegn (.NET/UiPath siterer ikke enkle token), CRLF og bare LF, `filename*=UTF-8''…` (norske filnavn med æøå), og eget tegnsett per del. Alle disse hadde samme feilmodus — delen falt stille ut og API-et svarte 200 som om feltet aldri ble sendt. | KODE |
+| R64 | Spørsmål KODEN kan besvare skal ikke gå via modellen: sidelesing/sidetelling (markørene er kodegenererte), strekkodeverdier (dekodet, egen sjekksum) og sjekksumvaliderte identifikatorer. De virker også når Borealis er nede, svarer med ALLE treff (en bunke kan gjelde flere personer), og `kilde`/`modell_brukt` sier ærlig hvilken vei som ble tatt. | KODE |
+| R65 | Ukjent FELTNAVN gir aldri stille tap: svaret får en linje i `advarsler`/`kvalitet.advarsler` med hva som ble ignorert og hvilke felt endepunktet kjenner. Et feltnavn som ser ut som en VERDI (omvendt klientoppsett) gir 400 med presis retting. | KODE |
 
 ## 2. OCR-korrigering (felt `korriger=ja`)
 
@@ -117,7 +126,22 @@ på ID-en — så oppdateres koden tilsvarende.
 
 ---
 
+## 9. Ytelse og ressursstyring
+
+Regler som eksisterer fordi de ble MÅLT, ikke fordi de hørtes fornuftige
+ut. Hver av dem har et tall bak seg.
+
+| ID | Regel | Type |
+|----|-------|------|
+| R51 | **Ett fysisk kort deles av alt.** Samlebetegnelse i koden for de målte GPU-/oppløsningslærdommene, som henger sammen: (a) EasyOCR trenger ledig VRAM til arbeidsbuffere PER SIDE — at et CUDA-kort finnes er ikke nok, det må være PLASS (`MINSTE_LEDIG_GPU`), ellers velges CPU-motoren; (b) aldri rendre finere enn bildets egen oppløsning — 200 dpi ganget et opplastet bilde opp 2,8× uten å tilføre detalj, dobbel tid OG dårligere lesing (målt: «NAV Vedtak» ble «NAV = Vedtak»); (c) Borealis' kontekstvindu styrer KV-bufferen og dermed hvor mye VRAM OCR har igjen; (d) svaret sier hvilken enhet OCR faktisk endte på — en stille fallback til CPU er en ytelsesfelle man må kunne se. | KODE |
+| R52 | Tak på hvor mye håndskriftmodellen får koste per side (tid og antall regioner). Uten taket kunne én tettskrevet side spise hele svartiden. | KODE |
+| R54 | OCR-motorene varmes opp i bakgrunnen ved oppstart. Uten det betalte den FØRSTE forespørselen ~28 s modellasting, uten å få vite hvorfor. | KODE |
+| R55 | Sidebildene rendres ÉN gang og gjenbrukes av strekkodelesingen (målt 0,19 s per A4-side i ren dobbeltjobb). Strekkodeskanning kan slås av per kall (`strekkoder=nei`). | KODE |
+| R58 | Kommer en forespørsel mens oppvarmingen (R54) holder motorlåsen, svarer serveren 503 «prøv igjen om litt» i stedet for å henge i opptil et halvt minutt uten forklaring. | KODE |
+| R66 | Sidetak må ALDRI trunkere i stillhet. Strekkodeskanningen hadde tak på 5 sider — arkivkoden på side 10 i en 10-siders bunke ble derfor aldri lest, og returslipp står nettopp bakerst. Taket følger nå OCR-taket, og enhver avkorting MELDES i svaret. | KODE |
+| R67 | En (nesten) tom side sendes ikke til OCR. Målt: en side med blekkandel 0,00064 (gjennomslag fra arket bak) fikk motorene til å «lese» to linjer som ikke fantes. Siden rapporteres som tom — ærlig stillhet slår oppdiktet tekst, og koster heller ingen GPU. | KODE |
+
+---
+
 *Endringsforslag: noter ID + ønsket endring og lever tilbake — koden
 oppdateres og dokumentet holdes i takt.*
-| R48 | Eksklusjoner i spørsmålet («uten adresse/telefon/epost/dato/fødselsnummer/tall») håndheves av KODE: svaret sjekkes med de deterministiske detektorene; ved brudd én streng ny runde, deretter ærlig varsling i advarsel. Små modeller er svake på negasjoner — derfor kode, ikke tillit. | KODE |
-| R49 | Ber du om en JSON-mal, er `svar`-feltet NØYAKTIG den utfylte malen — ren, parsebar JSON uten påheng. Malens nøkler låses (ingen ekstra felter fra modellen), og eventuelle kodeinngrep ligger separat i `avvik`, aldri limt på JSON-en. Du får nøyaktig det du ba om, ikke mer. | KODE |

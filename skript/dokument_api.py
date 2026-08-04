@@ -3400,7 +3400,17 @@ class Handler(BaseHTTPRequestHandler):
         if sti == "/openapi.json":
             return self._svar(200, _openapi())
         if sti.startswith("/innsyn/"):
-            # Direktevisnings-poll: hendelser fra og med ?fra=N + resultat
+            # Direktevisnings-poll: hendelser fra og med ?fra=N + resultat.
+            # SAMME nøkkelkrav som GET /jobb/<id>: svaret inneholder hele
+            # den utleste teksten OG base64-sidebilder av dokumentet.
+            # Uten denne vakten kunne en 48-bits id — som havner i
+            # tilgangslogg, proxy og nettleserhistorikk — hentes ut av
+            # hvem som helst. Målt før fiksen: 246 KB dokumentinnhold
+            # uten en eneste header.
+            if not self._autorisert():
+                return self._svar(401, {
+                    "ok": False,
+                    "feil": "Ugyldig eller manglende X-API-Key"})
             okt = _innsyn_okter.get(sti.split("/")[2])
             if okt is None:
                 return self._svar(404, {"ok": False, "feil": "Ukjent innsyn_id"})
@@ -3626,6 +3636,22 @@ class Handler(BaseHTTPRequestHandler):
         if innhold is None:
             return self._svar(400, {"ok": False,
                                     "feil": "Ingen fil funnet (felt 'fil')"})
+        # Kapasitetsplassen tas HER og slippes av arbeidstråden — ikke av
+        # forespørselen, som returnerer med en gang. /innsyn sto utenfor
+        # _TUNGE_STIER og kunne derfor starte vilkårlig mange samtidige
+        # OCR-tråder som alle kjempet om det ene skjermkortet, hver med
+        # hele dokumentet i minne. Å legge stien i _TUNGE_STIER ville
+        # ikke hjulpet: den plassen frigjøres når POST-en svarer, og da
+        # har arbeidet så vidt begynt.
+        if not _kapasitet_port.ta(KOE_VENT_S):
+            kap = _kapasitet_port.status()
+            return self._svar(503, {
+                "ok": False,
+                "feil": (f"Serveren er opptatt: {kap['grense']} samtidige "
+                         "lesinger er taket på denne maskinen. Prøv igjen "
+                         "om litt."),
+                "opptatt": True, "kapasitet": kap,
+            }, hoder={"Retry-After": "30"})
         okt_id = uuid.uuid4().hex[:12]
         okt = {"status": "pågår", "hendelser": [], "resultat": None,
                "start": time.time()}
@@ -3633,9 +3659,14 @@ class Handler(BaseHTTPRequestHandler):
             _innsyn_okter[okt_id] = okt
             while len(_innsyn_okter) > 6:      # eldste økter ryddes
                 _innsyn_okter.pop(next(iter(_innsyn_okter)))
-        threading.Thread(target=_innsyn_arbeider,
-                         args=(okt, filnavn, slag, innhold, maks_ocr),
-                         daemon=True).start()
+
+        def _arbeid_med_plass():
+            try:
+                _innsyn_arbeider(okt, filnavn, slag, innhold, maks_ocr)
+            finally:
+                _kapasitet_port.slipp()
+
+        threading.Thread(target=_arbeid_med_plass, daemon=True).start()
         return self._svar(200, {"ok": True, "innsyn_id": okt_id})
 
     def _ekko(self, body, ct):
