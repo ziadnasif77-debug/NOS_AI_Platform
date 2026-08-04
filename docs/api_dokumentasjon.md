@@ -108,4 +108,4 @@ with open("dokument.pdf", "rb") as f:
 `advarsel` (all trunkering/usikkerhet sies fra om), `tall_verifisert`,
 `avvik`, `svar_avkortet`, `ocr_brukt`/`ocr_motorer`, `fra_cache`,
 `tid_sekunder`, `versjon` (api + prompt + modellmotor). Fullstendig
-regelverk: `docs/regler_lokal_api.md` (R1–R47).
+regelverk: `docs/regler_lokal_api.md` (R1–R67).
