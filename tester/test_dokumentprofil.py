@@ -387,10 +387,86 @@ def test_andre_personer_er_en_egen_seksjon_paa_toppniva():
     assert "andre_fodselsnummer" not in profil["eier"]
 
 
+# ------------------------------------------------------------------ #
+#  8. Sammendrag og bunkedeling (R74)                                  #
+# ------------------------------------------------------------------ #
+
+BUNKE = f"""[Side 1 av 4]
+Vedtak om dagpenger
+Vedtaksdato: 12.05.2026
+Dokumentet gjelder:
+Ola Nordmann
+Fnr: {EIER}
+[Side 2 av 4]
+fortsettelse av vedtaket
+[Side 3 av 4]
+Klage paa vedtak om dagpenger
+Datert: 08.06.2026
+[Side 4 av 4]
+Legeerklaering ved arbeidsufoerhet
+Utstedt: 20.05.2026
+"""
+
+
+def test_sammendraget_gir_de_faa_feltene_de_fleste_vil_ha():
+    s = _profil("Vedtak om dagpenger\nVedtaksdato: 12.05.2026\n"
+                f"Dokumentet gjelder:\nOla Nordmann\nFnr: {EIER}\n"
+                "Saksnummer: 4417820", antall_sider=1)["sammendrag"]
+    assert s["navn"] == "Ola Nordmann"
+    assert s["fnr"] == EIER
+    assert s["dokumentdato"] == "2026-05-12"
+    assert s["dokumenttype"] == "vedtak"
+    assert s["saksnummer"] == "4417820"
+    assert s["sikkerhet"] == "hoy"
+
+
+def test_sikkerheten_er_det_svakeste_leddet():
+    """Er eieren usikker, hjelper det ikke at datoen er sikker."""
+    s = _profil("Vedtaksdato: 12.05.2026\nEt brev uten person.")["sammendrag"]
+    assert s["fnr"] is None
+    assert s["sikkerhet"] == "usikker"
+
+
+def test_bunken_deles_i_dokumentene_den_bestaar_av():
+    """En skannet fil er ofte en saksmappe. Ett «eier»-felt og én
+    dokumentdato for hele filen er da misvisende, uansett hvor riktig
+    hver enkelt verdi er isolert sett."""
+    profil = _profil(BUNKE, antall_sider=4)
+    dokumenter = profil["dokumenter"]
+    assert len(dokumenter) == 3
+    assert [d["sider"] for d in dokumenter] == [[1, 2], [3], [4]]
+    assert [d["type"] for d in dokumenter] == ["vedtak", "klage",
+                                               "legeerklaring"]
+    assert dokumenter[0]["eier_fnr"] == EIER
+
+
+def test_sammendraget_teller_dokumentene_i_bunken():
+    s = _profil(BUNKE, antall_sider=4)["sammendrag"]
+    assert s["antall_dokumenter"] == 3
+    assert s["sikkerhet"] != "hoy", "en bunke er aldri «hoy» sikkerhet"
+
+
+def test_ett_dokument_gir_en_liste_med_en_oppforing():
+    """Lista har alltid minst én oppføring, så en klient kan gå gjennom
+    den uten først å sjekke om filen «var» en bunke."""
+    dokumenter = _profil("Vedtaksdato: 12.05.2026\nEt brev.")["dokumenter"]
+    assert len(dokumenter) == 1
+
+
+def test_et_ukjent_dokument_laaner_ikke_naboens_type():
+    """Arv fra filens type ville gitt en legeerklæring etiketten
+    «vedtak» bare fordi den lå i en vedtaksbunke."""
+    dokumenter = _profil(
+        "[Side 1 av 2]\nVedtak om dagpenger\nVedtaksdato: 12.05.2026\n"
+        "[Side 2 av 2]\nEt ark uten kjent type\nUtstedt: 01.06.2026\n",
+        antall_sider=2)["dokumenter"]
+    assert dokumenter[1]["type"] is None
+
+
 def test_skjemaversjonen_folger_med():
     """Endres formen senere, skal en klient kunne se det på tallet i
     stedet for å oppdage det når noe brekker."""
-    assert _profil("")["skjemaversjon"] == "1.0"
+    assert _profil("")["skjemaversjon"] == "1.1"
 
 
 def test_profilen_folger_med_i_dokumentsvaret_uten_at_noen_ber_om_det():

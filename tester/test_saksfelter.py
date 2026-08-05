@@ -247,6 +247,31 @@ def test_faktura_er_fortsatt_faktura():
         == "faktura"
 
 
+def test_klage_paa_et_vedtak_er_en_klage():
+    """Rekkefølgen i tittelen avgjør: dokumentets egen art står først,
+    og det den handler OM kommer etter. Telte vi forekomster, vant
+    «vedtak» — en klage nevner vedtaket den klager på mange ganger."""
+    tekst = ("Klage paa vedtak om arbeidsavklaringspengar\n"
+             "Eg klagar paa vedtaket datert 08.05.2026.\n"
+             "Vedtaket byggjer paa feil faktum. Vedtaket maa omgjerast.\n")
+    assert gjett_dokumenttype(tekst) == "klage"
+
+
+@pytest.mark.parametrize("tittel,forventet", [
+    ("Legeerklaering ved arbeidsufoerhet", "legeerklaring"),
+    ("Legeerklæring ved arbeidsuførhet", "legeerklaring"),
+    ("Inntektsmelding fra arbeidsgiver", "inntektsmelding"),
+    ("Sykmelding del D", "sykmelding"),
+    ("Egenerklaering om sykefravaer", "egenerklaring"),
+    ("Meldekort for uke 12", "meldekort"),
+])
+def test_sentrale_nav_dokumenttyper_kjennes_igjen(tittel, forventet):
+    """Uten disse ble en legeerklæring stående som «vedtak», fordi ordet
+    vedtak fantes et sted i teksten."""
+    assert gjett_dokumenttype(tittel + "\nInnhold om vedtak og beløp.") \
+        == forventet
+
+
 def test_sidemarkoren_spiser_ikke_tittelplassen():
     """«[Side 1 av 10]» er kodegenerert og skal ikke telle som tittel."""
     assert gjett_dokumenttype(

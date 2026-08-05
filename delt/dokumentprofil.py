@@ -202,8 +202,11 @@ _ANNENETIKETT = re.compile(
 # «\s+» ville sluppet linjeskift gjennom, og da ble «Ola Nordmann» til
 # «Ola Nordmann Fnr» fordi etiketten på neste linje også har stor
 # forbokstav.
-_NAVN = re.compile(
-    r"\b([A-ZÆØÅ][a-zæøåé\-']{1,20}(?:[ \t]+[A-ZÆØÅ][a-zæøåé\-']{1,20}){1,3})\b")
+# Et navneord: stor forbokstav, og dobbeltnavn med bindestrek regnes som
+# ETT ord. «Nor-Etternavn» ble ellers klippet til «Nor-», fordi den
+# store E-en etter bindestreken falt utenfor.
+_NAVNEORD = r"[A-ZÆØÅ][a-zæøåé']{1,20}(?:-[A-ZÆØÅa-zæøåé']{1,20})?"
+_NAVN = re.compile(r"\b(" + _NAVNEORD + r"(?:[ \t]+" + _NAVNEORD + r"){1,3})\b")
 
 # Ord som ser ut som navn, men er etiketter eller organisasjoner
 _IKKE_NAVN = re.compile(
@@ -415,7 +418,108 @@ def _fodselsdato_av_fnr(fnr):
     return f"{1900 + aar:04d}-{maaned:02d}-{dag:02d}"
 
 
-SKJEMAVERSJON = "1.0"
+def _sider(tekst: str) -> list:
+    """[(sidenummer, sidetekst)] fra de KODE-genererte sidemarkørene
+    (R36). Tom liste når teksten ikke har markører."""
+    biter = re.split(r"\[Side (\d+) av \d+\]", tekst or "")
+    return [(int(biter[i]), biter[i + 1])
+            for i in range(1, len(biter) - 1, 2)]
+
+
+def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
+    """Deler en BUNKE i dokumentene den består av.
+
+    En skannet fil er ofte ikke ett dokument, men en saksmappe: vedtak,
+    inntektsmelding, legeerklæring, klage — hver med sin dato, sin type
+    og noen ganger sin person. Ett `eier`-felt og én `dokumentdato` for
+    hele filen er da misvisende, uansett hvor riktig hver enkelt verdi
+    er isolert sett.
+
+    Delingen følger dokumentDATOENE: en side som bærer en ny dato med
+    rolle «dokument», starter et nytt dokument; sider uten egen dato
+    hører til det foregående. Det er et deterministisk skille som kan
+    forklares — ikke en gjetning om hvor et dokument «føles» ferdig.
+
+    Returnerer alltid minst én oppføring: en fil uten sidemarkører er
+    ett dokument."""
+    from delt.tekstuttrekk import gjett_dokumenttype
+
+    sider = _sider(tekst)
+    if not sider:
+        sider = [(None, tekst or "")]
+
+    dato_per_side = {}
+    for d in datoer or []:
+        if (isinstance(d, dict) and d.get("side") and d.get("dato")
+                and rolle_for_type(d.get("type")) == ROLLE_DOKUMENT):
+            dato_per_side.setdefault(d["side"], d["dato"])
+
+    grupper = []
+    for nr, sidetekst in sider:
+        dato = dato_per_side.get(nr)
+        ny = (not grupper
+              or (dato and grupper[-1]["dato"] and dato != grupper[-1]["dato"])
+              or (dato and not grupper[-1]["dato"]))
+        if ny:
+            grupper.append({"sider": [nr] if nr else [],
+                            "dato": dato, "tekst": sidetekst})
+        else:
+            if nr:
+                grupper[-1]["sider"].append(nr)
+            grupper[-1]["tekst"] += "\n" + sidetekst
+
+    ut = []
+    for g in grupper:
+        eier = finn_dokument_eier(g["tekst"])
+        forste = next((l.strip() for l in g["tekst"].splitlines()
+                       if l.strip()), "")
+        ut.append({
+            "sider": g["sider"],
+            "dato": til_iso(g["dato"]),
+            "dato_norsk": g["dato"],
+            # ingen arv fra filens type: et dokument vi ikke kjenner
+            # igjen, skal si «vet ikke» — ikke låne naboens etikett
+            "type": gjett_dokumenttype(g["tekst"]) or None,
+            "tittel": forste[:100] or None,
+            "eier_navn": eier["navn"],
+            "eier_fnr": eier["fnr"],
+            "eier_sikkerhet": eier["sikkerhet"],
+        })
+    return ut
+
+
+def _sammendrag(profil: dict, antall_dokumenter: int) -> dict:
+    """De få feltene de fleste er ute etter, øverst.
+
+    Profilen er komplett og derfor lang. Et sammendrag gjør at den som
+    bare skal vite «hvem og når» slipper å lete — uten at noe fjernes
+    for den som trenger resten. «sikkerhet» er det SVAKESTE leddet, ikke
+    et gjennomsnitt: er eieren usikker, hjelper det ikke at datoen er
+    sikker."""
+    eier, dok = profil["eier"], profil["dokument"]
+    ledd = [eier["sikkerhet"] == "merket",
+            dok["dato_sikkerhet"] == "hoy",
+            antall_dokumenter <= 1]
+    if all(ledd):
+        sikkerhet = "hoy"
+    elif eier["fnr"] and dok["dato"]:
+        sikkerhet = "middels"
+    else:
+        sikkerhet = "usikker"
+    return {
+        "navn": eier["navn"],
+        "fnr": eier["fnr"],
+        "dokumentdato": dok["dato"],
+        "dokumenttype": dok["type"],
+        "ytelse": profil["ytelse"]["navn"],
+        "saksnummer": profil["sak"]["saksnummer"],
+        "antall_sider": profil["fil"]["antall_sider"],
+        "antall_dokumenter": antall_dokumenter,
+        "sikkerhet": sikkerhet,
+    }
+
+
+SKJEMAVERSJON = "1.1"
 
 
 def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
@@ -442,7 +546,7 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     eier = finn_dokument_eier(tekst)
     stempler = stempeldatoer(tekst, datoer)
 
-    return {
+    profil = {
         "skjemaversjon": SKJEMAVERSJON,
 
         "fil": {
@@ -541,3 +645,11 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             "handskrift_funnet": bool(handskrift),
         },
     }
+
+    # Bunkedeling: en fil er ofte en saksmappe, ikke ett dokument. Lista
+    # har alltid minst én oppføring, så en klient kan gå gjennom den
+    # uten først å sjekke om filen «var» en bunke.
+    profil["dokumenter"] = del_i_dokumenter(
+        tekst, datoer, filens_type=profil["dokument"]["type"])
+    profil["sammendrag"] = _sammendrag(profil, len(profil["dokumenter"]))
+    return profil

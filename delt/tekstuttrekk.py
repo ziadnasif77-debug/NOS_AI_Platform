@@ -1546,6 +1546,15 @@ _DOKUMENTTYPER = [
     ("kvittering", r"kvittering|betaling mottatt|kj[øo]pskvittering"),
     ("vedtak", r"\bvedtak"),
     ("soknad", r"s[øo]knad"),
+    # sentrale NAV-dokumenttyper: uten dem ble en legeerklæring og en
+    # inntektsmelding stående som «vedtak» fordi ordet vedtak fantes et
+    # sted i teksten
+    ("legeerklaring", r"legeerkl(?:æ|ae|a)ring"),
+    ("inntektsmelding", r"inntektsmelding"),
+    ("sykmelding", r"sykmelding|sjukmelding"),
+    ("klage", r"\bklage[nr]?\b|\bklagar\b|klage p(?:å|aa|a)"),
+    ("egenerklaring", r"egenerkl(?:æ|ae|a)ring"),
+    ("meldekort", r"meldekort"),
     ("pensjonsbrev", r"pensjonsbrev"),
     ("attest", r"\battest"),
     ("kontrakt", r"kontrakt|l[æa]rekontrakt|avtale"),
@@ -1584,12 +1593,25 @@ def _tittelen(tekst: str) -> str:
 
 
 def gjett_dokumenttype(tekst: str) -> str:
+    """Dokumentets type, avgjort av TITTELEN når den sier noe.
+
+    Rekkefølgen i tittelen avgjør: «Klage på vedtak om …» er en KLAGE,
+    ikke et vedtak — dokumentets egen art står først, og det den handler
+    OM kommer etter. Teller vi i stedet forekomster, vinner «vedtak»,
+    fordi en klage nevner vedtaket den klager på mange ganger."""
     tittel = _tittelen(tekst)
+    i_tittel = []
+    for navn, monster in _DOKUMENTTYPER:
+        treff = re.search(monster, tittel, re.IGNORECASE)
+        if treff:
+            i_tittel.append((treff.start(), -len(treff.group(0)), navn))
+    if i_tittel:
+        return min(i_tittel)[2]
+
+    # Ingen type i tittelen: da får brødteksten bestemme, som før
     beste, beste_poeng = "", 0
     for navn, monster in _DOKUMENTTYPER:
-        i_tekst = len(re.findall(monster, tekst, re.IGNORECASE))
-        i_tittel = len(re.findall(monster, tittel, re.IGNORECASE))
-        poeng = i_tekst + i_tittel * _TITTELVEKT
+        poeng = len(re.findall(monster, tekst, re.IGNORECASE))
         if poeng > beste_poeng:
             beste, beste_poeng = navn, poeng
     return beste

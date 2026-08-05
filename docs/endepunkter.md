@@ -108,7 +108,22 @@ stedet for når noe brekker. Se
 
 ```json
 {
-  "skjemaversjon": "1.0",
+  "skjemaversjon": "1.1",
+
+  "sammendrag": {"navn": "Ola Nordmann", "fnr": "12345678910",
+                 "dokumentdato": "2026-05-12", "dokumenttype": "vedtak",
+                 "ytelse": "dagpenger", "saksnummer": "4417820",
+                 "antall_sider": 10, "antall_dokumenter": 5,
+                 "sikkerhet": "middels"},
+
+  "dokumenter": [
+    {"sider": [1,2], "dato": "2026-05-12", "type": "vedtak",
+     "tittel": "Vedtak om dagpenger", "eier_navn": "Ola Nordmann",
+     "eier_fnr": "12345678910", "eier_sikkerhet": "merket"},
+    {"sider": [3], "dato": "2026-06-08", "type": "klage",
+     "tittel": "Klage på vedtak", "eier_navn": null, "eier_fnr": null,
+     "eier_sikkerhet": "umerket"}
+  ],
 
   "fil":   {"filnavn": "vedtak.pdf", "antall_sider": 12,
             "blanke_sider": [7], "uleselige_sider": null},
@@ -167,6 +182,21 @@ stedet for når noe brekker. Se
               "handskrift_funnet": false}
 }
 ```
+
+**`sammendrag` — start her (R74).** De få feltene de fleste er ute
+etter. `sikkerhet` er det SVAKESTE leddet, ikke et gjennomsnitt: er
+eieren usikker, hjelper det ikke at datoen er sikker, og en fil med
+flere dokumenter er aldri `hoy`.
+
+**`dokumenter[]` — en fil er ikke nødvendigvis ett dokument (R74).** En
+skannet saksmappe inneholder gjerne vedtak, inntektsmelding,
+legeerklæring og klage — hver med sin dato, sin type og noen ganger sin
+person. Da er ett `eier`-felt og én `dokument.dato` for hele filen
+misvisende, uansett hvor riktig hver enkelt verdi er isolert sett.
+Delingen følger dokumentDATOENE: en side med en ny dato med rolle
+«dokument» starter et nytt dokument. Lista har alltid minst én
+oppføring. **Er `sammendrag.antall_dokumenter` større enn 1, les
+`dokumenter[]` — ikke toppnivåfeltene.**
 
 **Tre datofelter som ikke er det samme (R67):**
 
