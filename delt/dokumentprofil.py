@@ -154,7 +154,7 @@ def stempeldatoer(tekst: str, datoer) -> list:
         iso = til_iso(d["dato"])
         if not iso:
             continue
-        funn.append({"dato": iso, "dato_norsk": d["dato"],
+        funn.append({"dato": iso, "dato_original": d.get("raatekst"),
                      "type": type_, "side": d.get("side"),
                      "rolle": rolle_for_type(type_)})
     # samme stempeldato flere steder er ett stempel, ikke flere
@@ -462,14 +462,20 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
         ut.append({
             "sider": g["sider"],
             "dato": til_iso(g["dato"]),
-            "dato_norsk": g["dato"],
             # ingen arv fra filens type: et dokument vi ikke kjenner
             # igjen, skal si «vet ikke» — ikke låne naboens etikett
             "type": gjett_dokumenttype(g["tekst"]) or None,
             "tittel": forste[:100] or None,
+            # UTTRUKKET av DETTE dokumentets tekst, ikke arvet fra
+            # filens hovedpart. En skannet bunke kan inneholde
+            # dokumenter om ULIKE personer, og arv ville skjult det.
+            # Står det null her mens «part» er fylt, betyr det at
+            # nettopp dette dokumentet ikke navngir noen — ikke at
+            # opplysningen mangler i filen.
             "eier_navn": eier["navn"],
             "eier_fnr": eier["fnr"],
-            "eier_sikkerhet": eier["sikkerhet"],
+            "eier_grunnlag": _GRUNNLAG.get(eier["sikkerhet"],
+                                           eier["sikkerhet"]),
         })
     return ut
 
@@ -593,8 +599,10 @@ def _sammendrag(profil: dict, antall_dokumenter: int) -> dict:
         "navn": part["navn"],
         "fnr": part["fnr"],
         "dokumentdato": dok["dato"],
-        "dokumenttype": dok["type"],
-        "ytelse": profil["ytelse"]["navn"],
+        # Projeksjon: bare koden. Hele {kode, term}-paret hører
+        # hjemme i seksjonen, ikke i et sammendrag man skummer.
+        "dokumenttype": (dok["type"] or {}).get("kode"),
+        "ytelse": (profil["ytelse"]["navn"] or {}).get("kode"),
         "saksnummer": profil["sak"]["saksnummer"],
         "antall_sider": profil["fil"]["antall_sider"],
         "antall_dokumenter": antall_dokumenter,
@@ -642,18 +650,25 @@ def _part(eier: dict) -> dict:
 
 
 def _iso_datoer(felter: dict, navn) -> dict:
-    """Gjør de navngitte datofeltene om til ISO, med `_norsk`-tvilling.
+    """Gjør de navngitte datofeltene om til ISO.
 
     Profilen erklærer ISO («leses av andre systemer»), men feltene fra
     saksfelter.py kom gjennom `finn_dato` og var norske. Resultatet var
     `arbeid.startdato: "01.08.2019"` i samme objekt som
     `dokument.dato: "2026-05-28"` — en klient kunne ikke vite hvilket
-    format et datofelt hadde uten en tabell."""
+    format et datofelt hadde uten en tabell.
+
+    Den norske formen fulgte en stund med som `_norsk`-tvilling. Den er
+    borte: målt gir «28. mai 2026», «28/05/2026», «2026-05-28» og
+    «28.5.26» ALLE samme tvilling «28.05.2026» — den var altså en andre
+    RENDERING av den normaliserte verdien, ikke det som sto i
+    dokumentet. En klient som har ISO kan formatere selv.
+
+    Det som er verdt å ta vare på er den EKTE originalen, og den ligger
+    i `dokument.dato_original`."""
     ut = dict(felter)
     for n in navn:
-        norsk = ut.get(n)
-        ut[n] = til_iso(norsk)
-        ut[f"{n}_norsk"] = norsk
+        ut[n] = til_iso(ut.get(n))
     return ut
 
 
@@ -735,20 +750,22 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
 
 
         "dokument": {
-            "type": s_dok.get("dokumenttype") or None,
-            # {kode, term}: koden er stabil og maskinlesbar, termen er
-            # for et menneske. Kodene er skrevet uten æøå fordi de
-            # matches mot OCR-tekst — men et skjermbilde skal vise
-            # «Legeerklæring», ikke «legeerklaring».
-            "type_kodet": kodeverk(s_dok.get("dokumenttype") or None,
-                                   DOKUMENTTYPE_TERM),
+            # ETT felt, ikke to. «type» og «type_kodet» bar alltid
+            # samme kode — en speiltest håndhevet det — så paret var en
+            # kopi av seg selv. Nå ER verdien paret: koden er stabil og
+            # maskinlesbar, termen er for et menneske. Kodene er skrevet
+            # uten æøå fordi de matches mot OCR-tekst; termen har dem.
+            "type": kodeverk(s_dok.get("dokumenttype") or None,
+                             DOKUMENTTYPE_TERM),
             "tittel": s_dok.get("tittel") or None,
             "sprak": s_dok.get("sprak") or None,
             "kontornavn": s_dok.get("kontornavn") or None,
             "fylke": s_dok.get("fylke") or None,
 
             "dato": dato_iso,
-            "dato_norsk": dato_norsk,
+            # ordrett slik det sto i dokumentet — «28. mai 2026»,
+            # «28/05/2026». Den normaliserte formen er «dato».
+            "dato_original": (dokumentdato or {}).get("raatekst"),
             # «aarstall», ikke «ar»: den sto rett ved siden av
             # «alder.aar» — to skrivemåter av samme bokstav, to
             # betydninger (årstallet kontra hvor gammelt dokumentet er).
@@ -778,7 +795,6 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             # en klient som leser sakstype_kodet i dag får null, ikke en
             # manglende nøkkel.
             "sakstype": None,
-            "sakstype_kodet": None,
         },
 
         # Ytelsesreglene kommer senere. Navnet hentes fra den ENE
@@ -792,11 +808,10 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         # «innvilget»/«lopende»/«opphort». Modenheten bor nå i
         # «dekning»; «status» er frigjort til å bety ytelsens status.
         "ytelse": {
-            "navn": s_dok.get("ytelse") or None,
-            # Termen sier også når en ytelse er HISTORISK: et vedtak fra
-            # 1994 om «uførepensjon» skal ikke leses som om det gjaldt
-            # dagens uføretrygd, som har andre vilkår (R77).
-            "navn_kodet": kodeverk(s_dok.get("ytelse") or None, YTELSE_TERM),
+            # Termen sier også når en ytelse er HISTORISK: et vedtak
+            # fra 1994 om «uførepensjon» gjaldt ikke dagens uføretrygd,
+            # som har andre vilkår (R77).
+            "navn": kodeverk(s_dok.get("ytelse") or None, YTELSE_TERM),
             "type": None,
             "utfall": None,
             "gyldig_fra": None,
@@ -843,8 +858,14 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     # Hjemmelen følger DOKUMENTETS alder, ikke dagens dato. En bunke kan
     # spenne over lovskiftet i 1997, og da har dokumentene i den ulik
     # hjemmel — derfor avgjøres den per dokument, ikke bare for filen.
-    profil["hjemmel"] = _hjemmel(profil["dokument"]["dato"],
-                                 profil["ytelse"]["navn"])
+    # «gjeldende_lov», ikke «hjemmel»: den er AVLEDET av dokumentets
+    # dato og sier hvilken lov som gjaldt da — den er ikke noe
+    # dokumentet påberoper seg. Det dokumentet FAKTISK viser til ligger
+    # i «hjemler». To navn som lignet på hverandre skjulte at det var
+    # to ulike spørsmål.
+    profil["gjeldende_lov"] = _hjemmel(
+        profil["dokument"]["dato"],
+        (profil["ytelse"]["navn"] or {}).get("kode"))
     for dok in profil["dokumenter"]:
         egen = _hjemmel(dok["dato"])
         dok["lov"] = egen["lov"]
@@ -863,20 +884,25 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     # klagebrev siterer gjerne både bestemmelsen det klages på og
     # saksbehandlingsregelen, og én hjemmel kan ikke bære det.
     profil["hjemler"] = _hjemler(tekst, profil["dokument"]["dato"],
-                                 profil["hjemmel"]["lov"])
+                                 profil["gjeldende_lov"]["lov"])
 
     # Hva systemet FAKTISK er i stand til å fastslå ennå. Profilen hadde
     # fire «ikke bygget ennå»-nuller spredt rundt, hver med sin egen
     # kommentar i koden og ingen markør i JSON-en — en klient kunne ikke
     # skille «vi så etter og fant ingenting» fra «vi så aldri etter».
     profil["dekning"] = {
-        "ytelse": "delvis" if profil["ytelse"]["navn"] else "ingen",
-        "sakstype": "ingen",
-        "signatur_sider": "ingen",
-        "uleselige_sider": "ingen",
-        "forklaring": ("«ingen» betyr at systemet ikke leter etter feltet "
-                       "ennå — ikke at dokumentet mangler det. «delvis» "
-                       "betyr at noe fastslås, men ikke alt."),
+        "ytelse": "delvis" if profil["ytelse"]["navn"] else "ikke_evaluert",
+        "sakstype": "ikke_evaluert",
+        "signatur_sider": "ikke_evaluert",
+        "uleselige_sider": "ikke_evaluert",
+        "forklaring": ("«ikke_evaluert» betyr at systemet ikke leter "
+                       "etter feltet ennå — det sier INGENTING om "
+                       "dokumentet, og en klient skal ikke melde avvik. "
+                       "Feltet het «ingen», som i et API leses som «finnes "
+                       "ikke» — to helt ulike ting under ett ord. "
+                       "«delvis» betyr at noe fastslås, men ikke alt; "
+                       "«full» at et null-svar er en påstand om "
+                       "dokumentet."),
     }
     profil["sammendrag"] = _sammendrag(profil, len(profil["dokumenter"]))
     return profil

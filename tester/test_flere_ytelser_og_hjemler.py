@@ -54,7 +54,8 @@ def test_entallsfeltet_ligger_alltid_i_lista():
     """Et speil med samme krav som de øvrige: sier de to feltene ulike
     ting, er dupliseringen blitt en motsigelse."""
     profil = _profil()
-    assert profil["ytelse"]["navn"] in [y["kode"] for y in profil["ytelser"]]
+    assert profil["ytelse"]["navn"]["kode"] in [
+        y["kode"] for y in profil["ytelser"]]
 
 
 def test_entallsfeltet_er_den_mest_spesifikke_ikke_den_forste():
@@ -170,5 +171,5 @@ def test_hjemmel_finnes_selv_uten_en_eneste_henvisning():
     """`hjemmel` sier hvilken lov som GJALDT. Den er satt av datoen
     alene, og skal ikke forsvinne fordi dokumentet ikke siterer noe."""
     profil = _profil("Dokumentdato: 01.03.2024\nEt brev uten paragrafer.")
-    assert profil["hjemmel"]["lov"] == "ftrl-1997"
+    assert profil["gjeldende_lov"]["lov"] == "ftrl-1997"
     assert profil["hjemler"] == []

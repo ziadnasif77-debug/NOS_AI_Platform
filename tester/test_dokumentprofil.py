@@ -327,7 +327,8 @@ def test_ytelsesnavnet_hentes_men_reglene_er_ikke_paa_plass():
     inn i: når reglene lander, er de riktige verdiene «innvilget»,
     «lopende» og «opphort»."""
     profil = _profil("Vedtak om dagpenger\nDokumentdato: 01.03.2024")
-    assert profil["ytelse"]["navn"] == "dagpenger"
+    assert profil["ytelse"]["navn"] == {"kode": "dagpenger",
+                                        "term": "Dagpenger"}
     assert profil["ytelse"]["utfall"] is None
     assert profil["ytelse"]["status"] is None       # frigjort til domenet
     assert profil["dekning"]["ytelse"] == "delvis"
@@ -336,16 +337,16 @@ def test_ytelsesnavnet_hentes_men_reglene_er_ikke_paa_plass():
 def test_uten_ytelse_i_dokumentet_sies_det_at_reglene_mangler():
     profil = _profil("Et brev uten ytelse.\nDokumentdato: 01.03.2024")
     assert profil["ytelse"]["navn"] is None
-    assert profil["dekning"]["ytelse"] == "ingen"
+    assert profil["dekning"]["ytelse"] == "ikke_evaluert"
 
 
 def test_dekning_skiller_ikke_bygget_fra_ikke_funnet():
     """Fire felter var null fordi koden aldri leter etter dem, og fire
     fordi den lette og ikke fant. En klient kunne ikke se forskjellen."""
     dekning = _profil("")["dekning"]
-    assert dekning["sakstype"] == "ingen"
-    assert dekning["signatur_sider"] == "ingen"
-    assert dekning["uleselige_sider"] == "ingen"
+    assert dekning["sakstype"] == "ikke_evaluert"
+    assert dekning["signatur_sider"] == "ikke_evaluert"
+    assert dekning["uleselige_sider"] == "ikke_evaluert"
     assert "ikke leter etter" in dekning["forklaring"]
 
 
@@ -357,7 +358,7 @@ SEKSJONER = {
     "fil": ("filnavn", "antall_sider", "blanke_sider", "uleselige_sider"),
     "part": ("navn", "fnr", "fodselsdato", "fastslatt", "grunnlag",
              "begrunnelse"),
-    "dokument": ("type", "tittel", "sprak", "dato", "dato_norsk", "aarstall",
+    "dokument": ("type", "tittel", "sprak", "dato", "dato_original", "aarstall",
                  "alder", "dato_kilde", "dato_sikkerhet", "dato_begrunnelse",
                  "periode_start", "periode_slutt", "spenn_fra", "spenn_til",
                  "flere_dokumenter"),
@@ -366,12 +367,9 @@ SEKSJONER = {
     "ytelse": ("navn", "type", "utfall", "gyldig_fra", "gyldig_til",
                "status"),
     "okonomi": ("dagsats", "manedsbelop", "utbetalt_belop",
-                "tilbakebetalingsbelop", "utbetalingsdato",
-                "utbetalingsdato_norsk", "valuta", "valuta_merknad",
+                "tilbakebetalingsbelop", "utbetalingsdato", "valuta", "valuta_merknad",
                 "kontonummer", "kid"),
-    "arbeid": ("arbeidsgiver", "stilling", "stillingsprosent", "startdato",
-               "startdato_norsk", "sluttdato", "sluttdato_norsk",
-               "arsinntekt", "manedslonn", "organisasjonsnummer"),
+    "arbeid": ("arbeidsgiver", "stilling", "stillingsprosent", "startdato", "sluttdato", "arsinntekt", "manedslonn", "organisasjonsnummer"),
     "kontakt": ("telefoner", "eposter", "adresser"),
     "koder": ("lest", "qr", "strekkode", "qr_kode_side", "strekkode_side"),
     "visuelt": ("stempel_datoer", "stempel_sider", "signatur_sider",

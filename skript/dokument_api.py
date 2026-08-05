@@ -2348,7 +2348,11 @@ def _skjemaer() -> dict:
     # aldri traff sammendraget.
     KONFIDENS = ["hoy", "middels", "lav", "ingen"]
     # Hvor langt SYSTEMET er kommet — ikke hvor sikkert et funn er.
-    DEKNINGSGRAD = ["full", "delvis", "ingen"]
+    # «ingen» sto her og betydde «vi leter ikke etter feltet» — mens
+    # «ingen» i konfidensskalaen betyr «vi lette og fant ingenting».
+    # Samme ord, motsatt betydning: en klient som leste dekning-«ingen»
+    # som «dokumentet mangler signatur» bygget en beslutning på en løgn.
+    DEKNINGSGRAD = ["full", "delvis", "ikke_evaluert"]
 
     return {
         "Part": {
@@ -2716,19 +2720,31 @@ def _skjemaer() -> dict:
                         "til» er datospennet når filen er en BUNKE. De tre "
                         "er ulike ting"),
                     "properties": {
-                        "type": s(nullable=True, example="vedtak"),
-                        "type_kodet": {**ref("Kodet"), "nullable": True,
-                                       "description": "Samme verdi som "
-                                                      "«type», med et "
-                                                      "lesbart navn. null "
-                                                      "når typen ikke ble "
-                                                      "fastslått"},
+                        "type": {**ref("Kodet"), "nullable": True,
+                                 "description": "Koden er stabil og "
+                                                "maskinlesbar, termen er "
+                                                "for et menneske. HELE "
+                                                "paret er null når typen "
+                                                "ikke ble fastslått — "
+                                                "{kode: null} ville sagt at "
+                                                "det finnes en type som "
+                                                "bare mangler navn"},
                         "tittel": s(nullable=True),
                         "sprak": s(nullable=True),
                         "kontornavn": s(nullable=True),
                         "fylke": s(nullable=True),
                         "dato": s(nullable=True, example="2026-05-08"),
-                        "dato_norsk": s(nullable=True, example="08.05.2026"),
+                        "dato_original": s(
+                            nullable=True, example="8. mai 2026",
+                            description="Ordrett slik datoen STO i "
+                                        "dokumentet. «dato» er den "
+                                        "normaliserte formen. Feltet het "
+                                        "«dato_norsk» og var da en andre "
+                                        "RENDERING av den normaliserte "
+                                        "verdien — fem ulike skrivemåter ga "
+                                        "alle samme streng. Dette er "
+                                        "originalen, og det eneste man kan "
+                                        "kontrollere OCR mot"),
                         "aarstall": {"type": "integer", "nullable": True,
                                      "example": 2026},
                         "alder": {"type": "object", "nullable": True},
@@ -2753,25 +2769,22 @@ def _skjemaer() -> dict:
                         "vedtaksnummer": s(nullable=True),
                         "dokumentnummer": s(nullable=True),
                         "referanse": s(nullable=True),
-                        "sakstype": s(nullable=True,
-                                      description="Kommer sammen med "
-                                                  "ytelsesreglene"),
-                        "sakstype_kodet": {**ref("Kodet"), "nullable": True}}},
+                        "sakstype": {**ref("Kodet"), "nullable": True,
+                                     "description": "Kommer sammen med "
+                                                    "ytelsesreglene"}}},
                 "ytelse": {
                     "type": "object",
                     "description": "Ytelsesreglene kommer senere. «navn» "
                                    "hentes av den ene detektoren som "
                                    "finnes",
                     "properties": {
-                        "navn": s(nullable=True, example="dagpenger"),
-                        "navn_kodet": {**ref("Kodet"), "nullable": True,
-                                       "description": "Termen sier også "
-                                                      "når en ytelse er "
-                                                      "HISTORISK: et vedtak "
-                                                      "fra 1994 om "
-                                                      "«uførepensjon» "
-                                                      "gjaldt ikke dagens "
-                                                      "uføretrygd"},
+                        "navn": {**ref("Kodet"), "nullable": True,
+                                 "description": "Termen sier også når en "
+                                                "ytelse er HISTORISK: et "
+                                                "vedtak fra 1994 om "
+                                                "«uførepensjon» gjaldt ikke "
+                                                "dagens uføretrygd, som har "
+                                                "andre vilkår"},
                         "type": s(nullable=True),
                         "utfall": s(nullable=True,
                                     description="innvilget/avslatt/endret/"
@@ -2815,17 +2828,22 @@ def _skjemaer() -> dict:
                         "bety to ting: dokumentet mangler opplysningen, "
                         "eller lesingen er ikke bygget. «ingen» ⇒ null "
                         "sier ingenting om DOKUMENTET, og en klient skal "
-                        "ikke melde avvik"),
+                        "ikke melde avvik. «ikke_evaluert» er IKKE det "
+                        "samme som konfidens-«ingen», som betyr at vi lette "
+                        "og ikke fant"),
                     "properties": {
                         "ytelse": s(enum=DEKNINGSGRAD),
                         "sakstype": s(enum=DEKNINGSGRAD),
                         "signatur_sider": s(enum=DEKNINGSGRAD),
                         "uleselige_sider": s(enum=DEKNINGSGRAD),
                         "forklaring": s()}},
-                "hjemmel": {
+                "gjeldende_lov": {
                     "type": "object",
                     "description": (
                         "R77/R78: hvilken folketrygdlov som gjaldt DA "
+                        "dokumentet ble skrevet. AVLEDET av "
+                        "dokumentets dato — ikke noe dokumentet "
+                        "påberoper seg; det ligger i «hjemler». "
                         "dokumentet ble skrevet. Det finnes to — 1966 og "
                         "1997 — og de samme kapittelnumrene betyr ULIKE "
                         "ting i dem. Valget følger dokumentdatoen (skillet "
@@ -5076,6 +5094,12 @@ class Handler(BaseHTTPRequestHandler):
         # gjelder er egenskaper ved dokumentet selv, ikke svar på et
         # spørsmål, og en klient skal ikke måtte be om dem for å få dem.
         profil = trygt(lambda: _profilform(ktx.profil, profilform))
+        # Revisjonen fant at de tre veiene til samme faktum FAKTISK var
+        # uenige i et ekte svar, og konkluderte med å beholde alle tre —
+        # de har ulik garanti. Men uenigheten ble aldri MELDT, så en
+        # klient måtte oppdage den selv. Nå sier vi fra.
+        advarsler.extend(
+            trygt(lambda: _uenighet_med_modellen(ktx.profil, deler)) or [])
         # Kartet er en PROJEKSJON av feltene profilen alt har fylt — ikke
         # en ny beregning. Ellers ville «opphav» blitt en sjette
         # uavhengig mening om det samme, altså problemet det løser.
@@ -6337,7 +6361,45 @@ _VARSELTYPER = (
     (re.compile(r"(?i)h[åa]ndskrevet|bildekvalitet|utbrent"), "lesekvalitet", "advarsel"),
     (re.compile(r"(?i)hoppet over|utelatt|budsjettet"), "utelatt", "advarsel"),
     (re.compile(r"(?i)strekkode|qr"), "koder", "info"),
+    (re.compile(r"(?i)uenige om"), "uenighet", "advarsel"),
 )
+
+
+def _uenighet_med_modellen(profil, deler) -> list:
+    """Advarer når modellen og det DETERMINISTISKE uttrekket sier ulike
+    ting om samme faktum.
+
+    Revisjonen fant at de tre veiene til et fødselsnummer eller navn
+    (`part`, `svar.svar`, `skjema.skjema`) faktisk VAR uenige i et ekte
+    svar: «NOR-ETTERNAVN, OLA» mot «Ola Nordmann». Konklusjonen var å
+    beholde alle tre — de har ulik garanti, og en sammenslåing ville
+    slettet nettopp signalet.
+
+    Men signalet ble aldri MELDT. En klient måtte sammenligne selv, og
+    gjorde det ikke. Her er det deterministiske fasit: står det et
+    bevist fødselsnummer i profilen og modellen skrev et annet, er det
+    modellen som tar feil."""
+    skjema = (deler or {}).get("skjema")
+    if not isinstance(skjema, dict) or not isinstance(skjema.get("skjema"), dict):
+        return []
+    fylt = skjema["skjema"]
+    kilde = skjema.get("kilde_per_felt") or {}
+    part = (profil or {}).get("part") or {}
+
+    ut = []
+    for felt, bevist in (("fnr", part.get("fnr")),
+                         ("fodselsnummer", part.get("fnr")),
+                         ("navn", part.get("navn"))):
+        modellens = fylt.get(felt)
+        if not bevist or not modellens or kilde.get(felt) != "modell":
+            continue
+        if str(modellens).strip() != str(bevist).strip():
+            ut.append(
+                f"Modellen og uttrekket er uenige om «{felt}»: modellen "
+                f"skrev {modellens!r}, mens det deterministiske uttrekket "
+                f"fant {bevist!r}. Uttrekket er bevist (etikett/mod11); "
+                f"modellens verdi er ikke.")
+    return ut
 
 
 def _profilform(profil: dict, form: str) -> dict:

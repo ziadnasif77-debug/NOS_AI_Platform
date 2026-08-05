@@ -238,23 +238,59 @@ def test_ingen_term_uten_en_kode_a_hore_til():
     assert not sorted(set(DOKUMENTTYPE_TERM) - {k for k, _ in _DOKUMENTTYPER})
 
 
-def test_kodet_par_og_ra_verdi_kan_ikke_avvike():
-    """`type` og `type_kodet.kode` er samme faktum to steder — nok et
-    speil, med samme krav som de andre."""
+def test_kategoriverdien_ER_paret_ikke_et_par_ved_siden_av():
+    """`type` og `type_kodet` bar ALLTID samme kode — speiltesten som
+    håndhevet det var beviset på at paret var en kopi av seg selv. Nå ER
+    verdien paret."""
     profil = _profil()
-    assert profil["dokument"]["type_kodet"]["kode"] == profil["dokument"]["type"]
-    if profil["ytelse"]["navn"]:
-        assert (profil["ytelse"]["navn_kodet"]["kode"]
-                == profil["ytelse"]["navn"])
+    assert set(profil["dokument"]["type"]) == {"kode", "term"}
+    assert profil["dokument"]["type"]["kode"] == "vedtak"
+    assert profil["dokument"]["type"]["term"] == "Vedtak"
+    som_tekst = json.dumps(profil, ensure_ascii=False)
+    for gammelt in ("type_kodet", "sakstype_kodet", "navn_kodet"):
+        assert gammelt not in som_tekst, f"«{gammelt}» finnes ennå"
 
 
-def test_uten_verdi_er_det_kodede_paret_null_ikke_et_tomt_par():
+def test_uten_verdi_er_hele_paret_null():
     """`{"kode": null, "term": null}` ville sagt at det FINNES en type
-    som bare mangler navn. Null sier at typen ikke ble fastslått."""
+    som bare mangler navn."""
     tom = api.DokumentKontekst("Helt tom tekst uten kjennetegn.",
                                antall_sider=1).profil
-    assert tom["dokument"]["type_kodet"] is None
-    assert tom["ytelse"]["navn_kodet"] is None
+    assert tom["dokument"]["type"] is None
+    assert tom["ytelse"]["navn"] is None
+
+
+def test_ingen_presentasjonstvillinger():
+    """`dato_norsk` var en andre RENDERING av den normaliserte verdien:
+    «28. mai 2026», «28/05/2026», «2026-05-28» og «28.5.26» ga ALLE
+    samme tvilling «28.05.2026». Et API som leverer ISO skal ikke også
+    formatere — det gjør det ansvarlig for presentasjon i stedet for
+    data."""
+    assert "_norsk" not in json.dumps(_profil(), ensure_ascii=False),         "en presentasjonstvilling har sneket seg inn igjen"
+
+
+def test_originalen_er_ordrett_ikke_normalisert():
+    """Det som MANGLET da tvillingen forsvant: hva som faktisk STO i
+    dokumentet. Leser OCR «28. mai 2026», vil du se det — ikke den
+    normaliserte formen om igjen."""
+    dok = api.DokumentKontekst("Dokumentdato: 28. mai 2026",
+                               antall_sider=1).profil["dokument"]
+    assert dok["dato"] == "2026-05-28"
+    assert dok["dato_original"] == "28. mai 2026"
+
+
+def test_dekning_og_konfidens_bruker_IKKE_samme_ord():
+    """Den farligste sammenblandingen. «ingen» i dekning betød «vi leter
+    ikke etter feltet»; «ingen» i konfidens betyr «vi lette og fant
+    ingenting» — en påstand om DOKUMENTET. Samme ord, motsatt
+    betydning: en klient som leste dekning-«ingen» som «mangler
+    signatur» bygget en beslutning på en løgn."""
+    profil = _profil()
+    for verdi in profil["dekning"].values():
+        if isinstance(verdi, str) and not verdi.startswith("«"):
+            assert verdi in ("full", "delvis", "ikke_evaluert"), verdi
+    assert profil["dokument"]["dato_sikkerhet"] in ("hoy", "middels",
+                                                    "lav", "ingen")
 
 
 def test_dekningsgraden_folger_om_ytelsen_faktisk_ble_funnet():
@@ -351,3 +387,50 @@ def test_hver_dokumentert_bryter_godtas_av_serveren():
     assert not ukjente, (
         f"OpenAPI lover disse bryterne, men serveren kjenner dem ikke: "
         f"{ukjente}")
+
+
+# ------------------------------------------------------------------ #
+#  5. Når modellen og uttrekket er uenige, SIER vi fra                 #
+# ------------------------------------------------------------------ #
+
+def test_uenighet_mellom_modell_og_uttrekk_meldes():
+    """Revisjonen fant at de tre veiene til samme faktum FAKTISK var
+    uenige i et ekte svar — «NOR-ETTERNAVN, OLA» mot «Ola Nordmann» —
+    og konkluderte med å beholde alle tre, fordi de har ulik garanti og
+    en sammenslåing ville slettet nettopp signalet.
+
+    Men signalet ble aldri MELDT. En klient måtte sammenligne selv, og
+    gjorde det ikke. Det deterministiske uttrekket er fasit: det er
+    bevist med etikett og mod11, modellens verdi er ikke."""
+    fnr = lag_fnr(0)
+    profil = {"part": {"fnr": fnr, "navn": "Ola Nordmann"}}
+    deler = {"skjema": {"skjema": {"navn": "NOR-ETTERNAVN, OLA"},
+                        "kilde_per_felt": {"navn": "modell"}}}
+    varsel = api._uenighet_med_modellen(profil, deler)
+    assert len(varsel) == 1
+    assert "uenige om «navn»" in varsel[0]
+    assert "Ola Nordmann" in varsel[0]
+
+
+def test_enighet_gir_ingen_stoy():
+    fnr = lag_fnr(0)
+    profil = {"part": {"fnr": fnr, "navn": "Ola Nordmann"}}
+    deler = {"skjema": {"skjema": {"navn": "Ola Nordmann"},
+                        "kilde_per_felt": {"navn": "modell"}}}
+    assert api._uenighet_med_modellen(profil, deler) == []
+
+
+def test_et_deterministisk_felt_sammenlignes_ikke_med_seg_selv():
+    """Fylte den hybride motoren feltet DETERMINISTISK, er det samme
+    kilde som profilen — da er «uenighet» meningsløst."""
+    profil = {"part": {"fnr": None, "navn": "Ola Nordmann"}}
+    deler = {"skjema": {"skjema": {"navn": "noe helt annet"},
+                        "kilde_per_felt": {"navn": "deterministisk"}}}
+    assert api._uenighet_med_modellen(profil, deler) == []
+
+
+def test_varselet_faar_sin_egen_type():
+    """«uenighet» skal kunne filtreres på uten tekstsøk."""
+    typer = {v["kode"] for v in api._varsler(
+        ["Modellen og uttrekket er uenige om «navn»: …"])}
+    assert "uenighet" in typer

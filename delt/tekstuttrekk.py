@@ -587,7 +587,8 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
                            kilde, d))
     if not kandidater:
         return {
-            "dato": None, "type": None, "kilde": None, "konfidens": "ingen",
+            "dato": None, "raatekst": None,
+            "type": None, "kilde": None, "konfidens": "ingen",
             "begrunnelse": ("Fant ingen dato som kan knyttes til dokumentet "
                             "selv — verken etikett (vedtaksdato/utstedt/"
                             "signert), dato øverst på side 1, dato ved en "
@@ -642,6 +643,10 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
 
     return {
         "dato": beste["dato"],
+        # Slik datoen STO i dokumentet, ordrett. Den normaliserte formen
+        # er den man regner med; originalen er den man kontrollerer mot
+        # når OCR er tvilsom.
+        "raatekst": beste.get("raatekst"),
         "type": beste.get("type"),
         # kodet par {kode, term} i tillegg til den rå «type»-strengen
         "type_kodet": kodeverk(beste.get("type"), _TYPE_TERM),

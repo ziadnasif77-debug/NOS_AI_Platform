@@ -258,7 +258,7 @@ def test_hjemmelen_folger_dokumentets_alder(tekst, lov, status):
     """Et vedtak fra 1994 skal leses mot loven som gjaldt DA — ikke mot
     dagens. Den gamle loven er hjemmelen for vedtak som fortsatt har
     virkning."""
-    hjemmel = _profil(tekst)["hjemmel"]
+    hjemmel = _profil(tekst)["gjeldende_lov"]
     assert hjemmel["lov"] == lov
     assert hjemmel["status"] == status
 
@@ -270,13 +270,13 @@ def test_samme_ytelse_gir_ULIKT_kapittel_i_de_to_lovene():
     alder ville det ene svaret vært feil — og sett riktig ut."""
     gammel = _profil("Vedtak om sykepenger\nVedtaksdato: 12.03.1994")
     ny = _profil("Vedtak om sykepenger\nVedtaksdato: 12.03.2026")
-    assert gammel["hjemmel"]["ytelse_kapittel"] == "3"
-    assert ny["hjemmel"]["ytelse_kapittel"] == "8"
+    assert gammel["gjeldende_lov"]["ytelse_kapittel"] == "3"
+    assert ny["gjeldende_lov"]["ytelse_kapittel"] == "8"
 
 
 @trenger_tekst
 def test_hjemmel_uten_dokumentdato_velger_ikke_lov():
-    hjemmel = _profil("Vedtak om sykepenger uten dato.")["hjemmel"]
+    hjemmel = _profil("Vedtak om sykepenger uten dato.")["gjeldende_lov"]
     assert hjemmel["lov"] is None
     assert "ukjent" in hjemmel["begrunnelse"].lower()
 

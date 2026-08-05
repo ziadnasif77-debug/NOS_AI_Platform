@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R108 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R115 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -230,9 +230,10 @@ stedet for når noe brekker. Se
   ],
 
   "dokument": {
-    "type": "vedtak", "tittel": "Vedtak om dagpenger", "sprak": "norsk",
+    "type": {"kode": "vedtak", "term": "Vedtak"},
+    "tittel": "Vedtak om dagpenger", "sprak": "norsk",
     "kontornavn": "NAV Arbeid", "fylke": "Oslo",
-    "dato": "2026-05-08", "dato_norsk": "08.05.2026", "aarstall": 2026,
+    "dato": "2026-05-08", "dato_original": "8. mai 2026", "aarstall": 2026,
     "alder": {"dager": 89, "tekst": "2 måneder gammelt", "fremtidig": false},
     "dato_kilde": "etikett", "dato_sikkerhet": "hoy",
     "dato_begrunnelse": "etiketten «Vedtaksdato» står rett før datoen",
@@ -245,11 +246,13 @@ stedet for når noe brekker. Se
             "vedtaksnummer": "55/9911", "dokumentnummer": null,
             "referanse": null, "sakstype": null},
 
-  "ytelse": {"navn": "dagpenger", "type": null, "utfall": null,
+  "ytelse": {"navn": {"kode": "dagpenger", "term": "Dagpenger"},
+             "type": null, "utfall": null,
              "gyldig_fra": null, "gyldig_til": null, "status": null},
 
-  "dekning": {"ytelse": "delvis", "sakstype": "ingen",
-              "signatur_sider": "ingen", "uleselige_sider": "ingen",
+  "dekning": {"ytelse": "delvis", "sakstype": "ikke_evaluert",
+              "signatur_sider": "ikke_evaluert",
+              "uleselige_sider": "ikke_evaluert",
               "forklaring": "«ingen» betyr at systemet ikke leter etter feltet ennå …"},
 
   "okonomi": {"dagsats": 1234.00, "manedsbelop": 24680.00,
@@ -437,7 +440,12 @@ lesingen. Forskjellen avgjør om en klient skal melde avvik eller vente.
 |---|---|
 | `full` | Feltet leses, og `null` betyr at dokumentet mangler det |
 | `delvis` | Noe fastslås, ikke alt |
-| `ingen` | Systemet leter ikke etter feltet ennå — `null` sier ingenting om dokumentet |
+| `ikke_evaluert` | Systemet leter ikke etter feltet ennå — `null` sier ingenting om dokumentet |
+
+Verdien het `ingen` og kolliderte med konfidensskalaens `ingen`, som
+betyr det MOTSATTE: «vi lette og fant ingenting», altså en påstand om
+dokumentet. En klient som leste dekning-`ingen` som «mangler signatur»
+bygget en beslutning på en løgn (R112).
 
 ### Sidespørsmål besvares av KODEN
 
