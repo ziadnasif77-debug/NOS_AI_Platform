@@ -131,8 +131,8 @@ uttrekket — samme finnere som `/sladd` og `koordinater=ja`:
 | Spørsmål | Svar |
 |---|---|
 | `hva er KID?` | `1002345678911` |
-| `hva er kontonummeret?` | `2 kontonummer: 15031000006, 60111000002` |
-| `hva er fødselsnummeret?` | `2 fødselsnummer: 14837840059, 02919140189` |
+| `hva er kontonummeret?` | `2 kontonummer: 12345678910, 12345678910` |
+| `hva er fødselsnummeret?` | `2 fødselsnummer: 12345678910, 12345678910` |
 | `hva er kontonummeret på side 2?` | bare side 2 sitt |
 
 Dekker `fødselsnummer`, `kontonummer`, `organisasjonsnummer`, `KID`

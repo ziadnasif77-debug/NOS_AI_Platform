@@ -18,12 +18,12 @@
   },
   "felter_maa_inneholde": {
     "struktur.identifikatorer.fodselsnummer": [
-      "14837840059",
-      "02919140189"
+      "12345678910",
+      "12345678910"
     ],
     "struktur.identifikatorer.kontonummer": [
-      "15031000006",
-      "60111000002"
+      "12345678910",
+      "12345678910"
     ],
     "struktur.kontakt.telefoner": [
       "41288903"

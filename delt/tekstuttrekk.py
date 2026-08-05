@@ -596,14 +596,14 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
     }
 
 
-# Brukerdefinerte etiketter fra egne_etiketter.txt i prosjektroten:
+# Brukerdefinerte etiketter fra regler/egne_etiketter.txt:
 # «ord = type» per linje — eller «ord = type = rolle» når etiketten er
 # dokumentets EGEN dato (rolle: dokument/innhold/behandling). Nye
 # dokumenttyper med nye ord krever dermed ALDRI kodeendring — én linje i
 # en tekstfil, uten omstart.
-_EGNE_ETIKETTER_STI = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "egne_etiketter.txt")
+from delt.prompter import regelfil as _regelfil
+
+_EGNE_ETIKETTER_STI = _regelfil("egne_etiketter.txt")
 _egne_etiketter_cache = {"mtime": None, "liste": [], "roller": {}}
 _GYLDIGE_ROLLER = (ROLLE_DOKUMENT, ROLLE_INNHOLD, ROLLE_BEHANDLING)
 
@@ -619,7 +619,10 @@ def _les_egne_etiketter() -> None:
         return
     liste, roller = [], {}
     try:
-        with open(_EGNE_ETIKETTER_STI, encoding="utf-8") as f:
+        # utf-8-sig: en fil lagret fra Notepad får BOM, og uten -sig
+        # havner den usynlig først på linje én — da slipper en
+        # kommentarlinje forbi «startswith('#')»-filteret
+        with open(_EGNE_ETIKETTER_STI, encoding="utf-8-sig") as f:
             for linje in f:
                 linje = linje.strip()
                 if not linje or linje.startswith("#") or "=" not in linje:
@@ -1229,13 +1232,13 @@ def _opptatte_omraader(tekst: str) -> tuple:
 
 
 def _tallkandidater(tekst: str, lengde: int):
-    """Alle sifferstrenger av gitt lengde uansett gruppering — «180527
-    422 30», «1805.27.44230» og «18052744230» er samme kandidat.
+    """Alle sifferstrenger av gitt lengde uansett gruppering — «123456
+    789 10», «1234.56.78910» og «12345678910» er samme kandidat.
 
     VAKT: kandidaten forkastes hvis den overlapper en DATO eller et
     BELØP. Mønsteret tillater et skilletegn mellom hvert sifferpar og
     skilte derfor ikke mellom sifre i SAMME tall og to NABOTALL:
-    «Vedtak datert 01.01.2024 114 kroner» ble limt til «01012024114»,
+    «Vedtak datert 01.01.2024 114 kroner» ble limt til «12345678910»,
     som består mod11 — og ble rapportert som et gyldig FØDSELSNUMMER.
     Det oppdiktede nummeret gikk videre inn i prompten merket
     «KONTROLLERT av kode (sjekksum/format)» og havnet i fnr-feltet i
@@ -1263,7 +1266,7 @@ def _tallkandidater_med_posisjon(tekst: str, lengde: int):
 
 
 # Etiketter som avgjør hva et 11-sifret tall ER når BEGGE sjekksummene
-# stemmer. Reelt tilfelle fra testbunken: refusjonskontoen 60111000002
+# stemmer. Reelt tilfelle fra testbunken: refusjonskontoen 12345678910
 # består OGSÅ fnr-kontrollen (gyldig som D-nummer), så fnr-presedensen
 # «stjal» den — den ble rapportert som fødselsnummer og MANGLET i
 # kontonummerlista. Etiketten («kontonummer:») foran står i dokumentet

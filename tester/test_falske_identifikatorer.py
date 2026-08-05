@@ -3,8 +3,10 @@ Regresjonstester for den ALVORLIGSTE feilen systemrevisjonen fant:
 sifferskanningen limte sammen NABOTALL og produserte oppdiktede, men
 mod11-GYLDIGE fødselsnummer og organisasjonsnummer.
 
-«Vedtak datert 01.01.2024 114 kroner» ble til «01012024114». Det består
-mod11, så ingen validering stoppet det. Nummeret gikk videre inn i
+«Vedtak datert 01.01.2024 114 kroner» ble limt til ETT ellevesifret tall
+(datoen + tallet etter). Det besto mod11, så ingen validering stoppet
+det — tallet skrives ikke her, nettopp fordi det SER ut som et ekte
+fødselsnummer. Nummeret gikk videre inn i
 prompten merket «KONTROLLERT av kode (sjekksum/format) — bruk disse i
 felter som ber om dem», og havnet i fødselsnummerfeltet i
 skjemautfyllingen. Merkingen desarmerte nettopp den menneskelige
@@ -16,20 +18,23 @@ Vakten: en kandidat forkastes hvis den overlapper en dato eller et beløp.
 Testene her holder BEGGE sider fast — de oppdiktede skal bli borte, og
 alle de ekte grupperingene skal fortsatt finnes.
 """
+import os
 import sys
 
 import pytest
 
 sys.path.insert(0, ".")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr,
                                finn_alle_fodselsnummer,
                                finn_alle_kontonummer,
                                finn_alle_organisasjonsnummer,
                                strukturert_uttrekk)
+from syntetiske_nummer import lag_fnr
 
-# Verifisert mod11-gyldig (syntetisk, ikke en reell person)
-GYLDIG_FNR = "18052744241"
+# Bygges på kjøretid, så ingen ellevesifret verdi står i fila
+GYLDIG_FNR = lag_fnr()
 GYLDIG_ORGNR = "923609016"
 
 

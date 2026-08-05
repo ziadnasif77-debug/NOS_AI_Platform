@@ -14,15 +14,18 @@ Reglene som testes:
     KUN den siden
   * kilde/modell_brukt sier ærlig at modellen ikke ble brukt
 """
+import os
 import sys
 import types
 
 sys.path.insert(0, ".")
 sys.path.insert(0, "skript")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pytest
 
 import dokument_api as api
+from syntetiske_nummer import lag_fnr, lag_kontonummer
 
 BUNKE = ("[Side 1 av 3]\nVedtak om sykepenger\nSaksnummer: 4417820\n"
          "[Side 2 av 3]\nBeloep aa betale kr 4 812,00\nForfallsdato 24.06.2026\n"
@@ -262,13 +265,17 @@ def test_strekkodesporsmal_virker_uten_borealis(monkeypatch):
 #  Sjekksumvaliderte identifikatorer svares av uttrekket               #
 # ------------------------------------------------------------------ #
 
-# Bunken har TO fødselsnumre og TO kontonumre — modellen ville valgt ett
+# Bunken har TO fødselsnumre og TO kontonumre — modellen ville valgt ett.
+# Numrene bygges på kjøretid (tester/syntetiske_nummer.py), så ingen
+# ellevesifret verdi står i fila.
+FNR_1, FNR_2 = lag_fnr(0), lag_fnr(1)
+KONTO_1, KONTO_2 = lag_kontonummer(0), lag_kontonummer(1)
 IDENT_TEKST = (
-    "[Side 1 av 2]\nFoedselsnummer: 14837840059\n"
-    "Kontonummer: 15031000006\nKID-nummer 1002345678911\n"
+    f"[Side 1 av 2]\nFoedselsnummer: {FNR_1}\n"
+    f"Kontonummer: {KONTO_1}\nKID-nummer 1002345678911\n"
     "Organisasjonsnummer: 889000007\n"
-    "[Side 2 av 2]\nFoedselsnummer: 02919140189\n"
-    "Refusjon utbetales til kontonummer: 60111000002")
+    f"[Side 2 av 2]\nFoedselsnummer: {FNR_2}\n"
+    f"Refusjon utbetales til kontonummer: {KONTO_2}")
 
 
 @pytest.mark.parametrize("sporsmal,felt", [
@@ -308,14 +315,14 @@ def test_alle_forekomster_listes_ikke_bare_en(monkeypatch):
     _forby_modell(monkeypatch)
     kjerne = api.svar_paa_sporsmal(IDENT_TEKST, "hva er foedselsnummeret?",
                                    False, [], [])
-    assert "14837840059" in kjerne["svar"]
-    assert "02919140189" in kjerne["svar"]
+    assert FNR_1 in kjerne["svar"]
+    assert FNR_2 in kjerne["svar"]
     assert kjerne["svar"].startswith("2 ")
 
     kjerne = api.svar_paa_sporsmal(IDENT_TEKST, "hva er kontonummeret?",
                                    False, [], [])
-    assert "15031000006" in kjerne["svar"]
-    assert "60111000002" in kjerne["svar"]
+    assert KONTO_1 in kjerne["svar"]
+    assert KONTO_2 in kjerne["svar"]
 
 
 def test_identsporsmal_respekterer_side(monkeypatch):
@@ -324,8 +331,8 @@ def test_identsporsmal_respekterer_side(monkeypatch):
     kjerne = api.svar_paa_sporsmal(IDENT_TEKST,
                                    "hva er kontonummeret paa side 2?",
                                    False, [], [])
-    assert kjerne["svar"] == "60111000002"
-    assert "15031000006" not in kjerne["svar"]
+    assert kjerne["svar"] == KONTO_2
+    assert KONTO_1 not in kjerne["svar"]
 
 
 def test_ingen_gyldig_identifikator_sies_aerlig(monkeypatch):
@@ -333,7 +340,7 @@ def test_ingen_gyldig_identifikator_sies_aerlig(monkeypatch):
     forklarer hvorfor, i stedet for å la modellen gjette et tall."""
     _forby_modell(monkeypatch)
     kjerne = api.svar_paa_sporsmal(
-        "[Side 1 av 1]\nReferanse 12345678901 i saken", 
+        "[Side 1 av 1]\nReferanse 12345678910 i saken", 
         "hva er foedselsnummeret?", False, [], [])
     assert kjerne["modell_brukt"] is False
     assert "Fant ingen" in kjerne["svar"]

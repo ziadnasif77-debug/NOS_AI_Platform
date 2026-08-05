@@ -1,0 +1,22 @@
+# ================================================================
+#  DINE EGNE REGLER for svar fra /spor (Borealis)
+# ================================================================
+#  - Skriv én regel per linje, på norsk.
+#  - Linjer som starter med # ignoreres (kommentarer).
+#  - Endringer virker UMIDDELBART — ingen omstart av serveren.
+#  - Reglene legges inn i prompten FØR kjernereglene i
+#    regler/prompter.md, slik at kjernereglene alltid får siste
+#    ord (R8.1). De kan ikke oppheve tallvakten — den er kode,
+#    ikke prompt.
+#  - Gjelder KUN formen på svaret: stil, språk, oppsett. Fakta,
+#    tall og datoer hentes fra dokumentet uansett hva som står her.
+#  - Maks 20 regler à 200 tegn. Linjer som prøver å overstyre
+#    kjernereglene eller be om utregning, avvises og logges.
+#
+#  Eksempler (fjern # for å aktivere):
+# Svar alltid med hele setninger.
+# Datoer skal alltid gjengis som dd.mm.åååå.
+# Hvis dokumentet er en kvittering, nevn alltid hvem som er betaler.
+# Svar på nynorsk.
+
+Skriv beløp alltid med valutakode, f.eks. NOK 268,00.

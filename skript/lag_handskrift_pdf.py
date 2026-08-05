@@ -22,7 +22,7 @@ LINJER = [
     "Søknad om dagpenger",
     "",
     "Navn: Ola Nordmann",
-    "Fødselsnummer: 15027312345",
+    "Fødselsnummer: 12345678910",
     "Adresse: Storgata 12, 0181 Oslo",
     "Dato: 12. mars 2024",
     "Telefon: 45 12 00 33",

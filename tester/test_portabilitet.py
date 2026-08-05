@@ -93,7 +93,12 @@ def test_sitecustomize_paatvinger_ikke_offline():
 def test_ingen_arabiske_tegn_i_kildekoden():
     """Regel: all kode er på norsk. Et arabisk ord som sniker seg inn
     skal erstattes umiddelbart — denne testen fanger det. Dekker skript,
-    delt, tester, launchere og dokumentasjon."""
+    delt, tester, launchere og dokumentasjon.
+
+    Regelfilene i regler/ er med av en grunn: egne_regler.txt hadde vært
+    innom feil tegnsett (cp1256) og fått arabiske bokstaver midt i
+    «beløp» — og den fila går rett inn i prompten. Vakten så bare .py og
+    .bat, så ingen oppdaget det."""
     import glob
     monster = None
     arabisk = [chr(c) for c in range(0x0600, 0x0700)]  # arabisk unicode-blokk
@@ -101,7 +106,8 @@ def test_ingen_arabiske_tegn_i_kildekoden():
     funn = []
     filer = []
     for m in ("skript/*.py", "delt/*.py", "tester/*.py", "portabilitet/*.py",
-              "oppstart/*.bat", "*.bat", "*.py", "CLAUDE.md"):
+              "oppstart/*.bat", "*.bat", "*.py", "CLAUDE.md",
+              "regler/*", "docs/*.md", "*.md", "*.txt"):
         filer += glob.glob(os.path.join(ROT, m))
     for f in filer:
         try:
@@ -112,6 +118,41 @@ def test_ingen_arabiske_tegn_i_kildekoden():
         except (OSError, UnicodeDecodeError):
             continue
     assert funn == [], f"arabiske tegn i koden (skal være norsk): {funn[:10]}"
+
+
+# ---------- ingen identifikatorlignende tall i kildekoden ----------
+def test_ingen_ellevesifrede_tall_i_kildekoden():
+    """Elleve siffer er formen på et norsk fødselsnummer og et
+    kontonummer. Uansett hvor syntetisk et slikt tall er ment å være,
+    ser det ekte ut for den som leser repoet — og et syntetisk nummer
+    med gyldig mod11 kan tilfeldigvis tilhøre en virkelig person.
+
+    Trenger en test et GYLDIG nummer, bygges det på kjøretid med
+    `tester/syntetiske_nummer.py`. Trengs bare en plassholder, brukes
+    det ene tillatte tallet."""
+    import glob
+    import re
+    TILLATT = "12345678910"
+    monster = re.compile(r'(?<![0-9])[0-9]{11}(?![0-9])')
+    funn = []
+    filer = []
+    for m in ("skript/*.py", "delt/*.py", "tester/*.py", "portabilitet/*.py",
+              "tester/korpus/*", "regler/*", "docs/*.md", "*.md", "*.txt",
+              "*.py", "*.bat", "oppstart/*.bat"):
+        filer += glob.glob(os.path.join(ROT, m))
+    for f in sorted(set(filer)):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                for nr, linje in enumerate(fh, 1):
+                    for treff in monster.findall(linje):
+                        if treff != TILLATT:
+                            funn.append(f"{os.path.relpath(f, ROT)}:{nr} "
+                                        f"({treff[:3]}…)")
+        except (OSError, UnicodeDecodeError):
+            continue
+    assert funn == [], (
+        f"ellevesifrede tall i kildekoden — bruk "
+        f"tester/syntetiske_nummer.py eller {TILLATT}: {funn[:10]}")
 
 
 # ---------- ingen hardkodet C: i driftskoden ----------

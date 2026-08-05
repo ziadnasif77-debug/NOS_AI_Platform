@@ -67,7 +67,7 @@ def test_bevist_identifikator_sladdes(tekst, type_):
 
 
 def test_gruppert_fnr_sladdes_helt():
-    """«010190 12345»-formen: hele det grupperte området må bort, ikke
+    """«123456 78910»-formen: hele det grupperte området må bort, ikke
     bare de sammenhengende sifrene."""
     gruppert = FNR[:6] + " " + FNR[6:]
     sladdet, _ = sladd_tekst(f"fnr {gruppert} slutt")
@@ -106,8 +106,8 @@ def test_lovlig_innhold_sladdes_ikke(tekst):
 def test_ugyldig_fnr_sladdes_ikke():
     """11 sifre som IKKE består mod11 er ikke et fødselsnummer — å
     sladde det ville skjult f.eks. et referansenummer."""
-    sladdet, antall = sladd_tekst("referanse 12345678901 i saken")
-    assert "12345678901" in sladdet
+    sladdet, antall = sladd_tekst("referanse 12345678910 i saken")
+    assert "12345678910" in sladdet
     assert antall == {}
 
 

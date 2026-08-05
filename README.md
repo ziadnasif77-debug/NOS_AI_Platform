@@ -110,10 +110,12 @@ Detaljer: [docs/endepunkter.md](docs/endepunkter.md).
   (PDF-punkter).
 - **Borealis 4B** (Nasjonalbibliotekets GGUF Q8 via llama.cpp/CUDA):
   filhash-cache gjør oppfølgingsspørsmål på samme dokument øyeblikkelige.
-- **Brukerstyrt uten kodeendring:** [egne_regler.txt](egne_regler.txt)
-  (svarstil) og [egne_etiketter.txt](egne_etiketter.txt) (nye
-  dato-etiketter) leses umiddelbart — nye dokumenttyper krever aldri
-  kodefiks.
+- **Alle regler ett sted:** mappa [regler/](regler/) styrer hva modellen
+  svarer — [prompter.md](regler/prompter.md) (all prompttekst, ingen
+  ligger i koden), [egne_regler.txt](regler/egne_regler.txt) (svarstil)
+  og [egne_etiketter.txt](regler/egne_etiketter.txt) (nye dato-etiketter).
+  Alle tre leses umiddelbart, uten omstart — nye dokumenttyper og nye
+  regler krever aldri kodefiks. Se [regler/LES_MEG.md](regler/LES_MEG.md).
 - **Sikkerhet:** valgfri `X-API-Key` (`API_NOKKEL`), CORS av som standard
   (`CORS_ORIGINS`), rate-limiting per klient (`RATE_LIMIT_PER_MIN`, standard
   120/min), generiske feilmeldinger (detaljer kun i serverloggen).

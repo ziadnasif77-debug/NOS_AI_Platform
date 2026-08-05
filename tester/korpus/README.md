@@ -76,7 +76,7 @@ kjøringen.
   },
 
   "felter_maa_inneholde": {
-    "struktur.identifikatorer.fodselsnummer": ["14837840059"]
+    "struktur.identifikatorer.fodselsnummer": ["12345678910"]
   },
 
   "tekst_maa_inneholde": ["Saksnummer: 4417820"],

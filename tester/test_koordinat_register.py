@@ -195,7 +195,7 @@ def test_skalproven_treff_delt_over_to_regioner():
         _region("00009", 360, 102, 460, 132),
     ]
     tekst, register = flett_regioner_med_register(side)
-    # «1234.56 00009» → kompakt 12345600009, verifisert mod11-gyldig
+    # «1234.56 78910» → kompakt 12345678910
     funn = [(s, e, t) for s, e, t in finn_sladdeomraader(tekst)
             if t == "kontonummer"]
     assert len(funn) == 1
