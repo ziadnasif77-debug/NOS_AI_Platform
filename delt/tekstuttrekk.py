@@ -743,12 +743,35 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
         #    etiketter sjekkes FØRST og kan dermed overstyre de innebygde
         if dtype is None:
             etikett_sok = tekst[max(linje_start, start - 35):start]
-            for monster, kandidat in _egne_dato_etiketter() + _DATO_ETIKETTER:
-                m = re.search(monster, etikett_sok, re.IGNORECASE)
-                if m:
-                    dtype, etikett = kandidat, m.group(0)
-                    begrunnelse = f"etiketten «{etikett}» står rett før datoen"
-                    break
+
+            def naermeste(etiketter):
+                """Etiketten som SLUTTER nærmest datoen — og ved likt
+                sluttpunkt den LENGSTE.
+
+                To hensyn måtte forenes. «Dagpenger for perioden
+                01.01.2023 til og med 31.12.2023»: foran sluttdatoen
+                står både «periode» (langt til venstre) og «til og med»
+                (rett foran). Vinner den første i listerekkefølge, blir
+                sluttdatoen en periodeSTART og perioden forsvinner.
+                «Søknad datert 12.03.2024»: her slutter både «søknad
+                datert» og «datert» på samme sted, og da er den lengste
+                den presise — ellers ble søknadsdatoen til dokumentdato.
+                Nærmest slutt, deretter lengst, gir begge deler."""
+                beste = beste_rang = None
+                for monster, kandidat in etiketter:
+                    for m in re.finditer(monster, etikett_sok, re.IGNORECASE):
+                        rang = (m.end(), len(m.group(0)))
+                        if beste_rang is None or rang > beste_rang:
+                            beste, beste_rang = (m, kandidat), rang
+                return beste
+
+            # brukerens egne etiketter har fortsatt forrang som gruppe
+            traff = naermeste(_egne_dato_etiketter()) \
+                or naermeste(_DATO_ETIKETTER)
+            if traff:
+                m, dtype = traff
+                etikett = m.group(0)
+                begrunnelse = f"etiketten «{etikett}» står rett før datoen"
 
         # 2b) «Oslo, 12.06.2026» — stedsnavn rett foran datoen. Norsk
         #     konvensjon i brevhoder og signaturblokker, og et sterkt

@@ -109,6 +109,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
 from delt import prompter
+from delt.dokumentprofil import bygg_profil
 
 # UTF-8-trygg utskrift: norsk (æøå) skal ikke krasje når stdout er en fil/
 # pipe med ikke-UTF-8-kodesett (cp1256) — f.eks. når tjeneste-wrapperen
@@ -2378,16 +2379,92 @@ def _skjemaer() -> dict:
                 "uttrekk_regler": s(example="u5"),
                 "ocr_konfidens_terskel": {"type": "number", "example": 0.85},
                 "norhand": s(), "modell": s()}},
+        "Dokumentprofil": {
+            "type": "object",
+            "description": (
+                "R66: obligatoriske metadata om dokumentet SELV. Følger "
+                "ALLTID med i svaret fra POST /dokument — i begge "
+                "kontraktene, uansett hva klienten ba om. Alt er "
+                "deterministisk (ingen modell); et felt som ikke kan "
+                "fastslås er null med en begrunnelse ved siden av, aldri "
+                "en gjetning."),
+            "properties": {
+                "antall_sider": {"type": "integer", "nullable": True,
+                                 "example": 12},
+                "koder": {
+                    "type": "object",
+                    "description": "QR-koder og strekkoder med sidetall. "
+                                   "lest=false ⇒ skanningen var AV, og null "
+                                   "betyr «ikke sett etter», ikke «finnes ikke»",
+                    "properties": {
+                        "lest": b(),
+                        "qr": {"type": "array", "items": {"type": "object"}},
+                        "strekkode": {"type": "array", "items": {"type": "object"}},
+                        "qr_kode_side": {"type": "integer", "nullable": True,
+                                         "example": 1},
+                        "strekkode_side": {"type": "integer", "nullable": True,
+                                           "example": 3},
+                        "merknad": s(nullable=True)}},
+                "dokumentdato": s(nullable=True, example="2024-05-17",
+                                  description="ISO. Dokumentets EGEN dato "
+                                              "(R67) — aldri en dato som bare "
+                                              "nevnes i teksten"),
+                "dokumentdato_norsk": s(nullable=True, example="17.05.2024"),
+                "dokumentdato_kilde": s(nullable=True),
+                "dokumentdato_konfidens": s(example="hoy"),
+                "dokumentdato_begrunnelse": s(nullable=True),
+                "dokumentdato_side": {"type": "integer", "nullable": True},
+                "dokumentdato_fra": s(nullable=True, example="2023-01-01",
+                                      description="Perioden dokumentet GJELDER "
+                                                  "FOR — ikke dokumentdatoen"),
+                "dokumentdato_til": s(nullable=True, example="2023-12-31"),
+                "dokumentspenn_fra": s(nullable=True,
+                                       description="Datospenn når filen er en "
+                                                   "BUNKE daterte dokumenter"),
+                "dokumentspenn_til": s(nullable=True),
+                "flere_dokumenter": b(),
+                "dokument_ar": {"type": "integer", "nullable": True,
+                                "example": 2024},
+                "dokument_alder": {"type": "object", "nullable": True},
+                "stempel_datoer": {
+                    "type": "array", "items": {"type": "object"},
+                    "description": "R68: mottatt/arkivert/stemplet. Blir "
+                                   "ALDRI dokumentdato av seg selv"},
+                "dokument_eier": {
+                    "type": "object",
+                    "description": (
+                        "R69: fødselsnummeret til personen dokumentet "
+                        "GJELDER — ikke saksbehandler, lege, arbeidsgiver "
+                        "eller kopimottaker. Uten et positivt eiersignal er "
+                        "fnr null; «sikkerhet» sier hvorfor og «kandidater» "
+                        "viser alt som ble vurdert"),
+                    "properties": {
+                        "navn": s(nullable=True, example="Ola Nordmann"),
+                        "fnr": s(nullable=True),
+                        "sikkerhet": s(example="merket",
+                                       enum=["merket", "flertydig",
+                                             "bare_andre_roller", "umerket",
+                                             "ingen"]),
+                        "begrunnelse": s(),
+                        "kandidater": {"type": "array",
+                                       "items": {"type": "object"}}}},
+                "ytelse": s(nullable=True,
+                            description="Plassholder — reglene kommer senere"),
+                "ytelse_status": s(example="ikke_implementert")}},
         "DokumentSvar": {
             "type": "object",
             "description": "Svaret fra POST /dokument. Deler du ikke ba om "
-                           "er null.",
+                           "er null. «dokumentprofil» følger alltid med (R66).",
             "properties": {
                 "ok": b(),
                 "filnavn": s(),
                 "valg": ref("Valg"),
+                "dokumentprofil": ref("Dokumentprofil"),
                 "tekst": s(nullable=True),
                 "antall_tegn": {"type": "integer"},
+                "antall_sider": {"type": "integer", "nullable": True,
+                                 "description": "Filens FAKTISKE sideantall — "
+                                                "ikke antall sider med tekst"},
                 "felter": {**ref("FelterDel"), "nullable": True},
                 "struktur": {**ref("StrukturDel"), "nullable": True},
                 "svar": {**ref("SvarDel"), "nullable": True},
@@ -3925,8 +4002,14 @@ class Handler(BaseHTTPRequestHandler):
         advarsler = []
         ocr_brukt, ocr_motorer, fra_cache = False, None, False
         handskrift, strekkoder, sider_regioner = [], [], []
+        antall_sider = None
         if slag == "tekst":
             raa_tekst = (innhold or "").strip()
+            # Ren tekst har ingen sider. Er teksten derimot lest ut av et
+            # flersidig dokument tidligere, står sidemarkørene der (R36)
+            # og forteller hvor mange det var.
+            markorer = re.findall(r"\[Side \d+ av (\d+)\]", raa_tekst)
+            antall_sider = max(int(m) for m in markorer) if markorer else None
         else:
             a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
             if not a.get("ok"):
@@ -3938,6 +4021,7 @@ class Handler(BaseHTTPRequestHandler):
             ocr_brukt = a.get("ocr_brukt", False)
             fra_cache = a.get("fra_cache", False)
             sider_regioner = a.get("_sider_regioner") or []
+            antall_sider = a.get("antall_sider")
             if a.get("advarsel"):
                 advarsler.append(a["advarsel"])
             if a.get("melding"):
@@ -3945,7 +4029,9 @@ class Handler(BaseHTTPRequestHandler):
         ktx = DokumentKontekst(raa_tekst, ocr_brukt=ocr_brukt,
                                handskrift=handskrift, strekkoder=strekkoder,
                                ocr_motorer=ocr_motorer, fra_cache=fra_cache,
-                               sider_regioner=sider_regioner)
+                               sider_regioner=sider_regioner,
+                               antall_sider=antall_sider,
+                               strekkoder_lest=les_strekkoder)
         return ktx, advarsler, None
 
     # Vern mot misbruk: en enkelt forespørsel kan ikke be om et ubegrenset
@@ -4025,10 +4111,21 @@ class Handler(BaseHTTPRequestHandler):
             if r.get("ok") is False:
                 advarsler.append(f"{r.get('type')}: {r.get('feil')}")
 
+        # R66: profilen følger med her OGSÅ. De to kontraktene på
+        # /dokument skal svare likt på det som gjelder dokumentet selv —
+        # ellers ville en klient miste metadataene ved å bytte kontrakt.
+        try:
+            profil = ktx.profil
+        except Exception as exc:
+            profil = {"ok": False,
+                      "feil": f"Profilen feilet ({type(exc).__name__}): {exc}"[:300]}
+
         return self._svar(200, {
             "ok": True, "filnavn": filnavn,
+            "dokumentprofil": profil,
             "resultater": resultater,
             "antall_tegn": len(ktx.tekst),
+            "antall_sider": ktx.antall_sider,
             "strekkoder": ktx.strekkoder, "handskrift": ktx.handskrift,
             "kvalitet": {"ocr_brukt": ktx.ocr_brukt,
                          "ocr_motorer": ktx.ocr_motorer or {},
@@ -4362,11 +4459,19 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(del_, dict) and del_.get("ok") is False:
                 advarsler.append(f"{navn}: {del_.get('feil')}")
 
+        # R66: dokumentprofilen følger ALLTID med — den er ikke en del av
+        # «valg». Sideantall, koder, dokumentdato og hvem dokumentet
+        # gjelder er egenskaper ved dokumentet selv, ikke svar på et
+        # spørsmål, og en klient skal ikke måtte be om dem for å få dem.
+        profil = trygt(lambda: ktx.profil)
+
         return self._svar(200, {
             "ok": True, "filnavn": filnavn,
             "valg": valg,
+            "dokumentprofil": profil,
             "tekst": raa_tekst if valg["tekst"] else None,
             "antall_tegn": len(raa_tekst),
+            "antall_sider": ktx.antall_sider,
             "felter": deler.get("felter"),
             "struktur": deler.get("struktur"),
             "svar": deler.get("svar"),
@@ -5567,13 +5672,21 @@ class DokumentKontekst:
 
     def __init__(self, tekst, ocr_brukt=False, handskrift=None,
                  strekkoder=None, ocr_motorer=None, fra_cache=False,
-                 sider_regioner=None):
+                 sider_regioner=None, antall_sider=None,
+                 strekkoder_lest=True):
         self.tekst = tekst or ""
         self.ocr_brukt = ocr_brukt
         self.handskrift = handskrift or []
         self.strekkoder = strekkoder or []
         self.ocr_motorer = ocr_motorer
         self.fra_cache = fra_cache
+        # Det FAKTISKE sideantallet i fila — ikke antall sider med tekst.
+        # En tom side er fortsatt en side, og en klient som teller sider
+        # for å sjekke at hele bunken kom fram, trenger det tallet.
+        self.antall_sider = antall_sider
+        # Ble strekkode-/QR-skanningen faktisk kjørt? «Ingen koder funnet»
+        # og «det ble ikke sett etter koder» er to ulike svar.
+        self.strekkoder_lest = strekkoder_lest
         # OCR-regionene ({boks, tekst}) per side — koordinatgrunnlaget.
         # Tom for tekstlags-PDF-er (der bygges ordregister fra fitz i
         # stedet) og for rene tekstopplastinger (ingen sider finnes).
@@ -5583,6 +5696,7 @@ class DokumentKontekst:
         self._datoer_detaljert = None
         self._dokumentdato = None
         self._struktur = None
+        self._profil = None
 
     # -- doven caching av de deterministiske delene --
     @property
@@ -5615,6 +5729,20 @@ class DokumentKontekst:
         if self._struktur is None:
             self._struktur = strukturert_uttrekk(self.tekst)
         return self._struktur
+
+    @property
+    def profil(self):
+        """De obligatoriske metadataene (R66). Bygges av allerede
+        utregnede deler, så den koster ingen ny lesing av dokumentet."""
+        if self._profil is None:
+            self._profil = bygg_profil(
+                self.tekst,
+                antall_sider=self.antall_sider,
+                strekkoder=self.strekkoder,
+                strekkoder_lest=self.strekkoder_lest,
+                datoer_detaljert=self.datoer_detaljert,
+                dokumentdato=self.dokumentdato)
+        return self._profil
 
     def er_tom(self):
         """Blankt ark: modelldelene skal ikke kjøre mot ingenting."""

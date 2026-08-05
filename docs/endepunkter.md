@@ -5,8 +5,12 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R67 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R70 i
 [regler_lokal_api.md](regler_lokal_api.md).
+
+> Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
+> vilje IKKE består mod11. Ingen ellevesifrede verdier som kan ligne et
+> ekte fødselsnummer skal ligge i repoet.
 
 Basis-URL lokalt: `http://localhost:8600`. Er serveren startet med
 `API_NOKKEL`, kreves headeren `X-API-Key` på alle kall unntatt `/hjelp`.
@@ -79,13 +83,112 @@ i stillhet.
 ### Svar
 
 ```
-ok, filnavn, valg, tekst, antall_tegn, felter, struktur, svar, skjema,
-korriger, korrigert_tekst, strekkoder, handskrift, kvalitet, fra_cache,
-tid_sekunder, kilde, versjon
+ok, filnavn, valg, dokumentprofil, tekst, antall_tegn, antall_sider,
+felter, struktur, svar, skjema, korriger, korrigert_tekst, strekkoder,
+handskrift, kvalitet, fra_cache, tid_sekunder, kilde, versjon
 ```
 
 Deler du ikke ba om er `null`. `kilde` sier om modellen faktisk kjørte
 (se [Ærlighetsfelter](#ærlighetsfelter)).
+
+### dokumentprofil — følger ALLTID med (R66)
+
+Et dokument har egenskaper som gjelder uansett hva du spurte om: hvor
+mange sider det har, når det er datert, hvem det gjelder. De kommer
+derfor i hvert svar, i BEGGE kontraktene (brytere og `operasjoner`),
+uten at du ber om dem. Alt er deterministisk — ingen modell er
+involvert, og et felt som ikke kan fastslås er `null` med en
+begrunnelse ved siden av.
+
+```json
+{
+  "antall_sider": 12,
+
+  "koder": {
+    "lest": true,
+    "qr": [{"side": 1, "verdi": "https://…", "type": "QRCODE"}],
+    "strekkode": [{"side": 3, "verdi": "9912345", "type": "CODE128"}],
+    "qr_kode_side": 1,
+    "strekkode_side": 3
+  },
+
+  "dokumentdato": "2024-05-17",
+  "dokumentdato_norsk": "17.05.2024",
+  "dokumentdato_kilde": "etikett",
+  "dokumentdato_konfidens": "hoy",
+  "dokumentdato_begrunnelse": "etiketten «Vedtaksdato» står rett før datoen",
+  "dokumentdato_side": 1,
+
+  "dokumentdato_fra": "2023-01-01",
+  "dokumentdato_til": "2023-12-31",
+
+  "dokumentspenn_fra": null,
+  "dokumentspenn_til": null,
+  "flere_dokumenter": false,
+
+  "dokument_ar": 2024,
+  "dokument_alder": {"dager": 810, "aar": 2, "tekst": "2 år og 2 måneder gammelt", "fremtidig": false},
+
+  "stempel_datoer": [
+    {"dato": "2024-05-20", "dato_norsk": "20.05.2024", "type": "mottatt", "side": 2, "rolle": "behandling"}
+  ],
+
+  "dokument_eier": {
+    "navn": "Ola Nordmann",
+    "fnr": "12345678910",
+    "sikkerhet": "merket",
+    "begrunnelse": "Fødselsnummeret står under «Dokumentet gjelder», som peker på personen dokumentet gjelder.",
+    "kandidater": [
+      {"fnr": "12345678910",           "rolle": "eier",  "etikett": "Dokumentet gjelder", "navn": "Ola Nordmann"},
+      {"fnr": "<saksbehandlerens nr>", "rolle": "annen", "etikett": "Saksbehandler",      "navn": "Kari Hansen"}
+    ]
+  },
+
+  "ytelse": null,
+  "ytelse_status": "ikke_implementert"
+}
+```
+
+**Tre datofelter som ikke er det samme (R67):**
+
+| Felt | Betydning |
+|------|-----------|
+| `dokumentdato` | Da dokumentet ble skrevet, fattet, signert, utstedt |
+| `dokumentdato_fra`/`_til` | Perioden dokumentet GJELDER FOR («dagpenger for perioden …») |
+| `dokumentspenn_fra`/`_til` | Datospennet når filen er en BUNKE av flere daterte dokumenter |
+
+En dato som bare NEVNES i teksten — en frist, en fødselsdato — blir
+aldri dokumentdato. Finnes ingen dato som kan knyttes til dokumentet
+selv, er `dokumentdato` `null` og `dokumentdato_begrunnelse` sier
+hvorfor. Stempeldatoer («Mottatt NAV 20.05.2024») ligger i
+`stempel_datoer` og blir aldri dokumentdato (R68).
+
+**`dokument_eier` — personen dokumentet gjelder (R69):**
+
+Et NAV-dokument nevner ofte flere personer med fødselsnummer: den saken
+gjelder, saksbehandleren, legen, arbeidsgiverens kontakt. Nummeret
+kobles derfor til etiketten nærmest foran seg, og bare et POSITIVT
+eiersignal kvalifiserer. `sikkerhet` sier hva vi bygger på:
+
+| `sikkerhet` | Betydning | `fnr` |
+|-------------|-----------|-------|
+| `merket` | Nummeret står under en eier-etikett | fylt |
+| `flertydig` | Flere ULIKE numre under eier-etiketter | `null` |
+| `bare_andre_roller` | Alle numre hører til saksbehandler/lege/arbeidsgiver o.l. | `null` |
+| `umerket` | Numre finnes, men ingen etikett viser hvem dokumentet gjelder | `null` |
+| `ingen` | Ingen fødselsnummer består mod11 | `null` |
+
+Et nummer hentes **ikke** bare fordi det står i teksten. `kandidater`
+viser alt som ble vurdert, med rolle og etikett, så et menneske kan se
+hvorfor svaret ble som det ble.
+
+**`koder`:** `lest: false` betyr at skanningen var slått av — da sier
+`qr_kode_side: null` ikke at koden mangler, bare at det ikke ble sett
+etter den. `qr_kode_side`/`strekkode_side` er FØRSTE side med en kode;
+alle forekomstene ligger i `qr`- og `strekkode`-listene.
+
+**`ytelse`** er en plassholder. Reglene kommer senere; feltet er med fra
+første dag så kontrakten ikke må endres når de gjør det.
 
 ### Sidespørsmål besvares av KODEN
 
