@@ -10,11 +10,11 @@ Rapporten leser tilgangsloggen og svarer på det loggen FAKTISK vet:
 
     python skript/klientrapport.py                  # siste 30 dager
     python skript/klientrapport.py --dager 7
-    python skript/klientrapport.py --sti /analyser  # hvem bruker dette?
+    python skript/klientrapport.py --sti /spor      # hvem bruker dette?
 
 HVA LOGGEN KAN OG IKKE KAN SVARE PÅ
     Loggen ser FORESPØRSELEN. Den kan derfor svare sikkert på:
-      · Kaller noen fortsatt /analyser, /spor, /uttrekk? (kan de pensjoneres?)
+      · Kaller noen fortsatt /spor eller /sladd? (kan de pensjoneres?)
       · Hvem bruker en utgått BRYTER?
       · Hvilken klient står for lasten?
 

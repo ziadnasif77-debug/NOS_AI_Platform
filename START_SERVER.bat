@@ -47,7 +47,7 @@ for /f %%s in ('"%PY%" "%~dp0skript\_vent_klar.py" 2^>nul') do set status=%%s
 if "%status%"=="klar" goto klar
 if %forsok% GEQ 60 (
     echo [ADVARSEL] Borealis ble ikke klar innen 3 min - starter tunnelen likevel.
-    echo            /analyser virker allerede; /spor blir klar nar modellen er lastet.
+    echo            /dokument virker allerede; modelldelene blir klare nar modellen er lastet.
     goto tunnel
 )
 goto vent

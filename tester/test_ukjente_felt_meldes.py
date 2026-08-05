@@ -89,8 +89,10 @@ def test_feilmelding_lister_kjente_felt():
 
 # ---------- vakt mot at advarselen kastes igjen ----------
 
+# «_do_post_intern» sto her fordi /fyll_skjema hadde vakten sin inne i
+# ruteren. Det endepunktet er borte — det ga fakta /dokument også gir —
+# så vakten gjelder nå de to veiene som faktisk tar imot brytere.
 @pytest.mark.parametrize("metode", [
-    "_do_post_intern",          # ruteren — her ligger /fyll_skjema-vakten
     "_dokument_operasjoner",
     "_dokument_samlet",
 ])

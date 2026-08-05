@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R107 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R108 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -23,8 +23,9 @@ unntatt `/hjelp` — se [Klientidentitet](#klientidentitet--navngitte-api-nøkle
 | Vil du … | Bruk |
 |---|---|
 | Ha ETT kall som gjør alt du trenger | **`POST /dokument`** ← anbefalt |
-| Bare lese teksten ordrett | `POST /spor` (uten `sporsmal`) |
-| Ha komplett strukturert JSON med faste nøkler | `POST /uttrekk` |
+| Bare lese teksten ordrett | `POST /dokument` (teksten følger med) |
+| Stille et spørsmål UTEN et dokument | `POST /spor` med bare `sporsmal` |
+| Ha komplett strukturert JSON med faste nøkler | `POST /dokument` med `struktur=ja` |
 | Fylle din egen JSON-mal | `POST /dokument` med `skjema_mal` |
 | Behandle et STORT skannet dokument | `POST /jobb` → `GET /jobb/{id}` |
 | Avvise et dårlig skann FØR GPU-en brukes | `POST /forhandssjekk` |
@@ -32,10 +33,15 @@ unntatt `/hjelp` — se [Klientidentitet](#klientidentitet--navngitte-api-nøkle
 | Finne ut hva serveren FAKTISK mottok fra deg | `POST /ekko` |
 | Kjøre en operasjonsliste som egen ressurs | `POST /dokument/operasjoner` |
 
-**`/dokument` er hovedveien.** De øvrige dokumentendepunktene er eldre og
-beholdes bevisst for å ikke bryte eksisterende integrasjoner (særlig
-UiPath). De gir stort sett SAMME fakta, men i ULIKE JSON-former — se
-[Samme faktum, ulike stier](#samme-faktum-ulike-stier).
+**`/dokument` er hovedveien**, og etter opprydningen er den også den
+eneste veien til dokumentfakta. `/analyser`, `/uttrekk` og
+`/fyll_skjema` er FJERNET: de ga de samme fakta i tre andre JSON-former,
+og fantes bare fordi de kom først. Erstatningen er en bryter —
+`felter=ja`, `struktur=ja`, `skjema_mal=…`.
+
+`/spor` står igjen fordi den kan én ting `/dokument` ikke kan: svare på
+et spørsmål UTEN en fil (`uten_dokument: true`). `/dokument` krever fil
+og svarer 400 uten.
 
 ---
 
@@ -522,41 +528,6 @@ posisjon på siden:
 
 ---
 
-## POST /uttrekk
-
-Komplett strukturert totaluttrekk med **fast skjema** — alle nøkler
-alltid til stede, tomt er `""` / `[]`. Aldri modell.
-
-Svar: `ok, dokument, identifikatorer, kontakt, adresser, datoer,
-perioder, belop, tekst, strekkoder, handskrift, kvalitet, versjon`
-
-Merk formen: `belop` er en **liste av objekter** med kontekst, ikke ett
-tall.
-
-```json
-"belop": [{"verdi": 463.0, "raatekst": "463,00",
-           "kontekst": "… Pris Kr: 463,00 + Utlegg Kr: …"}]
-```
-
-Dokumentets EGEN dato ligger under `dokument.dokumentdato` — ikke i
-`datoer`. Der ligger datoene dokumentet HANDLER om.
-
-Tilsvarende innhold fås fra `/dokument` med `struktur=ja`, under
-nøkkelen `struktur`.
-
----
-
-## POST /analyser
-
-Deterministisk analyse. Aldri modell.
-
-Svar: `ok, filnavn, trenger_ocr, ocr_brukt, kilde, felter, datoer,
-datoer_detaljert, dokumentdato, strekkoder, tekst, antall_tegn`
-
-`trenger_ocr` er det eneste feltet som ikke finnes noe annet sted.
-
----
-
 ## POST /spor
 
 Den eldste veien. Oppfører seg ulikt etter hva du sender:
@@ -572,25 +543,6 @@ Den eldste veien. Oppfører seg ulikt etter hva du sender:
 
 Har **ingen** `dokumentdato`. Trenger du både svar og felter i samme
 kall, bruk `/dokument`.
-
----
-
-## POST /fyll_skjema
-
-Fyller din egen JSON-mal. Samme tre motorer som `/dokument`.
-
-> ⚠️ **Feltet heter `skjema` her — ikke `skjema_mal`.**
-> Motorfeltet heter `skjema_motor` på BEGGE endepunktene.
-> Sender du `skjema_mal` hit, får du 400. Sender du `motor` i stedet for
-> `skjema_motor`, får du 200 med en linje i `advarsler` — og motoren
-> faller tilbake til `modell`, som koster GPU-tid.
-
-Svar: `ok, filnavn, fra_cache, advarsler, versjon, motor, skjema, avvik,
-tid_sekunder, kilde` (+ `kilde_per_felt`, `modell_brukt` for `auto`;
-+ `ukjente_felter`, `tilgjengelige_felter` for `felter`/`auto`)
-
-Har ingen `dokumentdato`-nøkkel, men du kan be om verdien i malen med
-plassholderen `{dokumentdato}`.
 
 ---
 
@@ -725,44 +677,42 @@ se problemet og å gjette på det.
 
 ## Samme faktum, ulike stier
 
-Endepunktene deler **bare** `ok`, `tekst` og `strekkoder` på toppnivå.
-Bytter du endepunkt, brekker klientens JSON-stier.
+Det var seks endepunkter som ga dokumentdatoen på fem ulike stier. Etter
+opprydningen er det to, og de overlapper ikke:
 
-**Dokumentdato** — fire kilder, samme underliggende logikk
-(`finn_dokumentdato`), fire stier:
-
-| Endepunkt | Sti |
+| Endepunkt | Dokumentdatoen |
 |---|---|
-| `/dokument` | `felter.dokumentdato.dato` |
-| `/uttrekk` | `dokument.dokumentdato.dato` |
-| `/analyser` | `dokumentdato.dato` |
+| `POST /dokument` | `felter.dokumentdato.dato` **og** `dokumentprofil.dokument.dato` |
 | `GET /jobb/{id}` | `dokumentdato.dato` |
 
-Ikke i `/spor`, `/fyll_skjema` (men `{dokumentdato}` virker i malen),
-`/innsyn`, `/ekko`.
+`/spor`, `/innsyn`, `/forhandssjekk`, `/sladd` og `/ekko` har den ikke —
+de gjør noe annet.
 
-**Beløp** — ulik form OG type:
+De to formene inne i `/dokument` er ikke et uhell: `felter.*` er det
+flate uttrekket med norsk datoform, `dokumentprofil.*` er den kanoniske
+profilen i ISO med begrunnelse og sikkerhet ved siden av. Skal du
+programmere mot én av dem, velg profilen.
 
-| Endepunkt | Form |
+**Beløp** finnes også i to former, med ulik type:
+
+| Sti | Form |
 |---|---|
-| `/dokument`, `/analyser` | `felter.belop` = `463.0` (tall) |
-| `/uttrekk` | `belop` = liste av `{verdi, raatekst, kontekst}` |
-
-Derfor: **velg ett endepunkt og bli der.** `/dokument` med brytere
-dekker det de andre gjør, med stier som ikke flytter seg.
+| `felter.belop` | `463.0` — ett tall |
+| `struktur.belop` | liste av `{verdi, raatekst, kontekst}` |
 
 ---
 
-## Feltnavn som skiller seg
+## «skjema» og «skjema_mal» er to ulike ting
 
-| Betydning | `/dokument` | `/fyll_skjema` |
-|---|---|---|
-| JSON-malen | `skjema_mal` | **`skjema`** |
-| Motoren | `skjema_motor` | `skjema_motor` |
+Den vanligste fella på `/dokument`:
 
-Dette er den vanligste fella. Sender du feil navn, sier API-et fra —
-enten med 400 (manglende påkrevd felt) eller med en linje i
-`advarsler`/`kvalitet.advarsler`.
+| Du vil | Felt |
+|---|---|
+| Slå PÅ skjemautfylling | `skjema=ja` |
+| Sende selve JSON-malen | **`skjema_mal`** |
+
+Sender du malen i `skjema`, svarer API-et 400 og sier hvilket felt som
+skal brukes — det gjetter ikke.
 
 ---
 
@@ -836,7 +786,7 @@ python skript/klientrapport.py --dager 30
 ```
 
 ```bash
-python skript/klientrapport.py --sti /analyser --dager 365
+python skript/klientrapport.py --sti /spor --dager 365
 ```
 
 **Ingenting er merket utgått (R99).** Så lenge API-et er uutgitt,
@@ -852,8 +802,8 @@ en spørring over 365 dager sett noen få dager og meldt «ingen bruker
 dette».
 
 **Hva rapporten kan og ikke kan svare på (R92).** Loggen ser
-FORESPØRSELEN. Den svarer sikkert på om noen fortsatt kaller
-`/analyser`, eller sender en utgått bryter. Den kan **ikke** si om noen
+FORESPØRSELEN. Den svarer sikkert på om noen fortsatt kaller `/spor`,
+eller sender en bryter du vurderer å fjerne. Den kan **ikke** si om noen
 leser `eier` i stedet for `part` — begge står i samme svar, og serveren
 ser ikke hva klienten plukker ut. Utgåtte SVARfelter må derfor varsles i
 `varsler[]` og fjernes etter et annonsert løp, aldri fordi rapporten

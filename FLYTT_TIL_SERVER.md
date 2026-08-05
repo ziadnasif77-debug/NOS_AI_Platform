@@ -121,7 +121,7 @@ Den bruker `.pyruntime`, setter nav-lokalt miljø selv, og starter:
 - **API** → http://127.0.0.1:8600/hjelp
 - **Prefect-UI** → http://127.0.0.1:4200 (hoppes pent over hvis venv ikke kan bygges)
 
-Åpne http://127.0.0.1:8600/dokumentasjon (Swagger) og test `/analyser` på en
+Åpne http://127.0.0.1:8600/dokumentasjon (Swagger) og test `/dokument` på en
 skannet PDF **og** `/spor` — det er disse som avslører manglende GPU/driver.
 
 ---

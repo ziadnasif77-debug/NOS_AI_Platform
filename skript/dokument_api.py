@@ -6,7 +6,7 @@ den — GUI-er, UiPath, Power Automate, curl, egne skript. Ingenting i
 API-et er knyttet til én bestemt klient eller én bestemt dokumenttype.
 
 Flyt:
-    UiPath  --(HTTP POST, fil vedlagt)-->  /analyser
+    UiPath  --(HTTP POST, fil vedlagt)-->  /dokument
                                               |
                               leser PDF-tekstlaget (PyMuPDF)
                                               |
@@ -26,7 +26,7 @@ forklaring til den er klar.
 
 Start:
     python skript/dokument_api.py
-Enhver HTTP-klient: POST http://localhost:8600/analyser med filen som
+Enhver HTTP-klient: POST http://localhost:8600/dokument med filen som
 multipart-felt «fil». Se GET /hjelp for alle endepunkter.
 """
 import gzip
@@ -361,8 +361,7 @@ _kapasitet_port = _Kapasitetsport()
 # uten dem her ville v2 og operasjonsressursen gått utenom
 # kapasitetsporten, og serveren kunne overlastes gjennom en dør mens
 # den andre var stengt.
-_TUNGE_STIER = ("/analyser", "/spor", "/uttrekk", "/fyll_skjema", "/dokument",
-                "/dokument/operasjoner", "/sladd")
+_TUNGE_STIER = ("/spor", "/dokument", "/dokument/operasjoner", "/sladd")
 _rate_lock = threading.Lock()
 _rate_teller = {}   # klient-ip -> [vindu_minutt, antall]
 
@@ -3323,43 +3322,6 @@ def _openapi() -> dict:
                 "responses": {"200": {"description":
                     "svar, tall_verifisert, tolket_sporsmal, svar_avkortet, handskrift, strekkoder, "
                     "ocr_motorer, advarsel, fra_cache, tid_sekunder, kilde, versjon"}}}},
-            "/analyser": {"post": {
-                "summary": "Deterministisk analyse (felter, datoer, strekkoder, full tekst)",
-                "requestBody": {"content": {"multipart/form-data": {"schema": {
-                    "type": "object", "required": ["fil"],
-                    "properties": {"fil": fil_felt,
-                                   "maks_sider": {"type": "integer"}}}}}},
-                "responses": {"200": {"description":
-                    "felter, datoer, datoer_detaljert (hver med «rolle»: dokument/innhold/"
-                    "behandling/ukjent), dokumentdato (dokumentets EGEN dato med kilde, "
-                    "konfidens, begrunnelse, alternativer og «periode» = datospennet "
-                    "fra–til med dato per side), strekkoder, handskrift, tekst, "
-                    "antall_tegn, ocr_brukt/ocr_motorer, advarsel"}}}},
-            "/uttrekk": {"post": {
-                "summary": "Komplett strukturert totaluttrekk (fast skjema, alle nøkler alltid til stede)",
-                "requestBody": {"content": {"multipart/form-data": {"schema": {
-                    "type": "object", "required": ["fil"],
-                    "properties": {"fil": fil_felt}}}}},
-                "responses": {"200": {
-                    "description": "Alle nøkler alltid til stede; tomt er \"\" / []",
-                    "content": {"application/json": {"schema": {
-                        "$ref": "#/components/schemas/StrukturDel"}}}}}}},
-            "/fyll_skjema": {"post": {
-                "summary": "Fyll DIN egen JSON-mal fra dokumentet — kodevalidert felt for felt",
-                "requestBody": {"content": {"multipart/form-data": {"schema": {
-                    "type": "object", "required": ["fil", "skjema"],
-                    "properties": {"fil": fil_felt,
-                                   "skjema": {"type": "string", "description": "JSON-malen din. For 'modell': tomme strenger som verdier. For 'felter'/'auto': {feltnavn}-plassholdere, f.eks. {\"tlf\":\"{telefon}\"}"},
-                                   "skjema_motor": {"type": "string",
-                                                    "enum": ["modell", "felter", "auto"],
-                                                    "description": "modell=Borealis fyller (standard); felter=deterministisk fletting av {feltnavn} (rask, uten modell); auto=hybrid med tallvakt"}}}}}},
-                "responses": {
-                    "200": {"description": "Malen din, utfylt",
-                            "content": {"application/json": {"schema": {
-                                "$ref": "#/components/schemas/SkjemaDel"}}}},
-                    "400": {"description": "Manglende/ugyldig 'skjema', eller ukjent 'skjema_motor'",
-                            "content": {"application/json": {"schema": {
-                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/jobb": {"post": {
                 "summary": "Asynkron OCR av store dokumenter (ubegrenset antall sider)",
                 "parameters": [{"name": "Idempotency-Key", "in": "header", "required": False,
@@ -5238,11 +5200,10 @@ class Handler(BaseHTTPRequestHandler):
                 "jobb_id": jid, "versjon": jobb.get("versjon"),
                 "status": jobb.get("status")})
 
-        if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
-                       "/fyll_skjema", "/innsyn", "/dokument",
+        if sti not in ("/spor", "/jobb", "/innsyn", "/dokument",
                        "/dokument/operasjoner", "/ekko",
                        "/forhandssjekk", "/sladd"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /dokument/operasjoner, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
+            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /dokument/operasjoner, /spor, /innsyn, /jobb, /forhandssjekk, /sladd eller /ekko (se /hjelp)"})
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
         # tråd allerede hele opplastingen (og den normaliserte PDF-en) i
@@ -5437,116 +5398,6 @@ class Handler(BaseHTTPRequestHandler):
                 "fremdrift": f"GET /jobb/{jobb_id}",
                 "sporsmal_senere": f"POST /spor med felter jobb_id={jobb_id} og sporsmal",
             })
-
-        if sti == "/uttrekk":
-            # Komplett strukturert JSON — ALLE nøkler alltid til stede,
-            # tomme verdier er "" / []. Gjenbruker analyser-løpet
-            # (tekstlag/OCR/strekkoder/datoer) og bygger totalskjemaet.
-            if slag == "tekst":
-                a = {"ok": True, "antall_sider": 1, "kilde": "direkte_tekst",
-                     "ocr_brukt": False, "tekst": innhold.strip(),
-                     "datoer_detaljert": None, "strekkoder": [],
-                     "handskrift": [], "advarsel": None}
-            else:
-                a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
-                if not a.get("ok"):
-                    return self._svar(400, a)
-            s = strukturert_uttrekk(a.get("tekst", ""))
-            if a.get("datoer_detaljert"):
-                s["datoer"] = a["datoer_detaljert"]   # rikere: pdf-meta + håndskrift
-            filtype = filnavn.rsplit(".", 1)[-1].lower() if "." in filnavn else ""
-            return self._svar(200, {
-                "ok": True,
-                "dokument": {
-                    "filnavn": filnavn,
-                    "filtype": filtype,
-                    "antall_sider": a.get("antall_sider", 1),
-                    "antall_tegn": len(a.get("tekst", "")),
-                    "kilde": a.get("kilde", ""),
-                    # dokumentets EGEN dato hører til dokumentet, ikke til
-                    # datolista — der ligger datoene det handler om
-                    "dokumentdato": a.get("dokumentdato") or dokumentdato_av(
-                        a.get("tekst", "")),
-                    **s["dokument"],
-                },
-                "identifikatorer": s["identifikatorer"],
-                "kontakt": s["kontakt"],
-                "adresser": s["adresser"],
-                "datoer": s["datoer"],
-                "perioder": s["perioder"],
-                "belop": s["belop"],
-                "strekkoder": a.get("strekkoder", []),
-                "handskrift": a.get("handskrift", []),
-                "tekst": a.get("tekst", ""),
-                "kvalitet": {
-                    "ocr_brukt": a.get("ocr_brukt", False),
-                    "ocr_motorer": a.get("ocr_motorer") or {},
-                    "ocr_sider_lest": a.get("ocr_sider_lest",
-                                            a.get("antall_sider", 1)),
-                    "ocr_sider_totalt": a.get("ocr_sider_totalt",
-                                              a.get("antall_sider", 1)),
-                    "advarsler": [a["advarsel"]] if a.get("advarsel") else [],
-                },
-                "versjon": {"api": API_VERSJON, "prompt": prompter.versjon()},
-            })
-
-        if sti == "/analyser":
-            if slag == "tekst":
-                tekst = innhold.strip()
-                return self._svar(200, {
-                    "ok": True, "filnavn": filnavn, "trenger_ocr": False,
-                    "ocr_brukt": False, "kilde": "direkte_tekst",
-                    "felter": utvid_entiteter(tekst, {}),
-                    "datoer": finn_alle_datoer(tekst),
-                    "datoer_detaljert": sett_dato_roller(klassifiser_datoer(tekst)),
-                    "dokumentdato": dokumentdato_av(tekst),
-                    "strekkoder": [],
-                    "tekst": tekst, "antall_tegn": len(tekst),
-                })
-            resultat = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
-            # Understrek-felter er interne (koordinatgrunnlag m.m.) og
-            # skal aldri ut i et JSON-svar usignert — /analyser dumper
-            # ellers hele analysedicten.
-            return self._svar(200 if resultat.get("ok") else 400,
-                              {k: v for k, v in resultat.items()
-                               if not k.startswith("_")})
-
-        if sti == "/fyll_skjema":
-            milde, omvendte = _sjekk_feltnavn(tekstfelter,
-                                              _KJENTE_FELT_FYLL_SKJEMA)
-            if omvendte:
-                return self._svar(400, _omvendt_felt_feil(
-                    omvendte, _KJENTE_FELT_FYLL_SKJEMA))
-            # Ukjente felt SKAL meldes. Her ble advarselen regnet ut og så
-            # kastet («_»), så «motor=felter» — et nærliggende feilnavn,
-            # siden feltet heter skjema_motor — ble ignorert i stillhet og
-            # kallet falt tilbake til modell-motoren. Klienten betalte
-            # GPU-tid for noe den uttrykkelig hadde bedt om å slippe, og
-            # fikk 200 uten et eneste signal. /dokument meldte fra; disse
-            # gjorde det ikke.
-            ukjente_felt_advarsel = _ukjent_felt_advarsel(
-                milde, _KJENTE_FELT_FYLL_SKJEMA)
-            skjema_raa = tekstfelter.get("skjema", "").strip()
-            if not skjema_raa:
-                return self._svar(400, {"ok": False, "feil": "Mangler multipart-felt 'skjema' (JSON-malen din)"})
-            try:
-                mal = json.loads(skjema_raa)
-            except json.JSONDecodeError as exc:
-                return self._svar(400, {"ok": False, "feil": f"Ugyldig JSON i 'skjema': {exc}"})
-            # Samme tre motorer som /dokument: felter (deterministisk),
-            # auto (hybrid) og modell (Borealis, standard).
-            motor = tekstfelter.get("skjema_motor", "").strip().lower() or "modell"
-            if motor not in ("modell", "felter", "auto"):
-                return self._svar(400, {
-                    "ok": False,
-                    "feil": (f"Ukjent 'skjema_motor': {motor!r}. Bruk "
-                             "'modell', 'felter' eller 'auto'."),
-                    "felter_feil": [{"pointer": "/skjema_motor",
-                                     "message": "Bruk 'modell', 'felter' eller 'auto'"}]})
-            return self._fyll_skjema_flyt(filnavn, slag, innhold, maks_ocr, mal,
-                                          les_strekkoder=les_strekkoder,
-                                          skjema_motor=motor,
-                                          ekstra_advarsler=ukjente_felt_advarsel)
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
         # R47: fil UTEN spørsmål = hele den utleste teksten, ordrett og
@@ -6649,7 +6500,6 @@ _KJENTE_FELT_DOKUMENT = {
     "koordinater", "datoer_detaljert", "profil", "opphav"}
 _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder",
                             "profil", "opphav"}
-_KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}
 _KJENTE_FELT_SLADD = {"typer", "maks_sider"}
 

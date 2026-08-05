@@ -76,11 +76,12 @@ som ble tatt.
 | `POST /jobb` → `GET /jobb/{id}` | Store skanninger: `jobb_id` med en gang, OCR i bakgrunnen |
 | `POST /innsyn` → `GET /innsyn/{id}` | Direktevisning: strømmer lesingen hendelse for hendelse |
 | `POST /dokument/operasjoner` | Operasjonslista som EGEN ressurs — på `/dokument` overstyrer feltet bryterne i stillhet |
-| `POST /spor`, `/analyser`, `/uttrekk`, `/fyll_skjema` | Eldre veier. Alle fire gir fakta `/dokument` også gir; de finnes fordi de kom først, ikke fordi noen bruker dem |
+| `POST /spor` | Spørsmål **uten** fil: generelt modellsvar, merket `uten_dokument`. Det er den ene tingen `/dokument` ikke kan (den krever fil) |
 | `GET /dokumentasjon` · `/openapi.json` · `/hjelp` | Swagger UI · maskinlesbart skjema · tjenestestatus |
 
-⚠️ Endepunktene deler bare `ok`, `tekst` og `strekkoder` på toppnivå.
-Bytter du endepunkt, brekker klientens JSON-stier — velg ett og bli der.
+⚠️ `/analyser`, `/uttrekk` og `/fyll_skjema` er FJERNET. De ga fakta
+`/dokument` også gir, i tre andre JSON-former, og fantes bare fordi de
+kom først. Erstatning: `felter=ja`, `struktur=ja` og `skjema_mal=…`.
 Detaljer: [docs/endepunkter.md](docs/endepunkter.md).
 
 ---

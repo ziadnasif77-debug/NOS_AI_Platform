@@ -44,8 +44,8 @@ STANDARD_URL = "http://127.0.0.1:8600"
 def _grunnadresse() -> str:
     url = (os.environ.get("NAV_URL") or STANDARD_URL).strip().rstrip("/")
     # tåler at man limer inn hele endepunktet i stedet for bare verten
-    for hale in ("/dokument", "/analyser", "/spor", "/uttrekk",
-                 "/fyll_skjema", "/jobb", "/hjelp"):
+    for hale in ("/dokument/operasjoner", "/dokument", "/spor",
+                 "/jobb", "/hjelp"):
         if url.endswith(hale):
             url = url[: -len(hale)]
     return url

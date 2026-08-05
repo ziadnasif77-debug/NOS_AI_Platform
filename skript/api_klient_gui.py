@@ -13,8 +13,8 @@ statusverdier og feilkoder er VERIFISERT mot serverkoden, ikke gjettet:
   - Dokument     POST /dokument       ETT kall med brytere (felter/struktur/
                                       svar/skjema/korriger) — leses én gang
   - Spør         POST /spor           fil og/eller spørsmål → svar
-  - Fyll skjema  POST /fyll_skjema    fil + JSON-mal → utfylte felter
-  - Analyser     POST /analyser       fil → deterministisk felt-/dato-/OCR-analyse
+  - Fyll skjema  POST /dokument  skjema_mal → utfylte felter
+  - Analyser     POST /dokument  felter=ja → deterministisk felt-/datoanalyse
   - Uttrekk      POST /uttrekk        fil → strukturert uttrekk med fast skjema
   - Storjobb     POST /jobb m.fl.     bakgrunnsbehandling av store skanninger,
                                       med automatisk statusoppfølging
@@ -241,7 +241,7 @@ FANER = [
 # stedet for bare tunneladressen, strippes stien av igjen — begge former
 # virker, og en fane ender aldri opp med å bygge «.../spor/spor».
 KJENTE_ENDEPUNKT_SUFFIKSER = (
-    "/spor", "/analyser", "/uttrekk", "/fyll_skjema", "/jobb", "/dokument",
+    "/spor", "/jobb", "/dokument", "/dokument/operasjoner",
     "/hjelp", "/dokumentasjon", "/openapi.json",
 )
 
@@ -544,15 +544,47 @@ class ApiKlient:
 
     def fyll_skjema(self, pdf_sti: Path, skjema_json: str,
                     skjema_motor: str = "modell"):
-        with open(pdf_sti, "rb") as fil:
-            return self._post(
-                "/fyll_skjema",
-                filer={"fil": (pdf_sti.name, fil, "application/pdf")},
-                felter={"skjema": skjema_json, "skjema_motor": skjema_motor},
-            )
+        """Går via /dokument. Det gamle /fyll_skjema ga de samme fakta i
+        en annen form og er fjernet. MERK feltnavnet: malen heter
+        «skjema_mal» her — i /dokument er «skjema» en ja/nei-bryter."""
+        svar = self.dokument_samlet(pdf_sti, {
+            "skjema_mal": skjema_json, "skjema_motor": skjema_motor,
+            "felter": "nei", "tekst": "nei"})
+        return self._pakk_ut(svar, "skjema")
+
+    @staticmethod
+    def _pakk_ut(svar: dict, del_: str) -> dict:
+        """Løfter én del opp til toppnivå, slik de gamle endepunktene
+        svarte. Fellesfeltene blir med, så visningskoden i fanene
+        trenger ikke vite at veien er lagt om."""
+        if not isinstance(svar, dict):
+            return svar
+        innhold = svar.get(del_)
+        ut = {n: svar[n] for n in
+              ("ok", "status", "filnavn", "tekst", "antall_tegn",
+               "antall_sider", "strekkoder", "handskrift", "kvalitet",
+               "varsler", "dokumentprofil", "fra_cache", "tid_sekunder",
+               "kilde", "versjon") if n in svar}
+        if isinstance(innhold, dict):
+            ut.update(innhold)
+        elif innhold is not None:
+            ut[del_] = innhold
+        return ut
+
+    def analyser(self, pdf_sti: Path):
+        """Det gamle /analyser: felter + datoer, deterministisk."""
+        return self._pakk_ut(
+            self.dokument_samlet(pdf_sti, {"felter": "ja"}), "felter")
+
+    def uttrekk(self, pdf_sti: Path):
+        """Det gamle /uttrekk: komplett strukturert JSON."""
+        return self._pakk_ut(
+            self.dokument_samlet(pdf_sti, {"struktur": "ja", "felter": "nei"}),
+            "struktur")
 
     def send_fil(self, endepunkt: str, pdf_sti: Path):
-        """Felles form for /analyser, /uttrekk og /jobb: bare en fil inn."""
+        """Bare en fil inn. Brukes nå av /jobb; /analyser og /uttrekk har
+        egne metoder som går via /dokument."""
         with open(pdf_sti, "rb") as fil:
             return self._post(
                 endepunkt,
@@ -3849,7 +3881,7 @@ class DokumentKlientApp:
         self._kjor_foresporsel(
             panel,
             self._fil_foresporsel(self.analyser_valgt_fil,
-                                  lambda pdf: self.klient.send_fil("/analyser", pdf)),
+                                  lambda pdf: self.klient.analyser(pdf)),
             self._standard_suksess(panel, "Analyse fullført", formatter),
         )
 
@@ -3898,7 +3930,7 @@ class DokumentKlientApp:
         self._kjor_foresporsel(
             panel,
             self._fil_foresporsel(self.uttrekk_valgt_fil,
-                                  lambda pdf: self.klient.send_fil("/uttrekk", pdf)),
+                                  lambda pdf: self.klient.uttrekk(pdf)),
             self._standard_suksess(panel, "Uttrekk fullført"),
         )
 
