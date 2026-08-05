@@ -434,3 +434,70 @@ def test_varselet_faar_sin_egen_type():
     typer = {v["kode"] for v in api._varsler(
         ["Modellen og uttrekket er uenige om «navn»: …"])}
     assert "uenighet" in typer
+
+
+# ------------------------------------------------------------------ #
+#  6. Sidedekning — den farligste tause avkortingen                    #
+# ------------------------------------------------------------------ #
+
+def _delvis(lest=10, totalt=500):
+    """Et dokument der bare de N første sidene ga tekst."""
+    tekst = "\n".join(f"[Side {i} av {totalt}]\nInnhold side {i}"
+                      for i in range(1, lest + 1))
+    return api.DokumentKontekst(tekst, antall_sider=totalt).profil
+
+
+def test_delvis_lest_dokument_sier_det_som_et_FELT():
+    """Et skannet dokument på 500 sider får som standard OCR på 10 av
+    dem. Advarselen sto i `varsler` — men ved millioner av dokumenter
+    leser ingen `varsler`; de leser feltet og handler på det."""
+    dekning = _delvis()["dekning"]
+    assert dekning["sider_lest"] == "delvis"
+    assert dekning["sider"] == {"lest": 10, "totalt": 500}
+
+
+def test_begrunnelsen_paastaar_ikke_noe_om_usette_sider():
+    """Kjernen. Før dette sa profilen «Dokumentet inneholder ingen
+    fødselsnummer» om et dokument vi hadde sett 2 % av. Setningen var
+    ikke sann — vi så ikke etter i 98 %."""
+    profil = _delvis()
+    assert "MERK: bare 10 av 500 sider" in profil["part"]["begrunnelse"]
+    assert "ikke hele dokumentet" in profil["part"]["begrunnelse"]
+
+
+def test_konfidensen_kan_ikke_vaere_hoy_paa_to_prosent():
+    """Konfidensen er det SVAKESTE leddet (R74), og å ha lest 10 av 500
+    sider ER et svakt ledd — uansett hvor sikre de leste feltene er."""
+    fnr = lag_fnr(0)
+    tekst = (f"[Side 1 av 500]\nDokumentet gjelder:\nOla Nordmann\n"
+             f"Fnr: {fnr}\nVedtaksdato: 17.05.2024\n")
+    tekst += "\n".join(f"[Side {i} av 500]\nInnhold" for i in range(2, 11))
+    profil = api.DokumentKontekst(tekst, antall_sider=500).profil
+    assert profil["part"]["fnr"] == fnr          # funnet, og sikkert
+    assert profil["sammendrag"]["konfidens"] == "middels"
+
+
+def test_full_dekning_gir_ingen_stoy():
+    """Motprøven: leses alt, skal verken forbeholdet eller nedgraderingen
+    slå inn."""
+    fnr = lag_fnr(0)
+    tekst = (f"[Side 1 av 1]\nDokumentet gjelder:\nOla Nordmann\n"
+             f"Fnr: {fnr}\nVedtaksdato: 17.05.2024\n")
+    profil = api.DokumentKontekst(tekst, antall_sider=1).profil
+    assert profil["dekning"]["sider_lest"] == "full"
+    assert "MERK" not in (profil["part"]["begrunnelse"] or "")
+    assert profil["sammendrag"]["konfidens"] == "hoy"
+
+
+def test_uten_sideantall_er_dekningen_ukjent_ikke_full():
+    """Vet vi ikke hvor mange sider filen har, kan vi ikke påstå at alle
+    er lest. «ukjent» er det ærlige svaret."""
+    from delt.dokumentprofil import sidedekning
+    assert sidedekning("[Side 1 av 3]\nnoe", None)["grad"] == "ukjent"
+
+
+def test_ren_tekst_uten_sidemerker_er_full_dekning():
+    """Sendes teksten direkte inn, finnes ingen sidemerker — og da er
+    alt vi fikk, alt som finnes."""
+    from delt.dokumentprofil import sidedekning
+    assert sidedekning("bare tekst, ingen merker", 1)["grad"] == "full"

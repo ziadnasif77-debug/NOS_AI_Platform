@@ -2832,6 +2832,25 @@ def _skjemaer() -> dict:
                         "samme som konfidens-«ingen», som betyr at vi lette "
                         "og ikke fant"),
                     "properties": {
+                        "sider_lest": s(
+                            example="delvis",
+                            enum=["full", "delvis", "ukjent"],
+                            description="OVERSTYRER resten. «delvis» ⇒ "
+                                        "INGEN av feltene i svaret gjelder "
+                                        "hele dokumentet, bare de leste "
+                                        "sidene. Et skannet dokument på 500 "
+                                        "sider får som standard OCR på 10 av "
+                                        "dem; øk med «maks_sider» eller bruk "
+                                        "POST /jobb for hele"),
+                        "sider": {
+                            "type": "object",
+                            "description": "Hvor mange sider som faktisk ble "
+                                           "lest, av hvor mange filen har",
+                            "properties": {
+                                "lest": {"type": "integer", "nullable": True,
+                                         "example": 10},
+                                "totalt": {"type": "integer",
+                                           "nullable": True, "example": 500}}},
                         "ytelse": s(enum=DEKNINGSGRAD),
                         "sakstype": s(enum=DEKNINGSGRAD),
                         "signatur_sider": s(enum=DEKNINGSGRAD),

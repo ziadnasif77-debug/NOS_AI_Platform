@@ -649,6 +649,48 @@ def _part(eier: dict) -> dict:
     }
 
 
+def sidedekning(tekst: str, antall_sider) -> dict:
+    """Hvor mye av dokumentet uttrekket FAKTISK så.
+
+    Dette er den farligste tause avkortingen i hele API-et. Et skannet
+    dokument på 500 sider får som standard OCR på 10 av dem — to
+    prosent — og resten av profilen svarer likevel som om den hadde
+    lest hele: `part.fnr: null` med begrunnelsen «Dokumentet inneholder
+    ingen fødselsnummer». Den setningen er ikke sann. Vi så ikke etter
+    i 98 % av dokumentet.
+
+    Advarselen sto i `varsler`, men ved millioner av dokumenter leser
+    ingen `varsler` — de leser feltet og handler på det. Derfor er
+    dekningen et FELT, ikke en tekst.
+
+    Målt på sidemerkene `[Side N av M]`, som OCR-/tekstlaget setter for
+    hver side den faktisk leverte tekst fra."""
+    totalt = antall_sider if isinstance(antall_sider, int) else None
+    lest = len({int(n) for n in re.findall(r"\[Side (\d+) av \d+\]",
+                                           tekst or "")})
+    if not totalt:
+        # Uten sideantall vet vi ikke hva vi sammenligner mot. Da er
+        # svaret «vet ikke» — ikke «alt er lest».
+        return {"grad": "ukjent", "lest": lest or None, "totalt": None}
+    if not lest:
+        # Ingen sidemerker: enten ett-sides dokument eller ren tekst
+        # sendt inn direkte. Begge deler er full dekning.
+        return {"grad": "full", "lest": totalt, "totalt": totalt}
+    if lest >= totalt:
+        return {"grad": "full", "lest": totalt, "totalt": totalt}
+    return {"grad": "delvis", "lest": lest, "totalt": totalt}
+
+
+# Setningen som gjør enhver «vi fant ingenting»-begrunnelse ærlig når
+# bare deler av dokumentet ble lest.
+def _med_forbehold(begrunnelse, dekning) -> str:
+    if not begrunnelse or (dekning or {}).get("grad") != "delvis":
+        return begrunnelse
+    return (f"{begrunnelse} MERK: bare {dekning['lest']} av "
+            f"{dekning['totalt']} sider ble lest, så dette gjelder de "
+            f"leste sidene — ikke hele dokumentet.")
+
+
 def _iso_datoer(felter: dict, navn) -> dict:
     """Gjør de navngitte datofeltene om til ISO.
 
@@ -876,6 +918,18 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     # «arbeidsavklaringspenger». Lista har alle, i den rekkefølgen de
     # står; «ytelse» over er fortsatt den mest spesifikke og ligger
     # ALLTID i lista (vokterprøve).
+    dekning_sider = sidedekning(tekst, antall_sider)
+
+    # Enhver «vi fant ingenting»-begrunnelse må si fra når den bare
+    # gjelder de leste sidene. Uten dette lyver den: «Dokumentet
+    # inneholder ingen fødselsnummer» på et dokument vi så 2 % av.
+    for _sti in (("part", "begrunnelse"),
+                 ("dokument", "dato_begrunnelse")):
+        _seksjon = profil.get(_sti[0]) or {}
+        if _seksjon.get(_sti[1]):
+            _seksjon[_sti[1]] = _med_forbehold(_seksjon[_sti[1]],
+                                               dekning_sider)
+
     profil["ytelser"] = [kodeverk(navn, YTELSE_TERM)
                          for navn in finn_alle_ytelser(tekst)]
 
@@ -891,6 +945,11 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     # kommentar i koden og ingen markør i JSON-en — en klient kunne ikke
     # skille «vi så etter og fant ingenting» fra «vi så aldri etter».
     profil["dekning"] = {
+        # FØRST, fordi den overstyrer alt annet: er bare 10 av 500
+        # sider lest, sier ingen andre felt noe om hele dokumentet.
+        "sider_lest": dekning_sider["grad"],
+        "sider": {"lest": dekning_sider["lest"],
+                  "totalt": dekning_sider["totalt"]},
         "ytelse": "delvis" if profil["ytelse"]["navn"] else "ikke_evaluert",
         "sakstype": "ikke_evaluert",
         "signatur_sider": "ikke_evaluert",
@@ -902,7 +961,16 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
                        "ikke» — to helt ulike ting under ett ord. "
                        "«delvis» betyr at noe fastslås, men ikke alt; "
                        "«full» at et null-svar er en påstand om "
-                       "dokumentet."),
+                       "dokumentet. «sider_lest: delvis» overstyrer "
+                       "resten: da gjelder INGEN av feltene hele "
+                       "dokumentet, bare de leste sidene."),
     }
     profil["sammendrag"] = _sammendrag(profil, len(profil["dokumenter"]))
+
+    # Konfidensen er det SVAKESTE leddet (R74), og å ha lest 10 av 500
+    # sider ER et svakt ledd. «hoy» på det grunnlaget er feil uansett
+    # hvor sikre de leste feltene er hver for seg.
+    if (dekning_sider["grad"] == "delvis"
+            and profil["sammendrag"]["konfidens"] == "hoy"):
+        profil["sammendrag"]["konfidens"] = "middels"
     return profil

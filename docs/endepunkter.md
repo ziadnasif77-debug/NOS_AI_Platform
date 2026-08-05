@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R115 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R117 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -431,6 +431,29 @@ er reservert for ytelsens EGEN status (`innvilget`, `lopende`,
 `opphort`) og står `null` inntil den leses. Hvor langt systemet er
 kommet, sto tidligere i det samme feltet — to helt ulike opplysninger
 under ett navn — og ligger nå i `dekning`.
+
+**`dekning.sider_lest` — les denne FØRST (R116).** Et skannet
+dokument på 500 sider får som standard OCR på 10 av dem. Resten av
+profilen svarte likevel som om den hadde lest hele — `part.fnr: null`
+med begrunnelsen «Dokumentet inneholder ingen fødselsnummer», om et
+dokument vi hadde sett 2 % av.
+
+```json
+"dekning": {
+  "sider_lest": "delvis",
+  "sider": {"lest": 10, "totalt": 500},
+  …
+}
+```
+
+Er den `delvis`, gjelder **ingen** av feltene hele dokumentet. Da får
+`part.begrunnelse` og `dokument.dato_begrunnelse` også påskriften «MERK:
+bare 10 av 500 sider ble lest …», og `sammendrag.konfidens` kan ikke
+være `hoy` (R117).
+
+Målt: en tekstlags-PDF på 500 sider leses HELT på 0,3 s. En skannet på
+500 sider leser 10 sider på 33 s — hele dokumentet tar ~27 minutter og
+må gå via `POST /jobb`. `maks_sider` løfter grensen til 50 synkront.
 
 **`dekning` — hva systemet leter etter ennå.** Et `null`-felt kan bety
 to ting: dokumentet har ikke opplysningen, eller vi har ikke bygget
