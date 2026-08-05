@@ -61,6 +61,7 @@ uansett hvor mange deler du ber om.
 | `strekkoder` | ja/nei | ja | nei |
 | `datoer_detaljert` | ja/nei | ja | nei |
 | `profil` | `full` / `sammendrag` | `full` | nei |
+| `opphav` | `ingen` / `viktige` / `alle` | `viktige` | nei |
 | `operasjoner` | JSON-liste | — | avhenger av typene |
 
 Modelldelene er **AV som standard**, slik at det raske forblir raskt.
@@ -85,7 +86,7 @@ i stillhet.
 ### Svar
 
 ```
-ok, status, filnavn, valg, dokumentprofil, tekst, antall_tegn,
+ok, status, filnavn, valg, dokumentprofil, opphav, tekst, antall_tegn,
 antall_sider, felter, struktur, svar, skjema, korriger, korrigert_tekst,
 strekkoder, handskrift, kvalitet, varsler, fra_cache, tid_sekunder,
 kilde, versjon
@@ -126,6 +127,52 @@ hva som ble tatt bort — ingenting forsvinner i stillhet.
 **`datoer_detaljert=nei`** dropper `datoer`-lista fra svaret (den
 utgjør typisk ~40 % av responsen på et flersidig dokument).
 `dokumentprofil` beholder alle daterte felter uansett.
+
+**`opphav` — ett oppslag for «hvor kom dette fra?» (R88).** API-et
+forklarte proveniens på fem uavhengige måter — `dato_kilde`,
+`dato_sikkerhet`, `part.sikkerhet`, `kilde_per_felt` og `kilde` — med
+hvert sitt ordforråd, og to av dem brukte samme ord om ulike ting. En
+klient som ville vite «hvor sikkert er dette, og hvorfor?» måtte lære
+alle fem.
+
+`opphav` er ett kart: JSON Pointer (RFC 6901) inn, opphavet ut. Samme
+pekersyntaks som `problem.errors[].pointer` allerede bruker.
+
+```json
+"opphav": {
+  "/dokumentprofil/part/fnr": {
+    "metode": "etikett", "konfidens": "hoy",
+    "begrunnelse": "Fødselsnummeret står under «Dokumentet gjelder» …",
+    "side": null},
+  "/dokumentprofil/part/fodselsdato": {
+    "metode": "avledet", "konfidens": "hoy",
+    "begrunnelse": "Regnet ut av fødselsnummerets seks første siffer …",
+    "side": null}
+}
+```
+
+To LUKKEDE ordforråd, aldri gjenbrukt til noe annet:
+
+| `metode` | Betyr |
+|---|---|
+| `sjekksum` | Matematisk bevist (mod11/mod10) — ikke et mønstertreff |
+| `etikett` | Ordet står i dokumentet, rett ved verdien |
+| `posisjon` | Utledet av plasseringen (brevhode, signaturblokk) |
+| `metadata` | Fra filens metadata, ikke fra teksten |
+| `strekkode` | Dekodet av strekkodeleseren |
+| `regel` | Deterministisk mønsterregel |
+| `modell` | Gjettet av språkmodellen — ikke bevist |
+| `avledet` | FØLGER av en annen verdi; står ikke nødvendigvis i dokumentet |
+| `ingen` | Fant ingenting — `begrunnelse` sier hvorfor |
+
+`konfidens` er den samme skalaen som overalt ellers: `hoy`, `middels`,
+`lav`, `ingen`.
+
+**Kartet erstatter ingenting.** `dato_kilde`, `dato_sikkerhet`,
+`part.sikkerhet` og `kilde_per_felt` står urørt ved siden av — `opphav`
+er en PROJEKSJON av dem, ikke en sjette uavhengig mening. Kombinerer du
+med `profil=sammendrag`, faller pekerne til de utelatte seksjonene bort:
+en peker til et fjernet felt ville lekket nettopp det bryteren skjuler.
 
 ### dokumentprofil — følger ALLTID med (R79)
 

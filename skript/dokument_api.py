@@ -111,6 +111,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
 # å endre. Se delt/prompter.py for hvorfor.
 from delt import prompter
 from delt.dokumentprofil import bygg_profil
+from delt.opphav import (NIVAAER, bygg_opphav, opphav_for_skjema,
+                         uten_utelatte)
 
 # UTF-8-trygg utskrift: norsk (æøå) skal ikke krasje når stdout er en fil/
 # pipe med ikke-UTF-8-kodesett (cp1256) — f.eks. når tjeneste-wrapperen
@@ -443,7 +445,7 @@ GZIP_NIVAA = 6
 MAKS_MODELLOPERASJONER = 8
 OPERASJON_FRIST_S = 75.0
 
-API_VERSJON = "1.4.0"
+API_VERSJON = "1.5.0"
 # Promptversjonen står i regler/prompter.md, sammen med ordlyden den
 # beskriver — så den ikke kan bli glemt når en regel endres. Den slås
 # opp PER SVAR (prompter.versjon()), ikke ved oppstart: reglene kan
@@ -2329,6 +2331,27 @@ def _skjemaer() -> dict:
                                      "bare_andre_roller", "umerket",
                                      "ingen"]),
                 "begrunnelse": s()}},
+        "Opphav": {
+            "type": "object",
+            "description": (
+                "Hvor ETT felt kommer fra. To LUKKEDE ordforråd, aldri "
+                "gjenbrukt til noe annet — API-et forklarte tidligere "
+                "proveniens på fem uavhengige måter med hvert sitt "
+                "ordforråd, og to av dem brukte samme ord om ulike ting."),
+            "properties": {
+                "metode": s(example="etikett",
+                            enum=["sjekksum", "etikett", "posisjon",
+                                  "metadata", "strekkode", "regel", "modell",
+                                  "avledet", "ingen"],
+                            description="«sjekksum» er matematisk bevis "
+                                        "(mod11/mod10); «avledet» betyr at "
+                                        "verdien FØLGER av en annen verdi og "
+                                        "ikke står i dokumentet; «modell» "
+                                        "betyr gjettet av språkmodellen"),
+                "konfidens": s(example="hoy", enum=KONFIDENS,
+                               description="Samme skala som overalt ellers"),
+                "begrunnelse": s(nullable=True),
+                "side": {"type": "integer", "nullable": True}}},
         "Varsel": {
             "type": "object",
             "description": (
@@ -2804,6 +2827,17 @@ def _skjemaer() -> dict:
                 "filnavn": s(),
                 "valg": ref("Valg"),
                 "dokumentprofil": ref("Dokumentprofil"),
+                "opphav": {
+                    "type": "object",
+                    "additionalProperties": ref("Opphav"),
+                    "description": (
+                        "Proveniens for feltene i svaret, som JSON Pointer "
+                        "(RFC 6901) → opphav. Samme pekersyntaks som "
+                        "problem.errors[].pointer. Erstatter INGENTING: "
+                        "dato_kilde, dato_sikkerhet, part.sikkerhet og "
+                        "kilde_per_felt står urørt ved siden av — kartet "
+                        "er en projeksjon av dem, ikke en sjette uavhengig "
+                        "mening. Nivå styres med bryteren «opphav»")},
                 "tekst": s(nullable=True),
                 "antall_tegn": {"type": "integer"},
                 "antall_sider": {"type": "integer", "nullable": True,
@@ -3123,6 +3157,9 @@ def _openapi() -> dict:
                                    "strekkoder": {"type": "string",
                                                   "enum": ["ja", "nei"],
                                                   "description": "nei → hopper over strekkode-/QR-skanningen. Da betyr et tomt «strekkoder» at det ikke ble sett etter koder, IKKE at dokumentet mangler dem — «dokumentprofil.koder.lest» sier hvilket. Standard ja"},
+                                   "opphav": {"type": "string",
+                                              "enum": ["ingen", "viktige", "alle"],
+                                              "description": "Nivå på proveniens-sidekartet «opphav»: JSON Pointer (RFC 6901) → {metode, konfidens, begrunnelse, side}. viktige (standard) = parten og dokumentdatoen; alle = hvert felt vi kan tilskrive et opphav; ingen = tomt kart"},
                                    "datoer_detaljert": {"type": "string",
                                                         "enum": ["ja", "nei"],
                                                         "description": "nei → dropper «datoer»-lista fra svaret (typisk ~40 % av responsen på et flersidig dokument). dokumentprofil beholder alle daterte felter uansett. Standard ja"},
@@ -4527,11 +4564,30 @@ class Handler(BaseHTTPRequestHandler):
         # R79: profilen følger med her OGSÅ. De to kontraktene på
         # /dokument skal svare likt på det som gjelder dokumentet selv —
         # ellers ville en klient miste metadataene ved å bytte kontrakt.
+        profilform = ((tekstfelter or {}).get("profil", "").strip().lower()
+                      or "full")
+        if profilform not in ("full", "sammendrag"):
+            return self._svar(400, {"ok": False, "feil": (
+                f"Ukjent 'profil': {profilform!r}. Bruk 'full' (standard) "
+                "eller 'sammendrag'."),
+                "felter_feil": [{"pointer": "/profil",
+                                 "message": "Bruk 'full' eller 'sammendrag'"}]})
+        opphavsnivaa = ((tekstfelter or {}).get("opphav", "").strip().lower()
+                        or "viktige")
+        if opphavsnivaa not in NIVAAER:
+            return self._svar(400, {"ok": False, "feil": (
+                f"Ukjent 'opphav': {opphavsnivaa!r}. Bruk "
+                + ", ".join(f"'{n}'" for n in NIVAAER) + "."),
+                "felter_feil": [{"pointer": "/opphav",
+                                 "message": "Bruk " + "/".join(NIVAAER)}]})
         try:
-            profil = ktx.profil
+            profil = _profilform(ktx.profil, profilform)
+            opphav = uten_utelatte(bygg_opphav(ktx.profil, opphavsnivaa),
+                                   profil)
         except Exception as exc:
             profil = {"ok": False,
                       "feil": f"Profilen feilet ({type(exc).__name__}): {exc}"[:300]}
+            opphav = {}
 
         # Samme ærlighetsregel som bryter-veien: en operasjon som feilet
         # skal ikke telles som «modellen kjørte». Resultatene er en liste
@@ -4542,6 +4598,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._svar(200, {
             "ok": True, "filnavn": filnavn,
             "dokumentprofil": profil,
+            "opphav": opphav,
             "modell_brukt": modell_kjorte,
             "resultater": resultater,
             "antall_tegn": len(ktx.tekst),
@@ -4660,6 +4717,18 @@ class Handler(BaseHTTPRequestHandler):
                 "eller 'sammendrag'."),
                 "felter_feil": [{"pointer": "/profil",
                                  "message": "Bruk 'full' eller 'sammendrag'"}]})
+        # «opphav» samler de fem måtene API-et forklarte proveniens på i
+        # ETT oppslag: JSON Pointer inn, {metode, konfidens, begrunnelse,
+        # side} ut. Standard «viktige» = parten og dokumentdatoen, altså
+        # det de fleste faktisk handler på; «alle» tar med resten.
+        opphavsnivaa = (tekstfelter.get("opphav", "").strip().lower()
+                        or "viktige")
+        if opphavsnivaa not in NIVAAER:
+            return self._svar(400, {"ok": False, "feil": (
+                f"Ukjent 'opphav': {opphavsnivaa!r}. Bruk "
+                + ", ".join(f"'{n}'" for n in NIVAAER) + "."),
+                "felter_feil": [{"pointer": "/opphav",
+                                 "message": "Bruk " + "/".join(NIVAAER)}]})
         if ukjente:
             return self._svar(400, {"ok": False, "feil": (
                 "Ukjent bryterverdi: " + ", ".join(ukjente)
@@ -4908,11 +4977,23 @@ class Handler(BaseHTTPRequestHandler):
         # gjelder er egenskaper ved dokumentet selv, ikke svar på et
         # spørsmål, og en klient skal ikke måtte be om dem for å få dem.
         profil = trygt(lambda: _profilform(ktx.profil, profilform))
+        # Kartet er en PROJEKSJON av feltene profilen alt har fylt — ikke
+        # en ny beregning. Ellers ville «opphav» blitt en sjette
+        # uavhengig mening om det samme, altså problemet det løser.
+        opphav = trygt(lambda: bygg_opphav(ktx.profil, opphavsnivaa)) or {}
+        # profil=sammendrag tok seksjoner bort; da skal ingen peker vise
+        # dit. En peker til et fjernet felt lekker nettopp det bryteren
+        # skulle skjule, og gir klienten et oppslag som ikke går noe sted.
+        opphav = uten_utelatte(opphav, profil if isinstance(profil, dict) else {})
+        skjemadel = deler.get("skjema")
+        if isinstance(skjemadel, dict) and skjemadel.get("kilde_per_felt"):
+            opphav.update(opphav_for_skjema(skjemadel["kilde_per_felt"]))
 
         return self._svar(200, {
             "ok": True, "filnavn": filnavn,
             "valg": valg,
             "dokumentprofil": profil,
+            "opphav": opphav,
             "tekst": raa_tekst if valg["tekst"] else None,
             "antall_tegn": len(raa_tekst),
             "antall_sider": ktx.antall_sider,
@@ -6398,8 +6479,9 @@ def _sjekk_feltnavn(tekstfelter: dict, kjente: set):
 _KJENTE_FELT_DOKUMENT = {
     "felter", "struktur", "svar", "skjema", "korriger", "tekst", "sporsmal",
     "skjema_mal", "skjema_motor", "operasjoner", "maks_sider", "strekkoder",
-    "koordinater", "datoer_detaljert", "profil"}
-_KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder"}
+    "koordinater", "datoer_detaljert", "profil", "opphav"}
+_KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder",
+                            "profil", "opphav"}
 _KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}
 _KJENTE_FELT_SLADD = {"typer", "maks_sider"}
