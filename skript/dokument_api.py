@@ -443,7 +443,7 @@ GZIP_NIVAA = 6
 MAKS_MODELLOPERASJONER = 8
 OPERASJON_FRIST_S = 75.0
 
-API_VERSJON = "1.3.0"
+API_VERSJON = "1.4.0"
 # Promptversjonen står i regler/prompter.md, sammen med ordlyden den
 # beskriver — så den ikke kan bli glemt når en regel endres. Den slås
 # opp PER SVAR (prompter.versjon()), ikke ved oppstart: reglene kan
@@ -2292,7 +2292,56 @@ def _skjemaer() -> dict:
     b = lambda **kw: {"type": "boolean", **kw}         # noqa: E731
     ref = lambda navn: {"$ref": f"#/components/schemas/{navn}"}  # noqa: E731
 
+    # ÉN konfidensskala i hele svaret. Ordet «usikker» var et fjerde navn
+    # på det «lav» allerede het, så en klient som filtrerte på «lav»
+    # aldri traff sammendraget.
+    KONFIDENS = ["hoy", "middels", "lav", "ingen"]
+    # Hvor langt SYSTEMET er kommet — ikke hvor sikkert et funn er.
+    DEKNINGSGRAD = ["full", "delvis", "ingen"]
+
     return {
+        "Part": {
+            "type": "object",
+            "description": (
+                "R69: personen dokumentet GJELDER — ikke saksbehandler, "
+                "lege, arbeidsgiver eller kopimottaker. «Part» er "
+                "forvaltningslovens ord (§ 2 e); «dokumenteier» betyr i "
+                "dokumenthåndtering arkivets eier, altså akkurat den "
+                "personen regelen skal holde UTENFOR. Uten et positivt "
+                "partssignal er fnr null, og «sikkerhet» sier hvorfor."),
+            "properties": {
+                "navn": s(nullable=True, example="Ola Nordmann"),
+                "fnr": s(nullable=True),
+                "fodselsdato": s(nullable=True,
+                                 description="Avledet av et BEVIST "
+                                             "fødselsnummer"),
+                "fastslatt": b(description="Har vi en part eller ikke — som "
+                                           "ÉN verdi, så en klient slipper å "
+                                           "vite hvilke av fem "
+                                           "«sikkerhet»-ord som betyr ja"),
+                "grunnlag": s(example="etikett",
+                              enum=["etikett", "eneste_nummer", "ingen"],
+                              description="Hva funnet BYGGER PÅ. En "
+                                          "kategori, ikke et trinn på en "
+                                          "skala — ikke sammenlign med </>"),
+                "sikkerhet": s(example="merket",
+                               enum=["merket", "flertydig",
+                                     "bare_andre_roller", "umerket",
+                                     "ingen"]),
+                "begrunnelse": s()}},
+        "Varsel": {
+            "type": "object",
+            "description": (
+                "En advarsel du kan programmere mot. De samme advarslene "
+                "lå før bare som fri tekst i «kvalitet.advarsler», der en "
+                "klient måtte lete etter delstrenger for å reagere. "
+                "«kode» er stabil; «detalj» er den opprinnelige teksten."),
+            "properties": {
+                "type": s(example="ocr"),
+                "kode": s(example="ukjent_felt"),
+                "alvor": s(example="advarsel",
+                           enum=["info", "advarsel", "feil"]),
+                "detalj": s()}},
         "Kodet": {
             "type": "object",
             "description": "Maskinkode + menneskelig term. Bruk «kode» i "
@@ -2505,10 +2554,44 @@ def _skjemaer() -> dict:
                 "docs/dokumentprofil_skjema.md."),
             "properties": {
                 "skjemaversjon": s(
-                    example="1.0",
+                    example="1.3",
                     description="Profilens EGEN versjon. Endres formen, går "
                                 "dette tallet opp — en klient skal se det på "
                                 "tallet, ikke når noe brekker"),
+                "sammendrag": {
+                    "type": "object",
+                    "description": (
+                        "R74: START HER. De få feltene de fleste er ute "
+                        "etter, hentet opp fra seksjonene under. "
+                        "«konfidens» er det SVAKESTE leddet, ikke et "
+                        "gjennomsnitt — er parten usikker, hjelper det "
+                        "ikke at datoen er sikker"),
+                    "properties": {
+                        "navn": s(nullable=True, example="Ola Nordmann"),
+                        "fnr": s(nullable=True),
+                        "dokumentdato": s(nullable=True,
+                                          example="2026-05-12"),
+                        "dokumenttype": s(nullable=True, example="vedtak"),
+                        "ytelse": s(nullable=True),
+                        "saksnummer": s(nullable=True),
+                        "antall_sider": {"type": "integer",
+                                         "nullable": True},
+                        "antall_dokumenter": {"type": "integer"},
+                        "konfidens": s(example="middels", enum=KONFIDENS,
+                                       description="Nytt navn. "
+                                                   "«sikkerhet» under er "
+                                                   "samme verdi"),
+                        "sikkerhet": s(example="middels", enum=KONFIDENS,
+                                       description="Gammelt navn for "
+                                                   "«konfidens»")}},
+                "dokumenter": {
+                    "type": "array", "items": {"type": "object"},
+                    "description": (
+                        "R74: en FIL er ikke nødvendigvis ETT dokument. "
+                        "En skannet saksmappe kan inneholde vedtak, "
+                        "inntektsmelding og klage — hver med sin dato og "
+                        "noen ganger sin person. Er antall_dokumenter > "
+                        "1, LES DENNE i stedet for toppnivåfeltene")},
                 "fil": {
                     "type": "object",
                     "description": "Filen som ble lest. antall_sider er "
@@ -2524,29 +2607,23 @@ def _skjemaer() -> dict:
                                          "items": {"type": "integer"}},
                         "uleselige_sider": {"type": "array", "nullable": True,
                                             "items": {"type": "integer"}}}},
-                "eier": {
-                    "type": "object",
-                    "description": (
-                        "R69: personen dokumentet GJELDER — ikke "
-                        "saksbehandler, lege, arbeidsgiver eller "
-                        "kopimottaker. Uten et positivt eiersignal er fnr "
-                        "null, og «sikkerhet» sier hvorfor"),
-                    "properties": {
-                        "navn": s(nullable=True, example="Ola Nordmann"),
-                        "fnr": s(nullable=True),
-                        "fodselsdato": s(nullable=True,
-                                         description="Avledet av et BEVIST "
-                                                     "fødselsnummer"),
-                        "sikkerhet": s(example="merket",
-                                       enum=["merket", "flertydig",
-                                             "bare_andre_roller", "umerket",
-                                             "ingen"]),
-                        "begrunnelse": s()}},
-                "andre_personer": {
+                "part": ref("Part"),
+                "eier": {**ref("Part"),
+                         "description": "Gammelt navn for «part». Samme "
+                                        "objekt, ikke en kopi som kan "
+                                        "avvike. Beholdes — ingenting "
+                                        "fjernes i denne versjonen"},
+                "andre_fodselsnummer": {
                     "type": "array", "items": {"type": "object"},
                     "description": "Alle ANDRE fødselsnummer i dokumentet, "
-                                   "med rolle og etikett. Eierens gjentas "
+                                   "med rolle og etikett. Partens gjentas "
                                    "aldri her"},
+                "andre_personer": {
+                    "type": "array", "items": {"type": "object"},
+                    "description": "Gammelt navn for "
+                                   "«andre_fodselsnummer». Lista "
+                                   "inneholder fødselsnummer, ikke "
+                                   "personposter — derav omdøpingen"},
                 "dokument": {
                     "type": "object",
                     "description": (
@@ -2593,8 +2670,8 @@ def _skjemaer() -> dict:
                 "ytelse": {
                     "type": "object",
                     "description": "Ytelsesreglene kommer senere. «navn» "
-                                   "hentes av den ene detektoren som finnes, "
-                                   "«status» sier hvor langt vi er kommet",
+                                   "hentes av den ene detektoren som "
+                                   "finnes",
                     "properties": {
                         "navn": s(nullable=True, example="dagpenger"),
                         "type": s(nullable=True),
@@ -2603,7 +2680,51 @@ def _skjemaer() -> dict:
                                                 "stanset — ikke implementert"),
                         "gyldig_fra": s(nullable=True),
                         "gyldig_til": s(nullable=True),
-                        "status": s(example="delvis_implementert")}},
+                        "status": s(nullable=True,
+                                    enum=["innvilget", "lopende",
+                                          "opphort"],
+                                    description="YTELSENS egen status. "
+                                                "Sto tidligere for hvor "
+                                                "langt SYSTEMET var "
+                                                "kommet — to ulike ting "
+                                                "under ett navn. Det "
+                                                "andre ligger nå i "
+                                                "«dekning»"),
+                        "implementasjon": s(example="delvis",
+                                            enum=DEKNINGSGRAD)}},
+                "dekning": {
+                    "type": "object",
+                    "description": (
+                        "Hva systemet LETER ETTER ennå. Et null-felt kan "
+                        "bety to ting: dokumentet mangler opplysningen, "
+                        "eller lesingen er ikke bygget. «ingen» ⇒ null "
+                        "sier ingenting om DOKUMENTET, og en klient skal "
+                        "ikke melde avvik"),
+                    "properties": {
+                        "ytelse": s(enum=DEKNINGSGRAD),
+                        "sakstype": s(enum=DEKNINGSGRAD),
+                        "signatur_sider": s(enum=DEKNINGSGRAD),
+                        "uleselige_sider": s(enum=DEKNINGSGRAD),
+                        "forklaring": s()}},
+                "hjemmel": {
+                    "type": "object",
+                    "description": (
+                        "R77/R78: hvilken folketrygdlov som gjaldt DA "
+                        "dokumentet ble skrevet. Det finnes to — 1966 og "
+                        "1997 — og de samme kapittelnumrene betyr ULIKE "
+                        "ting i dem. Valget følger dokumentdatoen (skillet "
+                        "går 1997-05-01), ikke dagens dato, og "
+                        "«begrunnelse» sier hvorfor. Uten dokumentdato er "
+                        "«lov» null: å gjette lov er verre enn å la være."),
+                    "properties": {
+                        "lov": s(nullable=True, example="ftrl-1997",
+                                 enum=["ftrl-1997", "ftrl-1966", None]),
+                        "lov_tittel": s(nullable=True),
+                        "status": s(nullable=True, example="gjeldende",
+                                    enum=["gjeldende", "opphevet", None]),
+                        "begrunnelse": s(nullable=True),
+                        "ytelse_kapittel": s(nullable=True, example="8"),
+                        "ytelse_kapittel_tittel": s(nullable=True)}},
                 "okonomi": {
                     "type": "object",
                     "description": "R71: beløp uten etikett blir aldri en "
@@ -2673,7 +2794,13 @@ def _skjemaer() -> dict:
             "description": "Svaret fra POST /dokument. Deler du ikke ba om "
                            "er null. «dokumentprofil» følger alltid med (R79).",
             "properties": {
-                "ok": b(),
+                "ok": b(description="Gikk forespørselen igjennom. Den er "
+                                    "true OGSÅ når OCR-en ga opp på tre "
+                                    "sider — se «status» for det"),
+                "status": s(example="ok", enum=["ok", "delvis", "feil"],
+                            description="Ett ord for hele svaret. «delvis» ⇒ "
+                                        "noe manglet eller ble hoppet over; "
+                                        "les «varsler»"),
                 "filnavn": s(),
                 "valg": ref("Valg"),
                 "dokumentprofil": ref("Dokumentprofil"),
@@ -2692,6 +2819,10 @@ def _skjemaer() -> dict:
                 "strekkoder": {"type": "array", "items": s()},
                 "handskrift": {"type": "array", "items": s()},
                 "kvalitet": ref("Kvalitet"),
+                "varsler": {"type": "array", "items": ref("Varsel"),
+                            "description": "Advarslene i «kvalitet.advarsler» "
+                                           "som TYPEDE objekter. Fritekst"
+                                           "lista blir stående ved siden av"},
                 "fra_cache": b(description="Teksten kom fra cache — samme fil "
                                            "er analysert før"),
                 "tid_sekunder": {"type": "number", "example": 0.6},
@@ -2989,6 +3120,15 @@ def _openapi() -> dict:
                                                    "description": "ja → beviste funn (fnr/konto/orgnr/KID/telefon/epost) med bokser per side, i «koordinater». Standard nei (bokser kan mangedoble svaret)"},
                                    "operasjoner": {"type": "string",
                                                    "description": "ALTERNATIV til bryterne: en JSON-liste av operasjoner, f.eks. [{\"type\":\"felter\"},{\"type\":\"skjema\",\"motor\":\"auto\",\"mal\":{...}}]. Gyldige typer: tekst, felter, struktur, svar (+sporsmal), skjema (+mal, +motor felter/modell/auto), korriger. Svar: {ok, resultater:[{type, ok, ...}]}. Maks 20 per kall"},
+                                   "strekkoder": {"type": "string",
+                                                  "enum": ["ja", "nei"],
+                                                  "description": "nei → hopper over strekkode-/QR-skanningen. Da betyr et tomt «strekkoder» at det ikke ble sett etter koder, IKKE at dokumentet mangler dem — «dokumentprofil.koder.lest» sier hvilket. Standard ja"},
+                                   "datoer_detaljert": {"type": "string",
+                                                        "enum": ["ja", "nei"],
+                                                        "description": "nei → dropper «datoer»-lista fra svaret (typisk ~40 % av responsen på et flersidig dokument). dokumentprofil beholder alle daterte felter uansett. Standard ja"},
+                                   "profil": {"type": "string",
+                                              "enum": ["full", "sammendrag"],
+                                              "description": "sammendrag → dokumentprofil uten person- og kontaktseksjoner (personvern: spør du bare om en dato, trenger svaret ikke fødselsnummer og adresse). «utelatt» navngir hva som ble tatt bort. Standard full"},
                                    "maks_sider": {"type": "integer"}}}}}},
                 "responses": {
                     "200": {"description":
@@ -4407,6 +4547,11 @@ class Handler(BaseHTTPRequestHandler):
             "antall_tegn": len(ktx.tekst),
             "antall_sider": ktx.antall_sider,
             "strekkoder": ktx.strekkoder, "handskrift": ktx.handskrift,
+            "varsler": _varsler(advarsler),
+            "status": _samlet_status(
+                {r.get("type", f"op{i}"): r
+                 for i, r in enumerate(resultater) if isinstance(r, dict)},
+                advarsler),
             "kvalitet": {"ocr_brukt": ktx.ocr_brukt,
                          "ocr_motorer": ktx.ocr_motorer or {},
                          "advarsler": advarsler},
@@ -4497,6 +4642,24 @@ class Handler(BaseHTTPRequestHandler):
         # eksisterende klienter) — egen bryter, standard AV: bokser per
         # funn kan mangedoble svaret, og de fleste kall trenger dem ikke.
         vil_ha_koordinater = paa("koordinater", False)
+        # «datoer_detaljert» er den enkeltdelen som veier mest i svaret:
+        # målt 12 949 av 33 424 byte (39 %) på en 10-siders bunke —
+        # større enn dokumentteksten selv. Standard er fortsatt PÅ, så
+        # ingen klient mister noe; men den som ikke bruker den kan nå si
+        # fra. (Standard flyttes til AV først i v2.)
+        vil_ha_datodetaljer = paa("datoer_detaljert", True)
+        # profil=sammendrag lar en klient la være å motta persondata den
+        # ikke skal ha. Personvernfunnet var at et kall med bare
+        # «sporsmal» likevel fikk fnr, fødselsdato, adresse, telefon,
+        # e-post, arbeidsgiver, årsinntekt, kontonummer og KID.
+        profilform = (tekstfelter.get("profil", "").strip().lower()
+                      or "full")
+        if profilform not in ("full", "sammendrag"):
+            return self._svar(400, {"ok": False, "feil": (
+                f"Ukjent 'profil': {profilform!r}. Bruk 'full' (standard) "
+                "eller 'sammendrag'."),
+                "felter_feil": [{"pointer": "/profil",
+                                 "message": "Bruk 'full' eller 'sammendrag'"}]})
         if ukjente:
             return self._svar(400, {"ok": False, "feil": (
                 "Ukjent bryterverdi: " + ", ".join(ukjente)
@@ -4642,7 +4805,13 @@ class Handler(BaseHTTPRequestHandler):
         # {type, ok, data}; her plukkes «data» ut for å beholde den flate
         # formen bryter-klientene alt får (uendret respons).
         if valg["felter"]:
-            deler["felter"] = trygt(lambda: FelterOperasjon().utfor(ktx)["data"])
+            def _felter_del():
+                data = FelterOperasjon().utfor(ktx)["data"]
+                if not vil_ha_datodetaljer:
+                    # nøkkelen blir stående (R44), men uten innholdet
+                    data["datoer_detaljert"] = None
+                return data
+            deler["felter"] = trygt(_felter_del)
         if valg["struktur"]:
             deler["struktur"] = trygt(lambda: StrukturOperasjon().utfor(ktx)["data"])
 
@@ -4738,7 +4907,7 @@ class Handler(BaseHTTPRequestHandler):
         # «valg». Sideantall, koder, dokumentdato og hvem dokumentet
         # gjelder er egenskaper ved dokumentet selv, ikke svar på et
         # spørsmål, og en klient skal ikke måtte be om dem for å få dem.
-        profil = trygt(lambda: ktx.profil)
+        profil = trygt(lambda: _profilform(ktx.profil, profilform))
 
         return self._svar(200, {
             "ok": True, "filnavn": filnavn,
@@ -4759,6 +4928,11 @@ class Handler(BaseHTTPRequestHandler):
             "korrigert_tekst": korrigert,
             "koordinater": koordinater,
             "strekkoder": strekkoder, "handskrift": handskrift,
+            # Strukturerte varsler ved siden av de frie strengene, så en
+            # klient kan skille «ukjent felt» fra «modellen er nede» uten
+            # tekstsøk. Strengene beholdes uendret.
+            "varsler": _varsler(advarsler),
+            "status": _samlet_status(deler, advarsler),
             "kvalitet": {"ocr_brukt": ocr_brukt,
                          "ocr_motorer": ocr_motorer or {},
                          "advarsler": advarsler},
@@ -6055,6 +6229,82 @@ class DokumentKontekst:
         return len(self.tekst.strip()) < 5 and not self.strekkoder
 
 
+# Advarsler er i dag frie strenger som klienter må søke i tekst for å
+# tolke. Her får de en maskinlesbar type ved siden av. Mønstrene er
+# konservative: treffer ingen, blir typen «annet» — og strengen er
+# uansett med, så ingenting går tapt.
+_VARSELTYPER = (
+    (re.compile(r"(?i)ukjent(e)? felt"), "ukjent-felt", "advarsel"),
+    (re.compile(r"(?i)\(nesten\) tom|tom side"), "tom-side", "info"),
+    (re.compile(r"(?i)borealis|modellen er ikke"), "modell-utilgjengelig", "feil"),
+    (re.compile(r"(?i)avkortet|maksimal svarlengde"), "avkortet", "advarsel"),
+    (re.compile(r"(?i)tall_verifisert|ikke finnes i dokumentet"), "tall-uverifisert", "advarsel"),
+    (re.compile(r"(?i)h[åa]ndskrevet|bildekvalitet|utbrent"), "lesekvalitet", "advarsel"),
+    (re.compile(r"(?i)hoppet over|utelatt|budsjettet"), "utelatt", "advarsel"),
+    (re.compile(r"(?i)strekkode|qr"), "koder", "info"),
+)
+
+
+def _profilform(profil: dict, form: str) -> dict:
+    """Full profil, eller bare sammendraget.
+
+    `profil=sammendrag` finnes for personvern, ikke for størrelse: en
+    klient som bare spør «hvilken dato er dette brevet fra» skal kunne
+    la være å motta fødselsnummer, adresse, telefon, inntekt og
+    kontonummer. Standard er `full` — R79 er urørt for alle som ikke ber
+    om noe annet.
+
+    `utelatt` navngir hva som er borte, så ingenting forsvinner i
+    stillhet (samme løfte som R65 gir for ukjente feltnavn)."""
+    if form != "sammendrag" or not isinstance(profil, dict):
+        return profil
+    behold = ("skjemaversjon", "sammendrag", "fil", "dokument", "sak",
+              "ytelse", "hjemmel", "koder", "dekning")
+    liten = {k: v for k, v in profil.items() if k in behold}
+    # sammendraget bærer navn og fnr — også de ut når formålet er å
+    # slippe å motta persondata
+    if isinstance(liten.get("sammendrag"), dict):
+        liten["sammendrag"] = {k: v for k, v in liten["sammendrag"].items()
+                               if k not in ("navn", "fnr")}
+    liten["utelatt"] = sorted(set(profil) - set(behold))
+    return liten
+
+
+def _varsler(advarsler) -> list:
+    """Gjør advarselstrengene om til objekter med type og alvorsgrad.
+
+    Strengene beholdes uendret i `kvalitet.advarsler` — dette kommer i
+    tillegg, så en klient kan bytte over i sitt eget tempo. Uten det
+    må den skille «ukjent felt» fra «tom side» fra «modellen er nede»
+    med tekstsøk."""
+    ut = []
+    for melding in advarsler or []:
+        melding = str(melding)
+        slag, alvor = "annet", "advarsel"
+        for monster, s, a in _VARSELTYPER:
+            if monster.search(melding):
+                slag, alvor = s, a
+                break
+        ut.append({"type": f"{PROBLEM_BASIS}/{slag}", "kode": slag,
+                   "alvor": alvor, "detalj": melding})
+    return ut
+
+
+def _samlet_status(deler: dict, advarsler) -> str:
+    """«ok» | «delvis» | «feil» for hele svaret.
+
+    I dag er toppnivå-`ok` alltid true når forespørselen kom fram, selv
+    om en del feilet — klienten må gå gjennom hele deltreet for å
+    oppdage det. Dette svarer på spørsmålet direkte."""
+    deler_med_svar = [d for d in deler.values() if isinstance(d, dict)]
+    feilet = [d for d in deler_med_svar if d.get("ok") is False]
+    if not feilet:
+        return "ok"
+    if len(feilet) == len(deler_med_svar):
+        return "feil"
+    return "delvis"
+
+
 def _delen_brukte_modellen(del_) -> bool:
     """Kjørte modellen for DENNE delen?
 
@@ -6148,7 +6398,7 @@ def _sjekk_feltnavn(tekstfelter: dict, kjente: set):
 _KJENTE_FELT_DOKUMENT = {
     "felter", "struktur", "svar", "skjema", "korriger", "tekst", "sporsmal",
     "skjema_mal", "skjema_motor", "operasjoner", "maks_sider", "strekkoder",
-    "koordinater"}
+    "koordinater", "datoer_detaljert", "profil"}
 _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FYLL_SKJEMA = {"skjema", "skjema_motor", "maks_sider", "strekkoder"}
 _KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}

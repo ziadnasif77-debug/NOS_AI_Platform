@@ -321,18 +321,32 @@ def test_naermeste_etikett_vinner_over_den_lenger_opp():
 
 def test_ytelsesnavnet_hentes_men_reglene_er_ikke_paa_plass():
     """Navnet finnes fra før (én detektor, én kilde). Resten av
-    ytelsesreglene kommer senere, og status sier det rett ut i stedet
-    for å la tomme felter se ut som «ingen ytelse»."""
+    ytelsesreglene kommer senere — men modenheten står nå i «dekning»,
+    ikke i «ytelse.status». Det feltet publiserte VÅR byggeframdrift som
+    domenetilstand, og var opptatt av et verdirom det ikke kunne vokse
+    inn i: når reglene lander, er de riktige verdiene «innvilget»,
+    «lopende» og «opphort»."""
     profil = _profil("Vedtak om dagpenger\nDokumentdato: 01.03.2024")
     assert profil["ytelse"]["navn"] == "dagpenger"
     assert profil["ytelse"]["utfall"] is None
-    assert profil["ytelse"]["status"] == "delvis_implementert"
+    assert profil["ytelse"]["status"] is None       # frigjort til domenet
+    assert profil["dekning"]["ytelse"] == "delvis"
 
 
 def test_uten_ytelse_i_dokumentet_sies_det_at_reglene_mangler():
     profil = _profil("Et brev uten ytelse.\nDokumentdato: 01.03.2024")
     assert profil["ytelse"]["navn"] is None
-    assert profil["ytelse"]["status"] == "ikke_implementert"
+    assert profil["dekning"]["ytelse"] == "ingen"
+
+
+def test_dekning_skiller_ikke_bygget_fra_ikke_funnet():
+    """Fire felter var null fordi koden aldri leter etter dem, og fire
+    fordi den lette og ikke fant. En klient kunne ikke se forskjellen."""
+    dekning = _profil("")["dekning"]
+    assert dekning["sakstype"] == "ingen"
+    assert dekning["signatur_sider"] == "ingen"
+    assert dekning["uleselige_sider"] == "ingen"
+    assert "ikke leter etter" in dekning["forklaring"]
 
 
 # ------------------------------------------------------------------ #
@@ -467,7 +481,7 @@ def test_et_ukjent_dokument_laaner_ikke_naboens_type():
 def test_skjemaversjonen_folger_med():
     """Endres formen senere, skal en klient kunne se det på tallet i
     stedet for å oppdage det når noe brekker."""
-    assert _profil("")["skjemaversjon"] == "1.2"
+    assert _profil("")["skjemaversjon"] == "1.3"
 
 
 def test_profilen_folger_med_i_dokumentsvaret_uten_at_noen_ber_om_det():

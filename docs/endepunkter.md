@@ -59,6 +59,8 @@ uansett hvor mange deler du ber om.
 | `koordinater` | ja/nei | nei | nei |
 | `maks_sider` | tall | — | nei |
 | `strekkoder` | ja/nei | ja | nei |
+| `datoer_detaljert` | ja/nei | ja | nei |
+| `profil` | `full` / `sammendrag` | `full` | nei |
 | `operasjoner` | JSON-liste | — | avhenger av typene |
 
 Modelldelene er **AV som standard**, slik at det raske forblir raskt.
@@ -83,13 +85,47 @@ i stillhet.
 ### Svar
 
 ```
-ok, filnavn, valg, dokumentprofil, tekst, antall_tegn, antall_sider,
-felter, struktur, svar, skjema, korriger, korrigert_tekst, strekkoder,
-handskrift, kvalitet, fra_cache, tid_sekunder, kilde, versjon
+ok, status, filnavn, valg, dokumentprofil, tekst, antall_tegn,
+antall_sider, felter, struktur, svar, skjema, korriger, korrigert_tekst,
+strekkoder, handskrift, kvalitet, varsler, fra_cache, tid_sekunder,
+kilde, versjon
 ```
 
 Deler du ikke ba om er `null`. `kilde` sier om modellen faktisk kjørte
 (se [Ærlighetsfelter](#ærlighetsfelter)).
+
+**`status` — ett ord for hele svaret.** `ok` er ikke nok: den er `true`
+også når OCR-en ga opp på tre sider, fordi forespørselen som sådan gikk
+igjennom. `status` skiller de tilfellene:
+
+| `status` | Betydning |
+|---|---|
+| `ok` | Alt du ba om ble levert uten varsler |
+| `delvis` | Levert, men noe manglet eller ble hoppet over — les `varsler` |
+| `feil` | En del du ba om kunne ikke leveres |
+
+**`varsler[]` — advarsler du kan programmere mot.** De samme
+advarslene lå før bare som fri tekst i `kvalitet.advarsler`, hvor en
+klient måtte lete etter delstrenger for å reagere. Nå følger de også
+med som objekter — `{type, kode, alvor, detalj}` — der `kode` er stabil
+og `detalj` er den opprinnelige teksten. Fritekstlista blir stående;
+den er ikke fjernet.
+
+| `alvor` | Handling |
+|---|---|
+| `info` | Til opplysning; svaret er fullstendig |
+| `advarsel` | Svaret er brukbart, men noe manglet |
+| `feil` | En etterspurt del mangler |
+
+**`profil=sammendrag` — når du ikke trenger persondata.** Spør du bare
+om en dato, er det ingen grunn til at svaret skal inneholde
+fødselsnummer, adresse og kontonummer. `profil=sammendrag` kutter
+person- og kontaktseksjonene, og `dokumentprofil.utelatt[]` navngir
+hva som ble tatt bort — ingenting forsvinner i stillhet.
+
+**`datoer_detaljert=nei`** dropper `datoer`-lista fra svaret (den
+utgjør typisk ~40 % av responsen på et flersidig dokument).
+`dokumentprofil` beholder alle daterte felter uansett.
 
 ### dokumentprofil — følger ALLTID med (R79)
 
@@ -108,13 +144,13 @@ stedet for når noe brekker. Se
 
 ```json
 {
-  "skjemaversjon": "1.2",
+  "skjemaversjon": "1.3",
 
   "sammendrag": {"navn": "Ola Nordmann", "fnr": "12345678910",
                  "dokumentdato": "2026-05-12", "dokumenttype": "vedtak",
                  "ytelse": "dagpenger", "saksnummer": "4417820",
                  "antall_sider": 10, "antall_dokumenter": 5,
-                 "sikkerhet": "middels"},
+                 "konfidens": "middels", "sikkerhet": "middels"},
 
   "dokumenter": [
     {"sider": [1,2], "dato": "2026-05-12", "type": "vedtak",
@@ -128,14 +164,17 @@ stedet for når noe brekker. Se
   "fil":   {"filnavn": "vedtak.pdf", "antall_sider": 12,
             "blanke_sider": [7], "uleselige_sider": null},
 
-  "eier":  {"navn": "Ola Nordmann", "fnr": "12345678910",
-            "fodselsdato": "1990-01-01", "sikkerhet": "merket",
+  "part":  {"navn": "Ola Nordmann", "fnr": "12345678910",
+            "fodselsdato": "1990-01-01", "fastslatt": true,
+            "grunnlag": "etikett", "sikkerhet": "merket",
             "begrunnelse": "Fødselsnummeret står under «Dokumentet gjelder» …"},
+  "eier": { /* samme objekt som "part" — se aliasene under */ },
 
-  "andre_personer": [
+  "andre_fodselsnummer": [
     {"fnr": "<saksbehandlerens nr>", "rolle": "annen",
      "etikett": "Saksbehandler", "navn": "Kari Hansen"}
   ],
+  "andre_personer": [ /* samme liste som "andre_fodselsnummer" */ ],
 
   "dokument": {
     "type": "vedtak", "tittel": "Vedtak om dagpenger", "sprak": "norsk",
@@ -154,8 +193,12 @@ stedet for når noe brekker. Se
             "referanse": null, "sakstype": null},
 
   "ytelse": {"navn": "dagpenger", "type": null, "utfall": null,
-             "gyldig_fra": null, "gyldig_til": null,
-             "status": "delvis_implementert"},
+             "gyldig_fra": null, "gyldig_til": null, "status": null,
+             "implementasjon": "delvis"},
+
+  "dekning": {"ytelse": "delvis", "sakstype": "ingen",
+              "signatur_sider": "ingen", "uleselige_sider": "ingen",
+              "forklaring": "«ingen» betyr at systemet ikke leter etter feltet ennå …"},
 
   "okonomi": {"dagsats": 1234.00, "manedsbelop": 24680.00,
               "utbetalt_belop": null, "tilbakebetalingsbelop": null,
@@ -216,8 +259,9 @@ Etiketten må stå hel (`stilling` treffer ikke inne i
 **Felter merket `null` som ikke betyr «ingenting»:**
 `fil.uleselige_sider` og `visuelt.signatur_sider` er `null` fordi de
 krever analyse vi ikke har bygget ennå — ikke fordi dokumentet mangler
-dem. `fil.blanke_sider` er `null` når teksten ikke har sidemarkører, og
-en liste når den har.
+dem. `dekning` sier hvilke det gjelder, så du slipper å lære lista
+utenat. `fil.blanke_sider` er `null` når teksten ikke har sidemarkører,
+og en liste når den har.
 
 En dato som bare NEVNES i teksten — en frist, en fødselsdato — blir
 aldri dokumentdato. Finnes ingen dato som kan knyttes til dokumentet
@@ -225,12 +269,34 @@ selv, er `dokumentdato` `null` og `dokumentdato_begrunnelse` sier
 hvorfor. Stempeldatoer («Mottatt NAV 20.05.2024») ligger i
 `stempel_datoer` og blir aldri dokumentdato (R68).
 
-**`eier` — personen dokumentet gjelder (R69):**
+**Navn som finnes i to utgaver.** Tre felter har fått et nytt navn ved
+siden av det gamle. Begge peker på NØYAKTIG samme verdi, en test vokter
+at de ikke gliser fra hverandre, og ingen av de gamle navnene fjernes i
+denne versjonen:
+
+| Nytt navn | Gammelt navn | Hvorfor det nye |
+|---|---|---|
+| `part` | `eier` | «Part» er forvaltningslovens ord (§ 2 e). I dokumenthåndtering betyr «dokumenteier» arkivets eier eller saksbehandleren — altså akkurat den personen R69 skal holde UTENFOR feltet. |
+| `andre_fodselsnummer` | `andre_personer` | Lista inneholder fødselsnummer, ikke personer. En klient som leste navnet bokstavelig ventet seg personposter. |
+| `sammendrag.konfidens` | `sammendrag.sikkerhet` | `sikkerhet` leses like gjerne som *security* som *confidence*. |
+
+Konfidensskalaen har nå ÉN verdimengde overalt: `hoy`, `middels`,
+`lav`, `ingen`. Ordet `usikker` var et fjerde navn på det `lav` allerede
+het, så en klient som filtrerte på `lav` aldri traff sammendraget.
+
+**`part` / `eier` — personen dokumentet gjelder (R69):**
 
 Et NAV-dokument nevner ofte flere personer med fødselsnummer: den saken
 gjelder, saksbehandleren, legen, arbeidsgiverens kontakt. Nummeret
 kobles derfor til etiketten nærmest foran seg, og bare et POSITIVT
 eiersignal kvalifiserer. `sikkerhet` sier hva vi bygger på:
+
+`fastslatt` er svaret på det de fleste faktisk lurer på — «har vi en
+part eller ikke?» — som én boolsk verdi, i stedet for at hver klient må
+kjenne igjen hvilke av fem `sikkerhet`-ord som betyr ja. `grunnlag`
+sier hva funnet BYGGER PÅ (`etikett`, `eneste_nummer`, `ingen`); det er
+en kategori, ikke et trinn på konfidensskalaen, og skal ikke
+sammenlignes med `>`/`<`.
 
 | `sikkerhet` | Betydning | `fnr` |
 |-------------|-----------|-------|
@@ -255,7 +321,21 @@ etter den. `qr_kode_side`/`strekkode_side` er FØRSTE side med en kode;
 alle forekomstene ligger i `qr`- og `strekkode`-listene.
 
 **`ytelse`** er en plassholder. Reglene kommer senere; feltet er med fra
-første dag så kontrakten ikke må endres når de gjør det.
+første dag så kontrakten ikke må endres når de gjør det. `ytelse.status`
+er reservert for ytelsens EGEN status (`innvilget`, `lopende`,
+`opphort`) og står `null` inntil den leses. Hvor langt systemet er
+kommet, sto tidligere i det samme feltet — to helt ulike opplysninger
+under ett navn — og ligger nå i `dekning`.
+
+**`dekning` — hva systemet leter etter ennå.** Et `null`-felt kan bety
+to ting: dokumentet har ikke opplysningen, eller vi har ikke bygget
+lesingen. Forskjellen avgjør om en klient skal melde avvik eller vente.
+
+| Verdi | Betydning |
+|---|---|
+| `full` | Feltet leses, og `null` betyr at dokumentet mangler det |
+| `delvis` | Noe fastslås, ikke alt |
+| `ingen` | Systemet leter ikke etter feltet ennå — `null` sier ingenting om dokumentet |
 
 ### Sidespørsmål besvares av KODEN
 

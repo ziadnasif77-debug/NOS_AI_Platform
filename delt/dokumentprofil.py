@@ -546,7 +546,48 @@ def _sammendrag(profil: dict, antall_dokumenter: int) -> dict:
         "saksnummer": profil["sak"]["saksnummer"],
         "antall_sider": profil["fil"]["antall_sider"],
         "antall_dokumenter": antall_dokumenter,
-        "sikkerhet": sikkerhet,
+        # «sikkerhet» betyr fire ulike ting i dette API-et — security i
+        # /hjelp, konfidens her, beviskategori i eier, og en annen skala
+        # i dato_sikkerhet («usikker» mot «lav» for samme akse). Ordet
+        # pensjoneres fra verdidomenet: «konfidens» er nå navnet, med ÉN
+        # skala overalt. Det gamle feltet blir liggende til v2.
+        "konfidens": _EN_SKALA.get(sikkerhet, sikkerhet),
+        "sikkerhet": sikkerhet,          # UTGÅTT — bruk «konfidens»
+    }
+
+
+# Én ordnet konfidensskala for hele API-et. «usikker» var et fjerde ord
+# for det «lav» allerede het, så en klient som filtrerte på «lav» aldri
+# traff sammendraget.
+_EN_SKALA = {"usikker": "lav"}
+
+# Beviskategoriene i eier-oppslaget er IKKE en gradert skala —
+# «flertydig» betyr at vi fant MER bevis, ikke mindre, og kan ikke
+# rangeres mot «umerket». De hører til en egen akse: grunnlaget.
+_GRUNNLAG = {
+    "merket": "etikett",
+    "flertydig": "flertydig",
+    "bare_andre_roller": "bare_andre_roller",
+    "umerket": "umerket",
+    "ingen": "ingen",
+}
+
+
+def _part(eier: dict) -> dict:
+    """Personen dokumentet gjelder, med begge navnesettene.
+
+    «grunnlag» erstatter «sikkerhet» her: verdiene er beviskategorier,
+    ikke grader. Og «fastslatt» svarer på det spørsmålet de fleste
+    faktisk stiller — fant dere personen? — så nye bevistilstander kan
+    legges til i «grunnlag» uten å brekke noen som matcher på enum."""
+    return {
+        "navn": eier["navn"],
+        "fnr": eier["fnr"],
+        "fodselsdato": _fodselsdato_av_fnr(eier["fnr"]),
+        "fastslatt": eier["fnr"] is not None,
+        "grunnlag": _GRUNNLAG.get(eier["sikkerhet"], eier["sikkerhet"]),
+        "sikkerhet": eier["sikkerhet"],      # UTGÅTT — bruk «grunnlag»
+        "begrunnelse": eier["begrunnelse"],
     }
 
 
@@ -585,7 +626,7 @@ def _valuta(tekst: str) -> dict:
     return {"valuta": kode, "valuta_merknad": None}
 
 
-SKJEMAVERSJON = "1.2"
+SKJEMAVERSJON = "1.3"
 
 
 def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
@@ -624,16 +665,22 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             "uleselige_sider": None,
         },
 
-        "eier": {
-            "navn": eier["navn"],
-            "fnr": eier["fnr"],
-            "fodselsdato": _fodselsdato_av_fnr(eier["fnr"]),
-            "sikkerhet": eier["sikkerhet"],
-            "begrunnelse": eier["begrunnelse"],
-        },
+        # «part» er forvaltningslovens term (§ 2 e: «den en avgjørelse
+        # retter seg mot») og nøyaktig det deteksjonen matcher på.
+        # «eier» er juridisk feil, og feil i en FARLIG retning: i
+        # dokumentforvaltning betyr «dokumenteier» arkiveier eller
+        # ansvarlig saksbehandler — altså nettopp personen R69 finnes
+        # for å utelukke. En integrasjon som mapper «eier» mot sitt
+        # arkivsystems eierfelt treffer feil person.
+        "part": _part(eier),
+        "eier": _part(eier),             # UTGÅTT — bruk «part»
 
-        # ALDRI sammenblandet med eier — se R69
-        "andre_personer": eier["andre_fodselsnummer"],
+        # ALDRI sammenblandet med parten — se R69. Feltet er nøklet på
+        # fødselsnummer og deduplisert på det, så en person nevnt bare
+        # ved navn kommer ikke med. «andre_personer» lovet mer enn det
+        # kan holde; det interne navnet var det ærlige.
+        "andre_fodselsnummer": eier["andre_fodselsnummer"],
+        "andre_personer": eier["andre_fodselsnummer"],   # UTGÅTT
 
         "dokument": {
             "type": s_dok.get("dokumenttype") or None,
@@ -672,14 +719,22 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         # Ytelsesreglene kommer senere. Navnet hentes fra den ENE
         # detektoren som finnes (struktur), så profilen og /uttrekk ikke
         # kan si hver sin ting; resten står tomt til reglene er på plass.
+        # «status» her publiserte VÅR byggeframdrift som domenetilstand:
+        # {"navn": "sykepenger", "status": "delvis_implementert"} leses
+        # naturlig som at sykepengesaken er delvis behandlet. Verre —
+        # navnet var opptatt av et verdirom det ikke kan vokse inn i,
+        # for når ytelsesreglene lander er de riktige verdiene
+        # «innvilget»/«lopende»/«opphort». Modenheten bor nå i
+        # «dekning»; «status» er frigjort til å bety ytelsens status.
         "ytelse": {
             "navn": s_dok.get("ytelse") or None,
             "type": None,
             "utfall": None,
             "gyldig_fra": None,
             "gyldig_til": None,
-            "status": "delvis_implementert" if s_dok.get("ytelse")
-                      else "ikke_implementert",
+            "status": None,
+            # UTGÅTT — flyttet til profilens «dekning»-seksjon
+            "implementasjon": "delvis" if s_dok.get("ytelse") else "ingen",
         },
 
         "okonomi": {
@@ -728,5 +783,18 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         dok["lov"] = egen["lov"]
         dok["lov_status"] = egen["status"]
 
+    # Hva systemet FAKTISK er i stand til å fastslå ennå. Profilen hadde
+    # fire «ikke bygget ennå»-nuller spredt rundt, hver med sin egen
+    # kommentar i koden og ingen markør i JSON-en — en klient kunne ikke
+    # skille «vi så etter og fant ingenting» fra «vi så aldri etter».
+    profil["dekning"] = {
+        "ytelse": profil["ytelse"]["implementasjon"],
+        "sakstype": "ingen",
+        "signatur_sider": "ingen",
+        "uleselige_sider": "ingen",
+        "forklaring": ("«ingen» betyr at systemet ikke leter etter feltet "
+                       "ennå — ikke at dokumentet mangler det. «delvis» "
+                       "betyr at noe fastslås, men ikke alt."),
+    }
     profil["sammendrag"] = _sammendrag(profil, len(profil["dokumenter"]))
     return profil

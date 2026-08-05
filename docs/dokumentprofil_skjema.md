@@ -5,13 +5,30 @@ Formålet med dette dokumentet er å avgjøre FORMEN på svaret fra
 svaret felt for felt til det blir stort, usammenhengende og umulig å
 endre uten å bryte klienter.
 
-Status: **implementert, `skjemaversjon: "1.2"`.** Seksjonsformen i §3
+Status: **implementert, `skjemaversjon: "1.3"`.** Seksjonsformen i §3
 er den som svares i dag, i begge kontraktene. Feltreferansen ligger i
 [endepunkter.md](endepunkter.md); reglene som håndhever den er
-R71–R73, R79 og R80 i [regler_lokal_api.md](regler_lokal_api.md).
+R71–R73, R79–R87 i [regler_lokal_api.md](regler_lokal_api.md).
 
 Endres formen senere, går `skjemaversjon` opp — en klient skal kunne se
-endringen på tallet, ikke oppdage den når noe brekker.
+endringen på tallet, ikke oppdage den når noe brekker. Det holdt ikke
+som løfte alene: `API_VERSJON` sto urørt på 1.3.0 gjennom 45 commits
+mens hele `operasjoner`-kontrakten, `hjemmel` og `sammendrag` kom til.
+Derfor ligger nøkkelsettet nå som fasit i
+`tester/fasit_profilnokler.json`, og `test_kontraktsvakt.py` feiler når
+det endres — versjonen kan ikke lenger glemmes i stillhet (R87).
+
+**Tillegg i 1.3 (additive — ingenting fjernet):**
+
+| Felt | Hva |
+|---|---|
+| `part` | Nytt navn for `eier`; samme objekt (R81) |
+| `andre_fodselsnummer` | Nytt navn for `andre_personer`; samme liste (R81) |
+| `sammendrag.konfidens` | Nytt navn for `sammendrag.sikkerhet` (R81) |
+| `part.fastslatt` | «Har vi en part?» som ÉN boolsk verdi |
+| `part.grunnlag` | Hva funnet bygger på — kategori, ikke skala (R82) |
+| `dekning` | Hvilke felter systemet LETER etter ennå (R84) |
+| `ytelse.status` | Frigjort til ytelsens egen status; modenheten flyttet til `dekning` |
 
 ---
 
