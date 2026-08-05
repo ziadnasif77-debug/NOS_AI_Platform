@@ -5,7 +5,7 @@ Formålet med dette dokumentet er å avgjøre FORMEN på svaret fra
 svaret felt for felt til det blir stort, usammenhengende og umulig å
 endre uten å bryte klienter.
 
-Status: **implementert, `skjemaversjon: "2.0"`.** Seksjonsformen i §3
+Status: **implementert, `skjemaversjon: "1.0"`.** Seksjonsformen i §3
 er den som svares i dag, i begge kontraktene. Feltreferansen ligger i
 [endepunkter.md](endepunkter.md); reglene som håndhever den er
 R71–R73, R79–R97 i [regler_lokal_api.md](regler_lokal_api.md).
@@ -18,10 +18,10 @@ Derfor ligger nøkkelsettet nå som fasit i
 `tester/fasit_profilnokler.json`, og `test_kontraktsvakt.py` feiler når
 det endres — versjonen kan ikke lenger glemmes i stillhet (R87).
 
-**2.0 — ett navn per felt.** 1.3 og 1.4 la til nye navn ved siden av de
-gamle for ikke å bryte klienter. API-et var aldri utgitt, så de klientene
+**1.0 — ett navn per felt.** Underveis i utviklingen ble nye navn
+lagt til ved siden av de gamle for ikke å bryte klienter. API-et var aldri utgitt, så de klientene
 fantes ikke — og prisen var at hvert felt lå to steder med en vakttest
-for hvert par. I 2.0 er de gamle navnene fjernet:
+for hvert par. Ved utgivelse er de gamle navnene fjernet:
 
 | Bruk | Fjernet |
 |---|---|

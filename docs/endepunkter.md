@@ -193,7 +193,7 @@ stedet for når noe brekker. Se
 
 ```json
 {
-  "skjemaversjon": "2.0",
+  "skjemaversjon": "1.0",
 
   "sammendrag": {"navn": "Ola Nordmann", "fnr": "12345678910",
                  "dokumentdato": "2026-05-12", "dokumenttype": "vedtak",

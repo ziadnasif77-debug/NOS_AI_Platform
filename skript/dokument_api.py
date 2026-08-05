@@ -491,7 +491,11 @@ GZIP_NIVAA = 6
 MAKS_MODELLOPERASJONER = 8
 OPERASJON_FRIST_S = 75.0
 
-API_VERSJON = "2.0.0"
+# FØRSTE utgivelse. Tallene 1.3.0 -> 1.6.0 -> 2.0.0 var utvikling ingen
+# utenfor maskinen så: API-et har aldri vært i drift. «2.0.0» ville
+# påstått at det fantes en 1.x som ble brutt, og et versjonsnummer som
+# lyver er verre enn ingen (R108).
+API_VERSJON = "1.0.0"
 # Promptversjonen står i regler/prompter.md, sammen med ordlyden den
 # beskriver — så den ikke kan bli glemt når en regel endres. Den slås
 # opp PER SVAR (prompter.versjon()), ikke ved oppstart: reglene kan

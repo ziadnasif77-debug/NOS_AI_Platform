@@ -676,7 +676,9 @@ def _valuta(tekst: str) -> dict:
     return {"valuta": kode, "valuta_merknad": None}
 
 
-SKJEMAVERSJON = "2.0"
+# Første utgivelse — se API_VERSJON i dokument_api.py for hvorfor det
+# ikke er 2.0.
+SKJEMAVERSJON = "1.0"
 
 
 def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,

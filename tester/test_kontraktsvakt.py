@@ -148,6 +148,24 @@ def test_profilens_nokkelsett_er_uendret():
         f"deretter med UOPPDATER_FASIT=1.")
 
 
+def test_versjonsnummeret_teller_utgivelser_ikke_utviklingsrunder():
+    """API_VERSJON gikk 1.3.0 → 1.6.0 → 2.0.0 mens API-et lå på én
+    maskin uten en eneste klient. «2.0.0» ville påstått at det fantes en
+    1.x som ble brutt — og et versjonsnummer som lyver er verre enn
+    ingen, for det er nettopp det man stoler på i stedet for å lese
+    endringsloggen (R108).
+
+    Testen holder tallet på 1.0.0 fram til FØRSTE utgivelse. Skal det
+    opp, er det fordi noen utenfor maskinen bruker den forrige — og da
+    endres denne testen bevisst, ikke i forbifarten."""
+    assert api.API_VERSJON == "1.0.0", (
+        f"API_VERSJON er {api.API_VERSJON}. Er API-et utgitt nå? I så "
+        f"fall: oppdater denne testen og R108. Ellers er tallet en "
+        f"utviklingsrunde ingen utenfor maskinen har sett.")
+    assert SKJEMAVERSJON == "1.0", (
+        f"skjemaversjon er {SKJEMAVERSJON} — samme spørsmål som over.")
+
+
 def test_fasiten_gjelder_dagens_skjemaversjon():
     """Fanger det motsatte: at noen bumper versjonen uten å oppdatere
     fasiten, eller omvendt."""
