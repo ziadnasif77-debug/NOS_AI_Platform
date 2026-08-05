@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R101 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R107 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -30,6 +30,8 @@ unntatt `/hjelp` — se [Klientidentitet](#klientidentitet--navngitte-api-nøkle
 | Avvise et dårlig skann FØR GPU-en brukes | `POST /forhandssjekk` |
 | Sladde beviste identifikatorer (fnr, konto, …) | `POST /sladd` |
 | Finne ut hva serveren FAKTISK mottok fra deg | `POST /ekko` |
+| Ha et RYDDET svar uten utgåtte navn | `POST /api/v2/dokument` |
+| Kjøre en operasjonsliste som egen ressurs | `POST /dokument/operasjoner` |
 
 **`/dokument` er hovedveien.** De øvrige dokumentendepunktene er eldre og
 beholdes bevisst for å ikke bryte eksisterende integrasjoner (særlig
@@ -782,6 +784,78 @@ Felter som finnes for at du skal kunne stole på svaret — eller la være.
 kilde inneholder "borealis"  →  modellen bidro, la et menneske se på det
 kilde er "deterministisk"    →  regex + mod11, ingen gjetning
 ```
+
+---
+
+## v2 — samme innhold, ryddet form
+
+`POST /api/v2/dokument` tar **nøyaktig samme felter** som `/dokument` og
+gjør nøyaktig samme arbeid. Bare svarformen er en annen. Det er ingen
+egen kodevei — to veier ville drevet fra hverandre, slik de to
+`/dokument`-kontraktene en gang gjorde.
+
+v1 har 21 toppnøkler uten ordning: fakta om dokumentet, opplysninger om
+forespørselen og diagnostikk ligger om hverandre. v2 deler dem i tre
+(R103):
+
+```json
+{
+  "ok": true,
+  "status": "ok",
+  "data":        { "part": …, "dokument": …, "sak": …, "ytelser": [ … ],
+                   "hjemler": [ … ], "tekst": …, "felter": … },
+  "metadata":    { "filnavn": …, "antall_sider": 2, "fil": { … },
+                   "skjemaversjon": "1.4", "versjon": { … } },
+  "diagnostikk": { "status": "ok", "varsler": [], "kvalitet": { … },
+                   "opphav": { … }, "dekning": { … },
+                   "modell_brukt": false, "tid_sekunder": 0.6 }
+}
+```
+
+| Gruppe | Svarer på |
+|---|---|
+| `data` | Hva står i DOKUMENTET |
+| `metadata` | Hva ble sendt inn, og hva svarte |
+| `diagnostikk` | Hvordan gikk det |
+
+`fil` er metadata — den handler om filen vi fikk, ikke om innholdet.
+`dekning` er diagnostikk — den sier hva SYSTEMET kan ennå. `ok` og
+`status` blir liggende på rot: de svarer på ulike spørsmål (R83), og
+begge skal kunne leses uten å gå ned et nivå.
+
+**Utgåtte navn finnes ikke i v2 (R104):**
+
+| Borte i v2 | Bruk |
+|---|---|
+| `eier` | `part` |
+| `andre_personer` | `andre_fodselsnummer` |
+| `sammendrag.sikkerhet` | `sammendrag.konfidens` |
+| `part.sikkerhet` | `part.grunnlag` |
+| `ytelse.implementasjon` | `dekning.ytelse` |
+| `dokument.ar` | `dokument.aarstall` |
+
+Den siste er en omdøping, ikke en fjerning: `ar` sto rett ved siden av
+`alder.aar` — to skrivemåter av samme bokstav, to betydninger.
+
+**v1 er UENDRET og fjernes ikke.** v2 er en projeksjon av det v1 alt
+bygger (R102), ikke omvendt: v1 er i drift hos skjøre klienter og gjerdet
+inn av over 800 tester, og å legge om produksjonsveien dit ville vært
+risiko uten gevinst utenfra.
+
+Feilsvar har samme form i begge versjoner — RFC 9457 er allerede en
+standard, og to feilformer ville tvunget klienten til å håndtere begge.
+
+### POST /dokument/operasjoner
+
+Samme motor som feltet `operasjoner` på `/dokument`, men som egen
+ressurs. Grunnen (R105): på `/dokument` overstyrer feltet bryterne i
+**stillhet** — sender du `felter=ja` sammen med `operasjoner`, skjer det
+ingenting med bryteren, og svaret ser ut som om begge deler ble utført.
+En egen URL gjør valget synlig.
+
+Her er `operasjoner` **påkrevd**: uten feltet får du 400 i stedet for et
+svar som stilltiende ble noe annet. Feltveien på `/dokument` beholdes
+uendret. v2-formen ligger på `/api/v2/dokument/operasjoner`.
 
 ---
 

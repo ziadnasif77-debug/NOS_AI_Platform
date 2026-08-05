@@ -116,6 +116,7 @@ from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
                            finn_klient, gjenbrukte_nokler, les_nokler,
                            svake_nokler)
+from delt.v2 import til_v2
 from delt.opphav import (NIVAAER, bygg_opphav, opphav_for_skjema,
                          uten_utelatte)
 
@@ -149,6 +150,18 @@ API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # tilgangsloggen en «klient_id», og fjerning kan gjøres med kunnskap.
 # API_NOKKEL virker uendret ved siden av; ingen integrasjon brekker.
 API_NOKLER = les_nokler(os.environ.get("API_NOKLER", ""))
+# Stiene som svarer i v2-form. En EKSPLISITT mengde, ikke et
+# prefikssjekk: «startswith» ville gjort /api/v2noeannet til en
+# v2-rute, og prefikset alene ser dessuten ut som en rute for
+# vakttesten som krever at hver rute er dokumentert.
+V2_STIER = ("/api/v2/dokument", "/api/v2/dokument/operasjoner")
+# Prefiksene _sti() normaliserer bort. Navngitt fordi de er PREFIKSER,
+# ikke ruter: skrevet som strengliteraler rett i startswith() ble de
+# lest som endepunkter av vakttesten som krever at hver rute er
+# dokumentert — og «/api/» er ingen rute.
+API_PREFIKS = "/api"
+V1_PREFIKS = API_PREFIKS + "/v1"
+_VERSJONSLEDD = re.compile(re.escape(API_PREFIKS) + r"/v\d+(?:/|$)")
 # CORS: tom = INGEN CORS-header (mest restriktivt) — de faktiske
 # klientene (tkinter-GUI, UiPath, curl) er ikke nettlesere og trenger
 # ingen CORS. Var hardkodet «*» (enhver nettside kunne kalle API-et fra
@@ -345,8 +358,14 @@ _kapasitet_port = _Kapasitetsport()
 # Endepunkter som gjør tungt arbeid SYNKRONT. /jobb er utelatt med vilje:
 # den svarer 202 med en gang og har allerede én arbeidstråd som grense.
 # /innsyn svarer også med en gang (arbeidet skjer i egen tråd).
+# Rutene som gjør ekte OCR-/modellarbeid og derfor må ta en køplass.
+# De nye dokumentrutene gjør NØYAKTIG samme arbeid som /dokument —
+# uten dem her ville v2 og operasjonsressursen gått utenom
+# kapasitetsporten, og serveren kunne overlastes gjennom en dør mens
+# den andre var stengt.
 _TUNGE_STIER = ("/analyser", "/spor", "/uttrekk", "/fyll_skjema", "/dokument",
-                "/sladd")
+                "/dokument/operasjoner", "/api/v2/dokument",
+                "/api/v2/dokument/operasjoner", "/sladd")
 _rate_lock = threading.Lock()
 _rate_teller = {}   # klient-ip -> [vindu_minutt, antall]
 
@@ -2367,6 +2386,37 @@ def _skjemaer() -> dict:
                                               "i v2"),
                               "deprecated": True},
                 "begrunnelse": s()}},
+        "DokumentSvarV2": {
+            "type": "object",
+            "description": (
+                "v2-formen. Tre grupper som svarer på tre ulike spørsmål, "
+                "i stedet for 21 toppnøkler om hverandre. Samme innhold "
+                "som v1 — dette er en projeksjon, ikke en ny beregning."),
+            "properties": {
+                "ok": b(description="Gikk forespørselen igjennom"),
+                "status": s(enum=["ok", "delvis", "feil"],
+                            description="Fikk du det du ba om (R83). Står "
+                                        "også i «diagnostikk»"),
+                "data": {"type": "object",
+                         "description": "Hva som står i DOKUMENTET: "
+                                        "profilseksjonene flatet ut (part, "
+                                        "dokument, sak, ytelse, ytelser, "
+                                        "hjemmel, hjemler, okonomi, arbeid, "
+                                        "kontakt, koder, visuelt, dokumenter) "
+                                        "pluss delene du ba om (tekst, felter, "
+                                        "struktur, svar, skjema, koordinater, "
+                                        "strekkoder)"},
+                "metadata": {"type": "object",
+                             "description": "Om forespørselen og svaret: "
+                                            "filnavn, antall_sider, "
+                                            "antall_tegn, fil, skjemaversjon, "
+                                            "versjon"},
+                "diagnostikk": {"type": "object",
+                                "description": "Hvordan det gikk: status, valg, "
+                                               "varsler, kvalitet, opphav, "
+                                               "dekning, modell_brukt, "
+                                               "fra_cache, tid_sekunder, "
+                                               "kilde"}}},
         "Opphav": {
             "type": "object",
             "description": (
@@ -3285,6 +3335,86 @@ def _openapi() -> dict:
                     "503": {"description": "Bare modelldeler bedt om mens Borealis er nede",
                             "content": {"application/json": {"schema": {
                                 "$ref": "#/components/schemas/Feilsvar"}}}}}}},
+            "/api/v2/dokument": {"post": {
+                "summary": "Som POST /dokument, men i v2-form",
+                "description": (
+                    "SAMME behandling og SAMME brytere som POST /dokument — bare en "
+                    "annen svarform. Ingen egen kodevei: to veier ville drevet fra "
+                    "hverandre.\n\n"
+                    "v1 har 21 toppnøkler uten ordning: fakta om dokumentet, "
+                    "opplysninger om forespørselen og diagnostikk ligger om hverandre. "
+                    "v2 deler dem i tre:\n"
+                    "- data: hva som står i dokumentet (profilseksjonene, flatet ut)\n"
+                    "- metadata: filnavn, sideantall, versjoner, skjemaversjon\n"
+                    "- diagnostikk: status, varsler, kvalitet, opphav, dekning, tid\n\n"
+                    "«ok» og «status» blir liggende på rot — de svarer på ULIKE "
+                    "spørsmål (R83), og begge skal kunne leses uten å gå ned et nivå.\n\n"
+                    "UTGÅTTE NAVN FINNES IKKE HER: eier, andre_personer, "
+                    "sammendrag.sikkerhet, part.sikkerhet og ytelse.implementasjon er "
+                    "borte (bruk part, andre_fodselsnummer, konfidens, grunnlag, "
+                    "dekning.ytelse). «dokument.ar» heter «dokument.aarstall», som ikke "
+                    "kan forveksles med «dokument.alder.aar».\n\n"
+                    "v1 er UENDRET og fjernes ikke. Feilsvar har samme form i begge "
+                    "versjoner (RFC 9457)."),
+                "tags": ["dokument"],
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil"],
+                    "description": "Nøyaktig samme felter som POST /dokument",
+                    "properties": {"fil": fil_felt}}}}},
+                "responses": {
+                    "200": {"description": "Samme innhold som v1, i tredelt form",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/DokumentSvarV2"}}}},
+                    "400": {"description": "Ukjent bryterverdi eller ugyldig JSON-mal",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
+            "/dokument/operasjoner": {"post": {
+                "summary": "Operasjonslista som EGEN ressurs",
+                "description": (
+                    "Samme motor som feltet «operasjoner» på POST /dokument, men som "
+                    "egen sti. Grunnen: på /dokument overstyrer feltet bryterne i "
+                    "STILLHET — sender en klient «felter=ja» sammen med «operasjoner», "
+                    "skjer det ingenting med bryteren, og svaret ser ut som om begge "
+                    "deler ble utført. En egen URL gjør valget synlig.\n\n"
+                    "«operasjoner» er PÅKREVD her; uten feltet får du 400 i stedet for "
+                    "et svar som stilltiende ble noe annet. Feltveien på /dokument "
+                    "beholdes uendret.\n\n"
+                    "v2-formen ligger på /api/v2/dokument/operasjoner."),
+                "tags": ["dokument"],
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil", "operasjoner"],
+                    "properties": {
+                        "fil": fil_felt,
+                        "operasjoner": {"type": "string",
+                                        "description": "JSON-liste av {type, …}. Maks 20."},
+                        "profil": {"type": "string", "enum": ["full", "sammendrag"]},
+                        "opphav": {"type": "string",
+                                   "enum": ["ingen", "viktige", "alle"]},
+                        "strekkoder": {"type": "string", "enum": ["ja", "nei"]},
+                        "maks_sider": {"type": "integer"}}}}}},
+                "responses": {
+                    "200": {"description": "{ok, resultater:[{type, ok, …}], dokumentprofil, …}",
+                            "content": {"application/json": {"schema": {
+                                "type": "object"}}}},
+                    "400": {"description": "«operasjoner» mangler eller er ugyldig JSON",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
+            "/api/v2/dokument/operasjoner": {"post": {
+                "summary": "Operasjonsressursen i v2-form",
+                "description": ("Som POST /dokument/operasjoner, men svaret er delt i "
+                                "data/metadata/diagnostikk og uten utgåtte navn."),
+                "tags": ["dokument"],
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object", "required": ["fil", "operasjoner"],
+                    "properties": {"fil": fil_felt,
+                                   "operasjoner": {"type": "string"}}}}}},
+                "responses": {
+                    "200": {"description": "Tredelt form",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/DokumentSvarV2"}}}},
+                    "400": {"description": "«operasjoner» mangler eller er ugyldig",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/spor": {"post": {
                 "summary": "Spørsmål/innhold fra dokument — eller rent spørsmål",
                 "description": (
@@ -3847,6 +3977,12 @@ class Handler(BaseHTTPRequestHandler):
                     data["problem"] = _problem_detaljer(
                         kode, data.get("feil"), korr, self._sti(),
                         data.pop("felter_feil", None))
+        # v2-form: ETT punkt for projeksjonen, så begge kontraktene
+        # (brytere og operasjoner) får den uten å duplisere noe. Feilsvar
+        # er urørt — de er allerede RFC 9457 og har samme form i begge
+        # versjoner.
+        if getattr(self, "_v2", False) and isinstance(data, dict)                 and data.get("ok") is not False:
+            data = til_v2(data)
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         # gzip når klienten sier den tåler det. Målt på et vanlig
         # /dokument-svar: 33 424 → 6 422 byte (−80,8 %). Innrykket alene
@@ -3921,11 +4057,17 @@ class Handler(BaseHTTPRequestHandler):
         som alias, så ingen eksisterende klient brekker — og en fremtidig
         v2 med brytende endringer kan leve side om side med v1."""
         sti = self.path.split("?", 1)[0].rstrip("/")
-        for prefiks in ("/api/v1", "/api"):
-            if sti == prefiks:
-                return "/hjelp"
-            if sti.startswith(prefiks + "/"):
-                return sti[len(prefiks):]
+        if sti in (API_PREFIKS, V1_PREFIKS):
+            return "/hjelp"
+        if sti.startswith(V1_PREFIKS + "/"):
+            return sti[len(V1_PREFIKS):]
+        # «/api/…» strippes ellers også — MEN ikke når neste ledd er et
+        # versjonsnummer. Uten unntaket ble /api/v2/dokument til
+        # /v2/dokument, og v2-ruten svarte 404. Docstringen over lovet
+        # nettopp at en framtidig v2 skulle kunne leve side om side med
+        # v1; den generelle strippingen tok livet av sitt eget løfte.
+        if sti.startswith(API_PREFIKS + "/") and not _VERSJONSLEDD.match(sti):
+            return sti[len(API_PREFIKS):]
         return sti
 
     def _korrelasjonsid(self) -> str:
@@ -5214,9 +5356,11 @@ class Handler(BaseHTTPRequestHandler):
                 "status": jobb.get("status")})
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
-                       "/fyll_skjema", "/innsyn", "/dokument", "/ekko",
+                       "/fyll_skjema", "/innsyn", "/dokument",
+                       "/dokument/operasjoner", "/api/v2/dokument",
+                       "/api/v2/dokument/operasjoner", "/ekko",
                        "/forhandssjekk", "/sladd"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
+            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument (eller /api/v2/dokument), /dokument/operasjoner, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
         # tråd allerede hele opplastingen (og den normaliserte PDF-en) i
@@ -5341,9 +5485,30 @@ class Handler(BaseHTTPRequestHandler):
         if sti == "/innsyn":
             return self._innsyn(filnavn, slag, innhold, maks_ocr)
 
-        if sti == "/dokument":
+        # v2 er SAMME behandling, annen svarform. Ingen egen kodevei —
+        # to veier ville drevet fra hverandre, som de to /dokument-
+        # kontraktene alt gjorde en gang (revisjonen, funn 8).
+        if sti in ("/dokument", "/api/v2/dokument"):
+            self._v2 = sti in V2_STIER
             return self._dokument_samlet(filnavn, slag, innhold, maks_ocr,
                                          tekstfelter, les_strekkoder)
+
+        # Operasjonene som EGEN ressurs (planpunkt 36). På /dokument er
+        # «operasjoner» et felt som overstyrer bryterne i stillhet —
+        # sender en klient begge deler, skjer det ingenting med bryterne.
+        # En egen sti gjør valget synlig i URL-en. Feltveien beholdes.
+        if sti in ("/dokument/operasjoner", "/api/v2/dokument/operasjoner"):
+            self._v2 = sti in V2_STIER
+            raa = (tekstfelter.get("operasjoner") or "").strip()
+            if not raa:
+                return self._svar(400, {"ok": False, "feil": (
+                    "Feltet 'operasjoner' er påkrevd på denne ressursen. "
+                    "Send en JSON-liste, f.eks. [{\"type\":\"felter\"}]."),
+                    "felter_feil": [{"pointer": "/operasjoner",
+                                     "message": "Påkrevd her"}]})
+            return self._dokument_operasjoner(
+                filnavn, slag, innhold, maks_ocr, les_strekkoder, raa,
+                tekstfelter)
 
         if sti == "/jobb":
             # Idempotens: samme Idempotency-Key → samme jobb (retry-trygt).
