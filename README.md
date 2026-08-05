@@ -75,7 +75,8 @@ som ble tatt.
 | `POST /ekko` | Diagnose: svarer med NØYAKTIG hva serveren mottok. Bruk den før du gjetter på klientoppsettet |
 | `POST /jobb` → `GET /jobb/{id}` | Store skanninger: `jobb_id` med en gang, OCR i bakgrunnen |
 | `POST /innsyn` → `GET /innsyn/{id}` | Direktevisning: strømmer lesingen hendelse for hendelse |
-| `POST /spor`, `/analyser`, `/uttrekk`, `/fyll_skjema` | Eldre veier, beholdt for eksisterende integrasjoner |
+| `POST /dokument/operasjoner` | Operasjonslista som EGEN ressurs — på `/dokument` overstyrer feltet bryterne i stillhet |
+| `POST /spor`, `/analyser`, `/uttrekk`, `/fyll_skjema` | Eldre veier. Alle fire gir fakta `/dokument` også gir; de finnes fordi de kom først, ikke fordi noen bruker dem |
 | `GET /dokumentasjon` · `/openapi.json` · `/hjelp` | Swagger UI · maskinlesbart skjema · tjenestestatus |
 
 ⚠️ Endepunktene deler bare `ok`, `tekst` og `strekkoder` på toppnivå.
