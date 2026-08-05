@@ -310,9 +310,9 @@ def test_fremtidig_dato_flagges_i_stedet_for_negativt_tall():
 
 
 def test_alder_taaler_soppel():
-    assert dokumentets_alder(None) is None
-    assert dokumentets_alder("tull") is None
-    assert dokumentets_alder("31.02.2026") is None      # finnes ikke
+    assert dokumentets_alder(None)["dager"] is None
+    assert dokumentets_alder("tull")["dager"] is None
+    assert dokumentets_alder("31.02.2026")["dager"] is None      # finnes ikke
 
 
 # ---------- OCR-robusthet i datodetektoren (R61) ----------
@@ -366,9 +366,9 @@ def test_kodeverk_ukjent_kode_faller_tilbake_til_seg_selv():
         "kode": "helt_ny_type", "term": "helt_ny_type"}
 
 
-def test_kodeverk_none_gir_none():
-    assert kodeverk(None, _TYPE_TERM) is None
-    assert kodeverk(None, _ROLLE_TERM) is None
+def test_kodeverk_uten_kode_gir_PARET_med_null():
+    assert kodeverk(None, _TYPE_TERM) == {"kode": None, "term": None}
+    assert kodeverk(None, _ROLLE_TERM) == {"kode": None, "term": None}
 
 
 def test_datoer_faar_kodede_felter_i_tillegg_til_raa():

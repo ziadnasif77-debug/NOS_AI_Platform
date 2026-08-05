@@ -103,6 +103,8 @@
   "/sak/referanse",
   "/sak/saksnummer",
   "/sak/sakstype",
+  "/sak/sakstype/kode",
+  "/sak/sakstype/term",
   "/sak/vedtaksnummer",
   "/sammendrag",
   "/sammendrag/antall_dokumenter",

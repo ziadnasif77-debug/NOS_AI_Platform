@@ -336,7 +336,7 @@ def test_ytelsesnavnet_hentes_men_reglene_er_ikke_paa_plass():
 
 def test_uten_ytelse_i_dokumentet_sies_det_at_reglene_mangler():
     profil = _profil("Et brev uten ytelse.\nDokumentdato: 01.03.2024")
-    assert profil["ytelse"]["navn"] is None
+    assert profil["ytelse"]["navn"] == {"kode": None, "term": None}
     assert profil["dekning"]["ytelse"] == "ikke_evaluert"
 
 

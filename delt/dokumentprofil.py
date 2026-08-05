@@ -812,7 +812,7 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             # «alder.aar» — to skrivemåter av samme bokstav, to
             # betydninger (årstallet kontra hvor gammelt dokumentet er).
             "aarstall": int(dato_iso[:4]) if dato_iso else None,
-            "alder": dokumentets_alder(dato_norsk) if dato_norsk else None,
+            "alder": dokumentets_alder(dato_norsk),
             "dato_kilde": dokumentdato.get("kilde"),
             "dato_sikkerhet": dokumentdato.get("konfidens") or "ingen",
             "dato_begrunnelse": dokumentdato.get("begrunnelse"),
@@ -836,7 +836,11 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             # feltet er med allerede, så formen ikke endres senere:
             # en klient som leser sakstype_kodet i dag får null, ikke en
             # manglende nøkkel.
-            "sakstype": None,
+            # Formen er fast selv om reglene ikke er bygget: en
+            # RPA-robot som leser sakstype.kode skal ikke krasje den
+            # dagen feltet fylles (R118). «dekning.sakstype» sier at vi
+            # ikke leter etter det ennå.
+            "sakstype": {"kode": None, "term": None},
         },
 
         # Ytelsesreglene kommer senere. Navnet hentes fra den ENE
@@ -950,7 +954,11 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         "sider_lest": dekning_sider["grad"],
         "sider": {"lest": dekning_sider["lest"],
                   "totalt": dekning_sider["totalt"]},
-        "ytelse": "delvis" if profil["ytelse"]["navn"] else "ikke_evaluert",
+        # NB: «navn» er nå ALLTID et par (R118), så en sannhetstest på
+        # selve objektet er alltid sann. Det er KODEN som avgjør om
+        # ytelsen faktisk ble funnet.
+        "ytelse": ("delvis" if (profil["ytelse"]["navn"] or {}).get("kode")
+                   else "ikke_evaluert"),
         "sakstype": "ikke_evaluert",
         "signatur_sider": "ikke_evaluert",
         "uleselige_sider": "ikke_evaluert",

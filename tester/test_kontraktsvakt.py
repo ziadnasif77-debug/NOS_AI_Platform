@@ -251,13 +251,17 @@ def test_kategoriverdien_ER_paret_ikke_et_par_ved_siden_av():
         assert gammelt not in som_tekst, f"«{gammelt}» finnes ennå"
 
 
-def test_uten_verdi_er_hele_paret_null():
-    """`{"kode": null, "term": null}` ville sagt at det FINNES en type
-    som bare mangler navn."""
+def test_uten_verdi_er_PARET_der_med_null_i_begge():
+    """Formen er FAST. Klientene er RPA-roboter som leser
+    `dokument.type.kode` blindt; er `type` null, finnes ikke stien, og
+    roboten krasjer på dokument nummer to (R118).
+
+    `{kode: null}` betyr «ikke fastslått» — det står i dokumentasjonen,
+    og `dekning` sier hvorfor."""
     tom = api.DokumentKontekst("Helt tom tekst uten kjennetegn.",
                                antall_sider=1).profil
-    assert tom["dokument"]["type"] is None
-    assert tom["ytelse"]["navn"] is None
+    assert tom["dokument"]["type"] == {"kode": None, "term": None}
+    assert tom["ytelse"]["navn"] == {"kode": None, "term": None}
 
 
 def test_ingen_presentasjonstvillinger():

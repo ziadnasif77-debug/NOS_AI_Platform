@@ -378,10 +378,16 @@ _ROLLE_TERM = {
 
 def kodeverk(kode, tabell) -> dict:
     """{kode, term}-par for en kategoriverdi (AAREG-stil). Ukjent kode gir
-    kode som term, så en ny type aldri mangler en lesbar verdi. None-kode
-    gir None (feltet finnes ikke)."""
+    kode som term, så en ny type aldri mangler en lesbar verdi.
+
+    Uten kode returneres PARET med to null-verdier — ikke None. Det er
+    ikke pedanteri: klientene er RPA-roboter som mapper felt blindt og
+    leser `dokument.type.kode` direkte. Er `type` null, finnes stien
+    ikke, og roboten krasjer på dokument nummer to. Et par med
+    `kode: null` betyr «typen er ikke fastslått», og det står i
+    dokumentasjonen (R118)."""
     if kode is None:
-        return None
+        return {"kode": None, "term": None}
     return {"kode": kode, "term": tabell.get(kode, str(kode))}
 
 
@@ -528,14 +534,16 @@ def dokumentets_periode(datoer: list) -> dict:
 def dokumentets_alder(dato_str, i_dag=None) -> dict:
     """Hvor GAMMELT dokumentet er, regnet fra dokumentdatoen.
 
-    Returnerer {dager, aar, tekst, fremtidig} — eller None hvis datoen
-    mangler/ikke lar seg lese. «fremtidig» settes når dokumentdatoen
+    Returnerer ALLTID {dager, aar, tekst, fremtidig}; uten lesbar dato
+    er alle fire null. Formen er fast fordi klientene er RPA-roboter som
+    leser `alder.dager` blindt (R118). «fremtidig» settes når dokumentdatoen
     ligger fram i tid: da er enten datoen feillest, eller dokumentet
     forhåndsdatert — begge deler skal fram, ikke skjules bak et
     negativt tall."""
     dokdato = _til_dato(dato_str)
     if dokdato is None:
-        return None
+        return {"dager": None, "aar": None, "tekst": None,
+                "fremtidig": None}
     i_dag = i_dag or date.today()
     dager = (i_dag - dokdato).days
 

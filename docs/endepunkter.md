@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R117 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R119 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -192,7 +192,25 @@ involvert, og et felt som ikke kan fastslås er `null` med en
 begrunnelse ved siden av.
 
 Formen er SEKSJONERT og fast: hver seksjon og hvert felt er alltid til
-stede. Tomt er `null` eller `[]` — aldri en manglende nøkkel. Endres
+stede. Tomt er `null` eller `[]` — aldri en manglende nøkkel.
+
+**Dette er en garanti, ikke en ambisjon (R118).** Klientene er
+RPA-roboter som mapper felt blindt og leser
+`dokumentprofil.dokument.type.kode` uten å sjekke om stien finnes.
+Derfor er et nestet objekt ALDRI `null`:
+
+```json
+"type":  {"kode": null, "term": null},        // ikke fastslått
+"alder": {"dager": null, "aar": null, "tekst": null, "fremtidig": null}
+```
+
+Et objekt som ble `null` tok med seg alle stiene under seg — det var
+den ene feilen som ville krasjet en robot på dokument nummer to.
+
+Lister kan være tomme (`[]`); roboten itererer da null ganger. Men er
+lista ikke tom, har elementet samme nøkler hver gang (R119).
+`tester/test_formstabilitet.py` kjører tolv svært ulike dokumenter og
+krever identisk nøkkelsett i alle. Endres
 formen senere, går `skjemaversjon` opp, så du ser det på tallet i
 stedet for når noe brekker. Se
 [dokumentprofil_skjema.md](dokumentprofil_skjema.md) for begrunnelsen.
