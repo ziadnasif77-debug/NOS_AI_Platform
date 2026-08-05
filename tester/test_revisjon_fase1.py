@@ -199,3 +199,28 @@ def test_svarveien_bruker_hele_lista():
     kilde = inspect.getsource(dokument_api.svar_paa_sporsmal)
     assert "klassifiser_datoer(raa_tekst, maks=" not in kilde
     assert "MAKS_DATOER_I_PROMPT" in kilde
+
+
+# ------------------------------------------------------------------ #
+#  F2.2 — strekkodeskanningen må ikke miste koder                      #
+# ------------------------------------------------------------------ #
+
+def test_vektortegnede_strekkoder_finnes_fortsatt():
+    """Revisjonen foreslo å hoppe over sider uten innebygde bilder.
+    Målt mot den ekte testbunken ville det mistet BEGGE kodene: de står
+    på side 3 og 10, og begge sidene har null innebygde bilder — kodene
+    er VEKTORTEGNET. Å senke oppløsningen er heller ikke trygt (1.5x
+    fant begge, 1.0x fant ingen).
+
+    Denne testen vokter at innsnevringen som faktisk ble gjort — hopp
+    over sider uten bilder OG uten tegninger — ikke mister noe."""
+    import os
+
+    import dokument_api
+    pdf = os.path.join(dokument_api.ROT, "data", "korpus",
+                       "syntetisk_bunke_tekstlag.pdf")
+    if not os.path.exists(pdf):
+        pytest.skip("korpusfila er ikke på denne maskinen")
+    koder = dokument_api.les_strekkoder_bytes(open(pdf, "rb").read())
+    assert {k["side"] for k in koder} == {3, 10}
+    assert all(k["type"] == "CODE128" for k in koder)

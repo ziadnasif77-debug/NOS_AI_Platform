@@ -29,6 +29,7 @@ Start:
 Enhver HTTP-klient: POST http://localhost:8600/analyser med filen som
 multipart-felt «fil». Se GET /hjelp for alle endepunkter.
 """
+import gzip
 import hashlib
 import io
 import json
@@ -165,7 +166,10 @@ RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
 # stilles om. Måles på nytt med jevne mellomrom, så en oppgradering (eller
 # et annet program som slipper minne) slår inn mens serveren kjører.
 # MAKS_SAMTIDIGE_TUNGE overstyrer manuelt hvis den settes.
-KOE_VENT_S = float(os.environ.get("KOE_VENT_S", "180"))
+# Køfristen MÅ være kortere enn socketfristen (120 s). Var den
+# lengre, kunne klienten stå og vente forbi serverens egen frist
+# på tilkoblingen og få verken svar eller 503 — bare stillhet.
+KOE_VENT_S = float(os.environ.get("KOE_VENT_S", "90"))
 MAKS_SAMTIDIGE_MB = int(os.environ.get("MAKS_SAMTIDIGE_MB", "400"))
 # Hvor mange som får stå inne per kort. OCR serialiseres uansett per kort,
 # så poenget er å holde kortet mettet — ikke å kjøre alt samtidig.
@@ -424,6 +428,20 @@ AUTO_GJENNOMGANG = bool(LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY)
 # Hvor mange datoer som LISTES for modellen. Dokumentdatoen velges av
 # hele lista uansett — grensen gjelder bare plassen i prompten.
 MAKS_DATOER_I_PROMPT = 30
+
+# gzip: under denne grensen koster komprimeringen mer enn den sparer
+# (og en TCP-pakke er uansett ~1,4 kB). Nivå 6 er standardbalansen —
+# målt gevinst på et vanlig svar er 80,8 %, og nivå 9 gir under ett
+# prosentpoeng mer for merkbart mer CPU.
+GZIP_MINSTE_BYTE = 1024
+GZIP_NIVAA = 6
+
+# Budsjett for ÉN forespørsel til operasjonsmotoren. Uten det kunne 20
+# svar-operasjoner utløse 100 genereringer (0,3–2,8 s hver, serialisert
+# bak GPU-låsen) — 30–280 s i ett kall, mot en socketfrist på 120 s.
+# Fristen er satt godt under socketfristen så klienten får et SVAR.
+MAKS_MODELLOPERASJONER = 8
+OPERASJON_FRIST_S = 75.0
 
 API_VERSJON = "1.3.0"
 # Promptversjonen står i regler/prompter.md, sammen med ordlyden den
@@ -977,7 +995,7 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
                 fil_id = hashlib.sha256(
                     f"{side1.shape[1]}x{side1.shape[0]}".encode()
                     + side1.tobytes()).hexdigest()[:16]
-                png_sti = os.path.join(tempfile.gettempdir(),
+                png_sti = os.path.join(_gjennomgang_temp(),
                                        f"gjennomgang_{fil_id}.png")
                 Image.fromarray(side1).save(png_sti)
             else:
@@ -988,7 +1006,7 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
                 fil_id = hashlib.sha256(
                     f"{pix.width}x{pix.height}".encode() + bytes(pix.samples)
                 ).hexdigest()[:16]
-                png_sti = os.path.join(tempfile.gettempdir(),
+                png_sti = os.path.join(_gjennomgang_temp(),
                                        f"gjennomgang_{fil_id}.png")
                 pix.save(png_sti)
                 doc.close()
@@ -1069,6 +1087,23 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = None, sider=None,
             for i, side in enumerate(doc):
                 if i >= maks_sider:
                     break
+                # En side helt uten bilder OG uten vektortegninger kan
+                # ikke inneholde en strekkode — en kode må være tegnet
+                # på en av de to måtene. Rendringen er det dyre steget
+                # (~90 ms per side), så en tom side hoppes over uten at
+                # noe kan gå tapt.
+                #
+                # MERK at dette er den ENESTE trygge innsnevringen her.
+                # Å filtrere på get_images() alene — som er det
+                # nærliggende — ville mistet BEGGE kodene i testbunken:
+                # de står på side 3 og 10, og begge sidene har null
+                # innebygde bilder. Kodene er vektortegnet (36 og 63
+                # tegneoperasjoner). Å senke oppløsningen er heller
+                # ikke trygt: målt fant 1.5x begge kodene, men 1.0x
+                # fant INGEN — marginen er for liten til å gamble på.
+                if not (side.get_images(full=True) or side.get_drawings()):
+                    bilder.append(None)          # plassholder: side uten innhold
+                    continue
                 # R51: samme oppskaleringsfelle som i OCR — strekkoder
                 # blir ikke lettere å lese av å blåse opp bildet
                 pix = side.get_pixmap(matrix=ocr_skala(doc, side))
@@ -1077,6 +1112,8 @@ def les_strekkoder_bytes(data: bytes, maks_sider: int = None, sider=None,
             doc.close()
         sett = set()
         for i, bilde in enumerate(bilder):
+            if bilde is None:            # side uten bilder eller tegninger
+                continue
             for kode in decode(bilde):
                 verdi = kode.data.decode("utf-8", "replace")
                 nokkel = (kode.type, verdi, i + 1)
@@ -1987,6 +2024,25 @@ def _linjevakt(raa: str, korrigert: str) -> str:
 #                             tekst — ingen ny OCR per spørsmål.
 
 JOBB_STI = os.path.join(ROT, "data", "jobber")
+
+# Hvor lenge en ferdig jobb ligger på disk. Filen inneholder HELE
+# dokumentteksten, altså persondata fra et ekte NAV-dokument — den skal
+# ikke ligge lenger enn den er til nytte. Samme frist som
+# gjennomgangsmappa bruker (rydd_gjennomgang.py), så systemet har ÉN
+# oppbevaringsregel og ikke to.
+JOBB_OPPBEVARING_DAGER = int(os.environ.get("JOBB_OPPBEVARING_DAGER", "30"))
+
+
+def _gjennomgang_temp() -> str:
+    """Midlertidig mappe for side-1-bildet som sendes til gjennomgang.
+
+    Lå tidligere i OS-ens temp — altså UTENFOR nav/ (CLAUDE.md §1), på
+    en maskin der bildet er første side av et ekte NAV-dokument. Filen
+    slettes i en `finally`, men et prosesskrasj etterlot den der.
+    Nå ligger den under nav/data, som følger mappa og ryddes med den."""
+    sti = os.path.join(ROT, "data", "midlertidig")
+    os.makedirs(sti, exist_ok=True)
+    return sti
 _jobber = {}
 _jobb_ko = queue.Queue()
 _jobb_las = threading.Lock()   # beskytter jobb-mutasjon mot samtidig lesing
@@ -2017,9 +2073,54 @@ def _jobb_lagre(jobb: dict) -> None:
         json.dump(lagres, f, ensure_ascii=False)
 
 
+def rydd_jobber(maks_alder_dager: int = None, naa: float = None) -> dict:
+    """Sletter jobber som er eldre enn oppbevaringsfristen.
+
+    En jobbfil inneholder HELE dokumentteksten. Uten rydding lå
+    persondata fra hvert eneste store dokument på disk for alltid — og
+    `skript/rydd_gjennomgang.py` påsto samtidig at gjennomgangsmappa var
+    «det ENESTE stedet systemet bevarer data». Det stemte ikke, og en
+    oppbevaringspolicy som ikke stemmer med virkeligheten er verre enn
+    ingen policy.
+
+    Kjøres ved oppstart og etter hver fullførte jobb. Returnerer
+    {slettet, beholdt, frigjort_byte}."""
+    frist = (maks_alder_dager if maks_alder_dager is not None
+             else JOBB_OPPBEVARING_DAGER)
+    naa = naa if naa is not None else time.time()
+    grense = naa - frist * 86400
+    slettet, beholdt, byte = 0, 0, 0
+    try:
+        filer = os.listdir(JOBB_STI)
+    except FileNotFoundError:
+        return {"slettet": 0, "beholdt": 0, "frigjort_byte": 0}
+    for navn in filer:
+        if not navn.endswith(".json"):
+            continue
+        sti = os.path.join(JOBB_STI, navn)
+        try:
+            if os.path.getmtime(sti) >= grense:
+                beholdt += 1
+                continue
+            byte += os.path.getsize(sti)
+            os.remove(sti)
+            _jobber.pop(navn[:-5], None)
+            slettet += 1
+        except OSError:
+            continue
+    if slettet:
+        print(f"  Ryddet {slettet} jobb(er) eldre enn {frist} dager "
+              f"({byte // 1024} kB frigjort)")
+    return {"slettet": slettet, "beholdt": beholdt, "frigjort_byte": byte}
+
+
 def _jobb_last_fra_disk() -> None:
     """Laster ferdige jobber fra disk ved oppstart. Jobber som var
-    underveis da serveren stoppet, merkes ærlig som feilet."""
+    underveis da serveren stoppet, merkes ærlig som feilet.
+
+    Rydder FØRST: gamle jobber skal ikke lastes tilbake i minnet bare
+    for å bli slettet senere."""
+    rydd_jobber()
     try:
         for navn in os.listdir(JOBB_STI):
             if not navn.endswith(".json"):
@@ -2158,6 +2259,14 @@ def _jobb_arbeider() -> None:
             _jobb_status(jobb, "feil", feil=str(exc))
             try:
                 _jobb_lagre(jobb)
+            except Exception:
+                pass
+        finally:
+            # Rydd etter hver jobb, ikke bare ved oppstart: en server som
+            # står i månedsvis ville ellers samlet opp dokumenttekst helt
+            # til neste omstart.
+            try:
+                rydd_jobber()
             except Exception:
                 pass
 
@@ -3407,6 +3516,23 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def _tar_gzip(self) -> bool:
+        """Sa klienten at den tåler gzip?
+
+        Bare `gzip` godtas — ikke `*`. En klient som sender `*` har ikke
+        sagt noe om gzip spesifikt, og her er kostnaden ved å ta feil
+        (et uleselig svar hos en RPA-robot) større enn gevinsten."""
+        felt = (self.headers.get("Accept-Encoding") or "").lower()
+        for ledd in felt.split(","):
+            navn, _, resten = ledd.strip().partition(";")
+            if navn.strip() != "gzip":
+                continue
+            # «gzip;q=0» betyr uttrykkelig NEI
+            if "q=0" in resten.replace(" ", "") and "q=0." not in resten.replace(" ", ""):
+                return False
+            return True
+        return False
+
     def _svar(self, kode, data, hoder: dict = None):
         # R39/§4: berik versjon-blokken med full proveniens (modell/regel/
         # terskel) i ÉTT punkt. Additivt — eksisterende nøkler (api, prompt,
@@ -3433,8 +3559,26 @@ class Handler(BaseHTTPRequestHandler):
                         kode, data.get("feil"), korr, self._sti(),
                         data.pop("felter_feil", None))
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        # gzip når klienten sier den tåler det. Målt på et vanlig
+        # /dokument-svar: 33 424 → 6 422 byte (−80,8 %). Innrykket alene
+        # er 20,9 % av svaret, og over en tunnel er dette den klart
+        # største enkeltgevinsten — uten å endre en eneste nøkkel.
+        # Ligger bak Accept-Encoding, så en klient som ikke ber om det
+        # (UiPath med egen HTTP-aktivitet) merker ingen forskjell.
+        komprimert = None
+        if len(payload) >= GZIP_MINSTE_BYTE and self._tar_gzip():
+            komprimert = gzip.compress(payload, GZIP_NIVAA)
+            # bare bruk den hvis den faktisk ble mindre
+            if len(komprimert) < len(payload):
+                payload = komprimert
+            else:
+                komprimert = None
         self.send_response(kode)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if komprimert is not None:
+            self.send_header("Content-Encoding", "gzip")
+            # svaret varierer med Accept-Encoding — mellomlagre må vite det
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(payload)))
         # Ekko korrelasjons-ID-en så klienten kan logge den sin side og
         # koble sitt kall til vår logglinje.
@@ -4050,7 +4194,14 @@ class Handler(BaseHTTPRequestHandler):
                      for t in SLADD_TYPER if t in antall_per_type],
             "antall_sladdet": sum(antall_per_type.values()),
             "typer_valgt": typer or list(SLADD_TYPER),
-            "ikke_dekket": ["navn", "adresser"],
+            # Den FULLE lista over hva sladdingen ikke fjerner. Sto
+            # tidligere bare «navn, adresser», og en klient som
+            # stolte på feltet ville tro et sladdet dokument var
+            # tryggere enn det er.
+            "ikke_dekket": ["navn", "adresser", "arbeidsgiver",
+                            "inntekt", "belop",
+                            "helseopplysninger", "saksnummer",
+                            "datoer"],
             "advarsel": self.SLADD_ADVARSEL,
             "advarsler": advarsler,
             "kvalitet": {"ocr_brukt": ktx.ocr_brukt,
@@ -4226,7 +4377,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(*feil)
         advarsler = operasjon_advarsler + advarsler
 
-        resultater = Operasjonsmotor().kjor(ktx, ops)
+        resultater = Operasjonsmotor().kjor(ktx, ops, advarsler)
         # Feil i en del skal også være synlig for den som bare leser
         # advarslene — samme løfte som bryter-veien gir.
         for r in resultater:
@@ -5257,7 +5408,12 @@ def _innsyn_arbeider(okt, filnavn, slag, innhold, maks_ocr):
                               konfidens=ocr_res.get("konfidens"))
     except Exception as exc:
         okt["status"] = "feil"
-        okt["feil"] = f"{type(exc).__name__}: {exc}"
+        # Bare unntakstypen ut til klienten — meldingen kan
+        # inneholde tekstfragmenter og filstier fra dokumentet.
+        # Full detalj går til serverloggen, som ellers i systemet.
+        print(f"  /innsyn feilet: {type(exc).__name__}: {exc}")
+        okt["feil"] = (f"Lesingen feilet ({type(exc).__name__}). "
+                       "Se serverloggen for detaljer.")
         innsyn_hendelser.send("feil", melding=okt["feil"])
     finally:
         innsyn_hendelser.deaktiver()
@@ -5332,7 +5488,10 @@ def fyll_skjema_kjerne(dok: str, mal: dict) -> dict:
     if utfylt is None:
         return {"ok": False,
                 "feil": "Modellen ga ikke gyldig JSON etter to forsøk",
-                "raasvar": svar_tekst[:1500]}
+                # Sladdet: dette er modellens RÅUTDATA, generert fra
+                # dokumentteksten, og et feilsvar er nettopp det som
+                # havner i en supportsak eller et feilsporingssystem.
+                "raasvar": sladd_tekst(svar_tekst[:1500])[0]}
     renset, avvik = rens_skjemasvar(mal, utfylt, dok)
     return {"ok": True, "skjema": renset, "avvik": avvik}
 
@@ -6209,11 +6368,45 @@ class Operasjonsmotor:
     stedet for å rive med seg de andre — samme løfte som /dokument alt
     gir per del."""
 
-    def kjor(self, ktx, operasjoner):
+    def kjor(self, ktx, operasjoner, advarsler=None):
+        """Kjører operasjonene i rekkefølge, innenfor et BUDSJETT.
+
+        Uten budsjett kunne én forespørsel be om 20 svar-operasjoner à
+        opptil 5 modellkall = 100 genereringer. Målt kostnad er 0,3–2,8 s
+        per generering, alt serialisert bak GPU-låsen — altså 30–280 s i
+        ÉN forespørsel, mot en socketfrist på 120 s, mens den holder én
+        av to kapasitetsplasser. Klienten fikk ikke svar, og alle andre
+        stod i kø imens.
+
+        Nå stopper vi når budsjettet er brukt og leverer det som ER
+        gjort, med en ærlig beskjed om resten. Delvis svar slår et svar
+        som aldri kommer."""
         resultater = []
-        for op in operasjoner:
+        brukt_tid = time.time()
+        modellkall = 0
+        for nr, op in enumerate(operasjoner):
+            krever_modell = op._krever_borealis()
+            over_frist = (time.time() - brukt_tid) > OPERASJON_FRIST_S
+            if krever_modell and (modellkall >= MAKS_MODELLOPERASJONER
+                                  or over_frist):
+                grunn = ("tidsbudsjettet på "
+                         f"{OPERASJON_FRIST_S:.0f} s er brukt" if over_frist
+                         else f"budsjettet på {MAKS_MODELLOPERASJONER} "
+                              "modelloperasjoner er brukt")
+                melding = (
+                    f"Operasjon {nr + 1} ({getattr(op, 'type', '?')}) ble "
+                    f"ikke kjørt: {grunn}. Del opp forespørselen, eller "
+                    f"bruk POST /jobb for store bestillinger.")
+                resultater.append({"type": getattr(op, "type", "operasjon"),
+                                   "ok": False, "feil": melding,
+                                   "utelatt": True})
+                if advarsler is not None and melding not in advarsler:
+                    advarsler.append(melding)
+                continue
             try:
                 resultater.append(op.utfor(ktx))
+                if krever_modell:
+                    modellkall += 1
             except Exception as exc:      # noqa: BLE001 — én del skal ikke
                 resultater.append({       # kunne velte de andre
                     "type": getattr(op, "type", "operasjon"),

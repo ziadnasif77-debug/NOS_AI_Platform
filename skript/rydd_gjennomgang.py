@@ -1,9 +1,22 @@
 """
 rydd_gjennomgang.py — sletter GAMLE gjennomgangsbilder etter et
-oppbevaringsvindu. Gjennomgangsmappa (GJENNOMGANG_STI/bilder/) er det
-ENESTE stedet systemet bevarer data midlertidig (bildekopi + rå tekst
-sendt til Label Studio for korreksjon), så dette er GDPR-hygiene for
-sensitive dokumenter.
+oppbevaringsvindu. Gjennomgangsmappa (GJENNOMGANG_STI/bilder/) bevarer
+en bildekopi av side 1 og rå tekst sendt til Label Studio for
+korreksjon, så dette er GDPR-hygiene for sensitive dokumenter.
+
+MERK: dette er IKKE det eneste stedet systemet bevarer data — den
+påstanden sto her tidligere og var feil. Systemet lagrer også:
+
+  data/jobber/*.json   hele dokumentteksten per bakgrunnsjobb.
+                       Ryddes av dokument_api.rydd_jobber() ved
+                       oppstart og etter hver fullførte jobb
+                       (JOBB_OPPBEVARING_DAGER, standard 30).
+  data/logger/*.log    tilgangslogg med IP-adresser. Roterer IKKE ennå.
+  data/midlertidig/    side-1-bilder på vei til gjennomgang; slettes
+                       normalt straks, men overlever et prosesskrasj.
+
+En oppbevaringspolicy som ikke stemmer med virkeligheten er verre enn
+ingen policy — derfor står hele lista her.
 
 TRYGG SOM STANDARD:
   python skript/rydd_gjennomgang.py            # TØRRKJØRING — viser bare hva

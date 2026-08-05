@@ -1374,14 +1374,45 @@ def _tallkandidater(tekst: str, lengde: int):
         yield kompakt
 
 
+def _opptattindeks(tekst: str):
+    """(startpunkter, løpende maks sluttpunkt) for de opptatte områdene.
+
+    Sortert på start, med et prefiksmaksimum over sluttpunktene — da kan
+    «overlapper denne kandidaten noe?» besvares med ett binærsøk i
+    stedet for en gjennomgang av hele lista. Bufres trådlokalt sammen
+    med områdene selv."""
+    nokkel = (len(tekst), hash(tekst))
+    if getattr(_opptatt_lokal, "indeksnokkel", None) == nokkel:
+        return _opptatt_lokal.starter, _opptatt_lokal.maks_slutt
+    omraader = sorted(_opptatte_omraader(tekst))
+    starter, maks_slutt, hittil = [], [], 0
+    for start, slutt in omraader:
+        hittil = max(hittil, slutt)
+        starter.append(start)
+        maks_slutt.append(hittil)
+    _opptatt_lokal.indeksnokkel = nokkel
+    _opptatt_lokal.starter = starter
+    _opptatt_lokal.maks_slutt = maks_slutt
+    return starter, maks_slutt
+
+
 def _tallkandidater_med_posisjon(tekst: str, lengde: int):
     """Som _tallkandidater, men yielder (kompakt, start, slutt) — samme
     mønster og samme dato-/beløpsvakt, slik at sladding og feltuttrekk
     aldri kan være uenige om hva som er en identifikator."""
-    opptatt = _opptatte_omraader(tekst)
+    # Overlappsjekken var lineær PER KANDIDAT, og både kandidatene og
+    # de opptatte områdene vokser med teksten — altså O(n²). Målt vekst
+    # per dobling av teksten: 4,08× (2,0× er lineært). En bunke på
+    # 117 000 tegn brukte 248 ms bare her.
+    #
+    # Områdene sorteres én gang og slås opp med binærsøk: finn siste
+    # område som STARTER før kandidaten slutter, og sjekk om det (eller
+    # det maksimale sluttpunktet så langt) rekker forbi kandidatens
+    # start. Samme svar, O(log n) per kandidat.
+    starter, maks_slutt = _opptattindeks(tekst)
     for treff in re.finditer(r"(?<!\d)\d(?:[ .]?\d)+(?!\d)", tekst):
-        if any(treff.start() < slutt and start < treff.end()
-               for start, slutt in opptatt):
+        i = bisect.bisect_left(starter, treff.end())
+        if i and maks_slutt[i - 1] > treff.start():
             continue
         kompakt = re.sub(r"[ .]", "", treff.group(0))
         if len(kompakt) == lengde:

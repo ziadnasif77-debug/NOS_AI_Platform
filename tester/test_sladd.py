@@ -182,7 +182,13 @@ def test_endepunktet_sladder_og_deklarerer_grensene():
     assert FNR not in svar["sladdet_tekst"]
     assert "Ola Nordmann" in svar["sladdet_tekst"]
     assert svar["antall_sladdet"] == 2
-    assert svar["ikke_dekket"] == ["navn", "adresser"]
+    # Lista skal navngi ALT sladdingen ikke fjerner. Den sa tidligere
+    # bare «navn, adresser», og en klient som stolte på feltet ville tro
+    # et sladdet dokument var tryggere enn det er — arbeidsgiver,
+    # inntekt, beløp, helseopplysninger, saksnummer og datoer står igjen.
+    assert svar["ikke_dekket"] == ["navn", "adresser", "arbeidsgiver",
+                                   "inntekt", "belop", "helseopplysninger",
+                                   "saksnummer", "datoer"]
     # grensen står i SELVE svaret, ikke bare i dokumentasjonen
     assert "offentleglova" in svar["advarsel"]
     assert svar["kilde"] == "deterministisk"
