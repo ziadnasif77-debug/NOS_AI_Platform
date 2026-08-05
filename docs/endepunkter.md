@@ -138,9 +138,8 @@ begrunnelse ved siden av.
     "fnr": "12345678910",
     "sikkerhet": "merket",
     "begrunnelse": "Fødselsnummeret står under «Dokumentet gjelder», som peker på personen dokumentet gjelder.",
-    "kandidater": [
-      {"fnr": "12345678910",           "rolle": "eier",  "etikett": "Dokumentet gjelder", "navn": "Ola Nordmann"},
-      {"fnr": "<saksbehandlerens nr>", "rolle": "annen", "etikett": "Saksbehandler",      "navn": "Kari Hansen"}
+    "andre_fodselsnummer": [
+      {"fnr": "<saksbehandlerens nr>", "rolle": "annen", "etikett": "Saksbehandler", "navn": "Kari Hansen"}
     ]
   },
 
@@ -178,9 +177,14 @@ eiersignal kvalifiserer. `sikkerhet` sier hva vi bygger på:
 | `umerket` | Numre finnes, men ingen etikett viser hvem dokumentet gjelder | `null` |
 | `ingen` | Ingen fødselsnummer består mod11 | `null` |
 
-Et nummer hentes **ikke** bare fordi det står i teksten. `kandidater`
-viser alt som ble vurdert, med rolle og etikett, så et menneske kan se
-hvorfor svaret ble som det ble.
+Et nummer hentes **ikke** bare fordi det står i teksten.
+
+De ØVRIGE fødselsnumrene kastes ikke — de er ekte opplysninger, og en
+klient kan trenge dem. Men de ligger i `andre_fodselsnummer`, med rolle
+og etikett, **aldri sammen med eierens**. Eierens nummer gjentas aldri
+der. Kan eieren ikke fastslås, er `fnr` null og ALLE numrene ligger i
+`andre_fodselsnummer` — ingenting forsvinner, men ingenting utgir seg
+for å være dokumentets heller.
 
 **`koder`:** `lest: false` betyr at skanningen var slått av — da sier
 `qr_kode_side: null` ikke at koden mangler, bare at det ikke ble sett

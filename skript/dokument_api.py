@@ -2436,8 +2436,9 @@ def _skjemaer() -> dict:
                         "R69: fødselsnummeret til personen dokumentet "
                         "GJELDER — ikke saksbehandler, lege, arbeidsgiver "
                         "eller kopimottaker. Uten et positivt eiersignal er "
-                        "fnr null; «sikkerhet» sier hvorfor og «kandidater» "
-                        "viser alt som ble vurdert"),
+                        "fnr null; «sikkerhet» sier hvorfor. De ØVRIGE "
+                        "numrene ligger i «andre_fodselsnummer» — atskilt, "
+                        "aldri sammenblandet med eierens"),
                     "properties": {
                         "navn": s(nullable=True, example="Ola Nordmann"),
                         "fnr": s(nullable=True),
@@ -2446,8 +2447,12 @@ def _skjemaer() -> dict:
                                              "bare_andre_roller", "umerket",
                                              "ingen"]),
                         "begrunnelse": s(),
-                        "kandidater": {"type": "array",
-                                       "items": {"type": "object"}}}},
+                        "andre_fodselsnummer": {
+                            "type": "array", "items": {"type": "object"},
+                            "description": "Alle ANDRE fødselsnummer i "
+                                           "dokumentet, med rolle og "
+                                           "etikett. Eierens gjentas aldri "
+                                           "her"}}},
                 "ytelse": s(nullable=True,
                             description="Plassholder — reglene kommer senere"),
                 "ytelse_status": s(example="ikke_implementert")}},

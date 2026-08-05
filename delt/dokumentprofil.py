@@ -264,7 +264,12 @@ def finn_dokument_eier(tekst: str) -> dict:
     fant. «Det står bare ett fødselsnummer her» er en gjetning, og en
     gjetning om hvem et vedtak gjelder er verre enn ingen verdi.
 
-    Returnerer {navn, fnr, sikkerhet, begrunnelse, kandidater}."""
+    De ØVRIGE fødselsnumrene kastes ikke — de er ekte opplysninger i
+    dokumentet, og en klient kan trenge dem. Men de holdes STRENGT
+    atskilt, i «andre_fodselsnummer», slik at ingen kan forveksle
+    legens eller saksbehandlerens nummer med dokumentets eget.
+
+    Returnerer {navn, fnr, sikkerhet, begrunnelse, andre_fodselsnummer}."""
     tekst = tekst or ""
     kandidater = []
     for fnr in finn_alle_fodselsnummer(tekst):
@@ -278,8 +283,16 @@ def finn_dokument_eier(tekst: str) -> dict:
             })
 
     def svar(navn, fnr, sikkerhet, begrunnelse):
+        # Alt som IKKE er eierens nummer havner her — én oppføring per
+        # unikt nummer, aldri sammenblandet med eierens.
+        andre, sett = [], set()
+        for k in kandidater:
+            if k["fnr"] == fnr or k["fnr"] in sett:
+                continue
+            sett.add(k["fnr"])
+            andre.append(k)
         return {"navn": navn, "fnr": fnr, "sikkerhet": sikkerhet,
-                "begrunnelse": begrunnelse, "kandidater": kandidater}
+                "begrunnelse": begrunnelse, "andre_fodselsnummer": andre}
 
     if not kandidater:
         return svar(None, None, "ingen",

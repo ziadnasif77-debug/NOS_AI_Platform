@@ -205,10 +205,27 @@ def test_eierens_fnr_velges_ikke_saksbehandlerens():
     assert eier["sikkerhet"] == "merket"
 
 
-def test_saksbehandlerens_fnr_er_merket_som_annen_rolle():
+def test_andre_fodselsnummer_holdes_atskilt_fra_eierens():
+    """De øvrige numrene kastes ikke — de er ekte opplysninger — men de
+    ligger i sitt EGET felt, aldri sammen med eierens."""
     eier = finn_dokument_eier(DOKUMENT_MED_TO_PERSONER)
-    andre = [k for k in eier["kandidater"] if k["rolle"] == "annen"]
-    assert [k["fnr"] for k in andre] == [ANNEN]
+    assert eier["fnr"] == EIER
+    assert [k["fnr"] for k in eier["andre_fodselsnummer"]] == [ANNEN]
+    assert eier["andre_fodselsnummer"][0]["etikett"] == "Saksbehandler"
+
+
+def test_eierens_nummer_gjentas_aldri_blant_de_andre():
+    eier = finn_dokument_eier(DOKUMENT_MED_TO_PERSONER)
+    assert EIER not in [k["fnr"] for k in eier["andre_fodselsnummer"]]
+
+
+def test_uten_eier_er_alle_numre_blant_de_andre():
+    """Kan eieren ikke fastslås, forsvinner ikke numrene — de ligger
+    alle i «andre», og fnr er null."""
+    eier = finn_dokument_eier(f"Referanse {EIER} og {ANNEN} i saken.")
+    assert eier["fnr"] is None
+    assert sorted(k["fnr"] for k in eier["andre_fodselsnummer"]) == \
+        sorted([EIER, ANNEN])
 
 
 @pytest.mark.parametrize("rolle", [
@@ -251,7 +268,7 @@ def test_uten_fodselsnummer_sies_det_rett_ut():
     eier = finn_dokument_eier("Et brev uten personopplysninger.")
     assert eier["fnr"] is None
     assert eier["sikkerhet"] == "ingen"
-    assert eier["kandidater"] == []
+    assert eier["andre_fodselsnummer"] == []
 
 
 def test_fnr_med_skilletegn_kobles_ogsaa_til_eieren():
