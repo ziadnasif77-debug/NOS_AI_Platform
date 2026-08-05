@@ -743,6 +743,53 @@ kilde er "deterministisk"    →  regex + mod11, ingen gjetning
 
 ---
 
+## Klientidentitet — navngitte API-nøkler (R91)
+
+Med ÉN delt nøkkel er hver forespørsel anonym. Da har spørsmålet «bruker
+noen fortsatt dette?» ikke noe svar, og et utgått felt må stå for alltid
+— for sikkerhets skyld. Revisjonen kalte dette forutsetningen for å
+kunne fjerne noe som helst.
+
+```
+API_NOKKEL=<den gamle, delte>              ← virker uendret
+API_NOKLER=uipath-fakturamottak:<nøkkel>,arkiv-batch:<nøkkel>
+```
+
+Begge gjelder samtidig. En klient som ennå ikke har byttet, slipper inn
+med den gamle nøkkelen og får `klient_id: "eldre-nokkel"` i loggen — så
+man ser hvem som gjenstår, uten at noe brekker.
+
+Navnet er klientens ID i tilgangsloggen, så det bør si hvem det er:
+`uipath-fakturamottak`, ikke `nokkel1`. **Nøkkelen logges aldri** — et
+navn i en logg er nyttig, en nøkkel i en logg er en lekkasje som
+overlever i sikkerhetskopier. Oppstarten sier fra om nøkler under 24
+tegn, og om to navn som deler nøkkelverdi (da er `klient_id` vilkårlig,
+og hele ordningen hviler på det feltet).
+
+### Hvem bruker hva
+
+```bash
+python skript/klientrapport.py --dager 30
+```
+
+```bash
+python skript/klientrapport.py --sti /analyser --dager 365
+```
+
+**Hva rapporten kan og ikke kan svare på (R92).** Loggen ser
+FORESPØRSELEN. Den svarer sikkert på om noen fortsatt kaller
+`/analyser`, eller sender en utgått bryter. Den kan **ikke** si om noen
+leser `eier` i stedet for `part` — begge står i samme svar, og serveren
+ser ikke hva klienten plukker ut. Utgåtte SVARfelter må derfor varsles i
+`varsler[]` og fjernes etter et annonsert løp, aldri fordi rapporten
+«viser» at de er ubrukte.
+
+En sti rapporten ikke kjenner gir **feil**, ikke et tomt svar (R93) —
+ellers ville en skrivefeil sett ut som grønt lys for å pensjonere et
+endepunkt.
+
+---
+
 ## Klientfeller (UiPath / .NET)
 
 **Argumentrekkefølge — BEGGE tar verdien først, navnet sist:**

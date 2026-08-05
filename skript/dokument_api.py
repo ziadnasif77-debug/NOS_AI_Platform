@@ -111,6 +111,9 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
 # å endre. Se delt/prompter.py for hvorfor.
 from delt import prompter
 from delt.dokumentprofil import bygg_profil
+from delt.klienter import (AAPEN, MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
+                           finn_klient, gjenbrukte_nokler, les_nokler,
+                           svake_nokler)
 from delt.opphav import (NIVAAER, bygg_opphav, opphav_for_skjema,
                          uten_utelatte)
 
@@ -138,6 +141,12 @@ OCR_TAK_SIDER = int(os.environ.get("OCR_TAK_SIDER", "50"))
 # Sikkerhet: settes API_NOKKEL, kreves headeren X-API-Key på alle
 # endepunkter unntatt GET /hjelp. Tom = åpen (kun for lokal testing).
 API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
+# NAVNGITTE nøkler: «navn:nøkkel,navn:nøkkel». Uten klientidentitet er
+# hver forespørsel anonym, og spørsmålet «bruker noen fortsatt dette?»
+# har ikke noe svar — så et utgått felt må stå for alltid. Med navn får
+# tilgangsloggen en «klient_id», og fjerning kan gjøres med kunnskap.
+# API_NOKKEL virker uendret ved siden av; ingen integrasjon brekker.
+API_NOKLER = les_nokler(os.environ.get("API_NOKLER", ""))
 # CORS: tom = INGEN CORS-header (mest restriktivt) — de faktiske
 # klientene (tkinter-GUI, UiPath, curl) er ikke nettlesere og trenger
 # ingen CORS. Var hardkodet «*» (enhver nettside kunne kalle API-et fra
@@ -409,6 +418,10 @@ def _skriv_tilgang(handler, code) -> None:
             "sti": handler.path.split("?", 1)[0],
             "kode": code.value if hasattr(code, "value") else code,
             "nokkel": bool(handler.headers.get("X-API-Key")),
+            # Hvem kalte. ALDRI selve nøkkelen — et navn i en logg er
+            # nyttig, en nøkkel i en logg er en lekkasje som overlever i
+            # sikkerhetskopier. None = nøkkelen traff ingen klient.
+            "klient_id": getattr(handler, "_klient_id", None),
             "ms": ms,
         }, ensure_ascii=False)
         _tilgangslogger().info(rad)
@@ -3088,7 +3101,7 @@ def _openapi() -> dict:
             "schemas": _skjemaer(),
             "securitySchemes": {"ApiKeyAuth": {
                 "type": "apiKey", "in": "header", "name": "X-API-Key",
-                "description": "Kreves kun når serveren er startet med API_NOKKEL"}},
+                "description": "Kreves når serveren er startet med API_NOKKEL og/eller API_NOKLER. Med navngitte nøkler (API_NOKLER=navn:nøkkel,…) får tilgangsloggen en klient_id, slik at man kan se hvem som bruker hvilke endepunkter før noe pensjoneres (R91). Nøkkelen selv logges aldri."}},
             "parameters": {"KorrelasjonsID": {
                 "name": "X-Correlation-ID", "in": "header", "required": False,
                 "schema": {"type": "string", "maxLength": 64},
@@ -3630,13 +3643,20 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def _autorisert(self) -> bool:
-        """R38: er API_NOKKEL satt, kreves matchende X-API-Key-header.
-        Tom nøkkel = åpen modus (kun for lokal testing uten sensitive data)."""
-        if not API_NOKKEL:
+        """R38: er en nøkkel satt, kreves matchende X-API-Key-header.
+        Ingen nøkler = åpen modus (kun for lokal testing uten sensitive
+        data).
+
+        Sideeffekt: setter `self._klient_id` til navnet på klienten, som
+        tilgangsloggen bruker. Sammenligningen går over ALLE nøklene uten
+        tidlig utgang — se delt/klienter.py."""
+        if not API_NOKKEL and not API_NOKLER:
+            self._klient_id = AAPEN
             return True
-        # Konstant tid — unngå timing-sidekanal på nøkkelen
-        import hmac as _hmac
-        return _hmac.compare_digest(self.headers.get("X-API-Key", ""), API_NOKKEL)
+        navn = finn_klient(self.headers.get("X-API-Key", ""),
+                           API_NOKLER, API_NOKKEL)
+        self._klient_id = navn
+        return navn is not None
 
     def _klient_ip(self) -> str:
         """Klient-IP for rate-limiting. Bak en tunnel/gateway er socket-IP-en
@@ -6840,8 +6860,32 @@ def main():
     # åpen samtidig som tunnelen er oppe, er dokumenter med
     # personopplysninger fritt tilgjengelige på internett — det skal stå
     # med store bokstaver i oppstarten, ikke gjemmes i GET /hjelp.
-    if API_NOKKEL:
-        print("  Sikkerhet: X-API-Key KREVES (API_NOKKEL er satt).")
+    if API_NOKKEL or API_NOKLER:
+        kilder = []
+        if API_NOKKEL:
+            kilder.append("API_NOKKEL")
+        if API_NOKLER:
+            kilder.append(f"API_NOKLER ({len(API_NOKLER)} navngitte)")
+        print(f"  Sikkerhet: X-API-Key KREVES ({' + '.join(kilder)}).")
+        if API_NOKLER:
+            # Navnene, ALDRI nøklene. Operatøren skal kunne se hvem som
+            # er sluppet inn uten at loggen eller skjermbildet blir en
+            # nøkkellekkasje.
+            print(f"  Klienter: {', '.join(sorted(API_NOKLER))}")
+        svake = svake_nokler(API_NOKLER)
+        if svake:
+            print(f"  ADVARSEL: for korte nøkler ({', '.join(svake)}) — "
+                  f"under {MINSTE_NOKKELLENGDE} tegn er gjettbart.")
+        for delte in gjenbrukte_nokler(API_NOKLER):
+            # To navn med samme nøkkel er ÉN klient med to navn, og da
+            # lyver klient_id i loggen — som er det eneste hele
+            # klientidentiteten bygger på.
+            print(f"  ADVARSEL: {', '.join(delte)} DELER nøkkel — "
+                  f"klient_id i loggen blir da vilkårlig.")
+        if not API_NOKLER:
+            print("  MERK: én delt nøkkel ⇒ alle kall er anonyme i "
+                  "tilgangsloggen. Sett API_NOKLER=navn:nøkkel,… for å "
+                  "kunne se hvem som bruker hva (R91).")
     else:
         print("  " + "!" * 60)
         print("  ADVARSEL: API-et er ÅPENT — hvem som helst som når porten")
