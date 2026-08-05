@@ -15,8 +15,9 @@ stole på; et felt med en tilfeldig dato er ikke det.
 import re
 
 from delt.saksfelter import arbeid_felter, okonomi_felter, sak_felter
-from delt.tekstuttrekk import (ROLLE_BEHANDLING, dokumentets_alder,
-                               finn_alle_fodselsnummer, rolle_for_type)
+from delt.tekstuttrekk import (ROLLE_BEHANDLING, ROLLE_DOKUMENT,
+                               dokumentets_alder, finn_alle_fodselsnummer,
+                               rolle_for_type)
 
 # ------------------------------------------------------------------ #
 #  Datoer: norsk form ut og inn, ISO i profilen                       #
@@ -139,14 +140,22 @@ def stempeldatoer(tekst: str, datoer) -> list:
         if not isinstance(d, dict) or not d.get("dato"):
             continue
         type_ = d.get("type")
+        rolle = rolle_for_type(type_)
+        # En dato som er sterk nok til å bli klassifisert som DOKUMENTETS
+        # egen (vedtaksdato, «datert …», dokumentdato) er per definisjon
+        # ikke et stempel. Uten denne sperren havnet dokumentdatoen i
+        # stempellista på et skannet dokument: OCR flater ut layouten, så
+        # teksten i et stempelmerke og datolinja kan havne på SAMME
+        # linje — og da slo stempelord-fallbacken til på feil dato.
+        if rolle == ROLLE_DOKUMENT:
+            continue
         # Rollen «behandling» ER stempelsemantikken: den er satt nettopp
         # for datoer som sier når NOEN GJORDE noe med dokumentet.
-        i_stempel = (type_ in _STEMPELTYPER
-                     or rolle_for_type(type_) == ROLLE_BEHANDLING)
+        i_stempel = type_ in _STEMPELTYPER or rolle == ROLLE_BEHANDLING
         if not i_stempel:
             # Ellers: står et stempelord RETT FORAN datoen? «kontekst»
             # duger ikke — den spenner over linjeskift, så et stempelord
-            # på neste linje ville gjort dokumentdatoen til et stempel.
+            # på neste linje ville gjort en vilkårlig dato til et stempel.
             i_stempel = _stempelord_foran(tekst, d["dato"])
         if not i_stempel:
             continue
@@ -212,10 +221,41 @@ def _posisjoner(tekst: str, fnr: str) -> list:
     return [m.start() for m in monster.finditer(tekst)]
 
 
+# Skjemaer merker navnefeltet selv. Står etiketten der, er linja under
+# navnet — uansett hvordan det er skrevet. Dette er sikrere enn å kjenne
+# igjen FORMEN på et navn, og det er den eneste veien til navn skrevet
+# med blokkbokstaver («NOR-ETTERNAVN, OLA»), som norske skjemaer ber om.
+_NAVNEETIKETT = re.compile(
+    r"(?im)^\s*(?:etternavn,?\s*fornavn|fornavn,?\s*etternavn|"
+    r"navn\s*p[åa]\s*\w+|etternavn|fornavn|\bnavn\b)\s*:?\s*$")
+
+
+def _navn_under_etikett(bit: str):
+    """Linja under en navne-etikett. None hvis etiketten ikke står der,
+    eller hvis linja under er tom."""
+    treff = None
+    for treff in _NAVNEETIKETT.finditer(bit):
+        pass                       # den siste = nærmest fødselsnummeret
+    if not treff:
+        return None
+    for linje in bit[treff.end():].splitlines():
+        linje = linje.strip()
+        if linje:
+            return linje if not _IKKE_NAVN.match(linje) else None
+    return None
+
+
 def _navn_ved(tekst: str, etikett_slutt: int, fnr_start: int):
-    """Navnet som hører til etiketten: det første navnelignende ordparet
-    mellom etiketten og fødselsnummeret. Står det ingen der, ser vi på
-    linja over nummeret."""
+    """Navnet som hører til etiketten.
+
+    Først etter en navne-etikett («Etternavn, fornavn»), som er den
+    sikre veien og den eneste som fanger blokkbokstaver. Ellers det
+    første navnelignende ordparet, og til sist linja over nummeret."""
+    mellom_rom = tekst[etikett_slutt:fnr_start]
+    fra_etikett = _navn_under_etikett(mellom_rom)
+    if fra_etikett:
+        return fra_etikett
+
     def foerste_navn(bit: str):
         for treff in _NAVN.finditer(bit):
             navn = treff.group(1).strip()

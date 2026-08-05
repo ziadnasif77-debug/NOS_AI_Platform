@@ -41,22 +41,49 @@ def _merket(tekst: str, etiketter: str, verdi: str, flagg=re.IGNORECASE):
 
     Skilletegnet mellom etikett og verdi varierer mellom dokumenter
     (kolon, mellomrom, «nr.»), så det holdes løst — men etiketten selv
-    må stå der, og den må stå HEL."""
-    treff = re.search(
+    må stå der, og den må stå HEL.
+
+    Er ordet nevnt flere steder, vinner den forekomsten som ER en
+    feltetikett: den som STARTER sin linje. Et skjema skriver
+    «Inntektsmelding fra arbeidsgiver» som overskrift og «Arbeidsgiver»
+    som feltnavn lenger nede — uten denne regelen tok vi overskriften
+    og fikk linja under den som arbeidsgiver («Innsendt via Altinn
+    28.04.2026 kl. 09:14»)."""
+    monster = re.compile(
         r"(?:" + etiketter + r")" + _ORDSLUTT + _BINDEORD
         + r"\s*(?:nr\.?|nummer)?\s*[:.\-]?\s*(" + verdi + r")",
-        tekst or "", flagg)
-    return treff.group(1).strip() if treff else None
+        flagg)
+    tekst = tekst or ""
+    reserve = None
+    for treff in monster.finditer(tekst):
+        linje_start = tekst.rfind("\n", 0, treff.start()) + 1
+        if not tekst[linje_start:treff.start()].strip():
+            return treff.group(1).strip()      # etiketten starter linja
+        if reserve is None:
+            reserve = treff.group(1).strip()
+    return reserve
+
+
+# Et tall etterfulgt av «prosent» eller «%» er en ANDEL, ikke et beløp.
+# «du får utbetalt 100 prosent av dette» ga ellers utbetalt_belop = 100.
+_ANDEL_ETTER = re.compile(r"\s*(?:%|prosent|pst\.?)\b", re.IGNORECASE)
 
 
 def _merket_belop(tekst: str, etiketter: str):
     """Beløpet som står rett etter en etikett, som tall. «Dagsats: kr
-    1 234,00» og «dagsats 1234,-» skal gi det samme."""
-    treff = re.search(
+    1 234,00» og «dagsats 1234,-» skal gi det samme.
+
+    Et tall som viser seg å være en PROSENTANDEL forkastes: en andel og
+    en sum er ikke samme slags tall, og 100 kroner er ikke 100 prosent."""
+    monster = re.compile(
         r"(?:" + etiketter + r")" + _ORDSLUTT
         + _BINDEORD + r"\s*[:.\-]?\s*(?:kr\.?|NOK)?\s*(" + _BELOP_TALL + r")",
-        tekst or "", re.IGNORECASE)
-    return _normaliser_belop(treff.group(1)) if treff else None
+        re.IGNORECASE)
+    for treff in monster.finditer(tekst or ""):
+        if _ANDEL_ETTER.match(tekst, treff.end()):
+            continue
+        return _normaliser_belop(treff.group(1))
+    return None
 
 
 def _merket_dato(tekst: str, etiketter: str):
@@ -135,8 +162,12 @@ def finn_manedsbelop(tekst: str):
 
 
 def finn_utbetalt_belop(tekst: str):
-    return _merket_belop(tekst, r"utbetalt|utbetales|til\s+utbetaling|"
-                                r"utbetalingsbel" + OE + r"p")
+    return _merket_belop(
+        tekst,
+        r"utbetalt\s+bel" + OE + r"p"
+        + r"|utbetalingsbel" + OE + r"p"
+        + r"|til\s+utbetaling"
+        + r"|utbetalt|utbetales")
 
 
 def finn_tilbakebetaling(tekst: str):

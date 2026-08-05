@@ -16,8 +16,8 @@ from delt.saksfelter import (arbeid_felter, finn_arbeidsgiver, finn_dagsats,
                              finn_dokumentnummer, finn_journalnummer,
                              finn_manedsbelop, finn_referanse,
                              finn_stilling, finn_stillingsprosent,
-                             finn_tilbakebetaling, finn_vedtaksnummer,
-                             okonomi_felter, sak_felter)
+                             finn_tilbakebetaling, finn_utbetalt_belop,
+                             finn_vedtaksnummer, okonomi_felter, sak_felter)
 from delt.tekstuttrekk import finn_adresser, gjett_dokumenttype
 
 
@@ -100,6 +100,34 @@ def test_belop_uten_etikett_blir_ikke_dagsats():
 def test_arbeidsgiver_stopper_for_organisasjonsnummeret():
     assert finn_arbeidsgiver(
         "Arbeidsgiver: Rema 1000 AS, Org. nr. 923 609 016") == "Rema 1000 AS"
+
+
+def test_feltetiketten_vinner_over_overskriften():
+    """Fra en ekte inntektsmelding: ordet «arbeidsgiver» står både i
+    overskriften «Inntektsmelding fra arbeidsgiver» og som feltnavn
+    lenger nede. Uten en regel om at feltetiketten STARTER sin linje,
+    ble arbeidsgiveren «Innsendt via Altinn 28.04.2026 kl. 09:14»."""
+    tekst = ("Inntektsmelding fra arbeidsgiver\n"
+             "Innsendt via Altinn 28.04.2026 kl. 09:14\n"
+             "Arbeidsgiver\n"
+             "Nordbygg Entreprenoer AS\n"
+             "Organisasjonsnummer 889000007")
+    assert finn_arbeidsgiver(tekst) == "Nordbygg Entreprenoer AS"
+
+
+def test_prosentandel_blir_ikke_et_belop():
+    """Fra det samme dokumentet: «du får utbetalt 100 prosent av dette»
+    ga utbetalt_belop = 100. En andel og en sum er ikke samme slags
+    tall — 100 kroner er ikke 100 prosent."""
+    assert finn_utbetalt_belop(
+        "Sykepengegrunnlaget er kr 512 400 per aar, og du faar utbetalt "
+        "100 prosent av dette.") is None
+
+
+def test_ekte_belop_finnes_selv_naar_en_prosent_star_foran():
+    assert finn_utbetalt_belop(
+        "du faar utbetalt 100 prosent. Utbetalt beloep: kr 74 040,00") \
+        == 74040.00
 
 
 def test_stilling_forveksles_ikke_med_stillingsprosent():

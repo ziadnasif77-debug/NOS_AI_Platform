@@ -178,6 +178,28 @@ def test_uten_stempel_er_lista_tom():
     assert _profil("Dokumentdato: 01.03.2024")["visuelt"]["stempel_datoer"] == []
 
 
+def test_dokumentets_egen_dato_havner_aldri_i_stempellista():
+    """Sett på en ekte skannet bunke: OCR flater ut layouten, så teksten
+    i et stempelmerke og dokumentets datolinje kan havne på SAMME linje.
+    Da slo stempelord-fallbacken til, og dokumentdatoen ble rapportert
+    som et stempel. En dato som er sterk nok til å være dokumentets
+    egen, er per definisjon ikke et stempel."""
+    profil = _profil("Mottatt NAV — vedtaket er datert 28.05.2026\n")
+    assert profil["dokument"]["dato"] == "2026-05-28"
+    assert profil["visuelt"]["stempel_datoer"] == []
+
+
+def test_navn_med_blokkbokstaver_leses_via_navnefeltet():
+    """Norske skjemaer ber om blokkbokstaver («Bruk blokkbokstaver»), og
+    da matcher ikke formen på et vanlig navn. Etiketten over feltet er
+    den sikre veien — og den eneste som virker her."""
+    eier = finn_dokument_eier(
+        f"1. Opplysninger om deg\nEtternavn, fornavn\n"
+        f"NOR-ETTERNAVN, OLA\nFødselsnummer\n{EIER}\n")
+    assert eier["fnr"] == EIER
+    assert eier["navn"] == "NOR-ETTERNAVN, OLA"
+
+
 def test_samme_stempeldato_to_steder_telles_en_gang():
     datoer = sett_dato_roller(klassifiser_datoer(
         "Mottatt 20.05.2024\n[Side 2 av 2]\nMottatt 20.05.2024"))
