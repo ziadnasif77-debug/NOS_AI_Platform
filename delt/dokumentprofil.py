@@ -488,6 +488,53 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
     return ut
 
 
+def _hjemmel(dato_iso, ytelse_navn=None) -> dict:
+    """Hvilken lov som gjaldt DA DOKUMENTET BLE TIL.
+
+    Et vedtak fra 1994 skal leses mot folketrygdloven av 1966, ikke mot
+    dagens. Den gamle loven er ikke historikk vi kan se bort fra: den er
+    hjemmelen for vedtak som fortsatt har virkning, og paragrafnumrene
+    peker på helt andre ytelser enn i den nye.
+
+    Finner vi ytelsen i dokumentet, slås den også opp i RIKTIG lov, så
+    «uførepensjon» i et gammelt vedtak havner i 1966-lovens kapittel 8
+    og ikke i 1997-lovens kapittel 12."""
+    tomt = {"lov": None, "lov_tittel": None, "status": None,
+            "begrunnelse": None, "ytelse_kapittel": None,
+            "ytelse_kapittel_tittel": None}
+    try:
+        from delt import lover as _lover
+    except Exception as exc:                      # registeret mangler
+        return {**tomt, "begrunnelse": f"Lovregisteret er utilgjengelig: {exc}"}
+
+    try:
+        valg = _lover.lov_for_dato(dato_iso)
+    except Exception as exc:
+        return {**tomt, "begrunnelse": f"Lovvalget feilet: {exc}"}
+
+    svar = {**tomt, "begrunnelse": valg["begrunnelse"]}
+    if not valg["lov"]:
+        return svar
+    try:
+        meta = _lover.lov(valg["lov"])
+    except KeyError:
+        return svar
+    svar.update(lov=valg["lov"], lov_tittel=meta.get("tittel"),
+                status=meta.get("status"))
+
+    if ytelse_navn:
+        # søk BARE i den loven som gjaldt — et treff i feil lov er verre
+        # enn ingen treff, fordi det ser like riktig ut
+        try:
+            treff = _lover.sok_ytelse(ytelse_navn, lov_id=valg["lov"])
+        except Exception:
+            treff = []
+        if treff:
+            svar["ytelse_kapittel"] = treff[0]["kapittel"]
+            svar["ytelse_kapittel_tittel"] = treff[0]["kapittel_tittel"]
+    return svar
+
+
 def _sammendrag(profil: dict, antall_dokumenter: int) -> dict:
     """De få feltene de fleste er ute etter, øverst.
 
@@ -651,5 +698,16 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     # uten først å sjekke om filen «var» en bunke.
     profil["dokumenter"] = del_i_dokumenter(
         tekst, datoer, filens_type=profil["dokument"]["type"])
+
+    # Hjemmelen følger DOKUMENTETS alder, ikke dagens dato. En bunke kan
+    # spenne over lovskiftet i 1997, og da har dokumentene i den ulik
+    # hjemmel — derfor avgjøres den per dokument, ikke bare for filen.
+    profil["hjemmel"] = _hjemmel(profil["dokument"]["dato"],
+                                 profil["ytelse"]["navn"])
+    for dok in profil["dokumenter"]:
+        egen = _hjemmel(dok["dato"])
+        dok["lov"] = egen["lov"]
+        dok["lov_status"] = egen["status"]
+
     profil["sammendrag"] = _sammendrag(profil, len(profil["dokumenter"]))
     return profil

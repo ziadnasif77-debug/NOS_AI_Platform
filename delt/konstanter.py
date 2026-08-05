@@ -73,8 +73,36 @@ NORSKE_FYLKER = {
     "Troms", "Finnmark",
 }
 
+# Ytelsene folketrygdloven gir. Skrives HER uten æøå med vilje: både
+# lista og dokumentteksten normaliseres før de sammenlignes (se
+# finn_ytelse), slik at «uføretrygd», «uforetrygd» og «ufoeretrygd» er
+# samme ord. Uten den normaliseringen fant systemet ALDRI uføretrygd,
+# uførepensjon, overgangsstønad eller kontantstøtte — fire av de
+# viktigste ytelsene, og de falt stille bort.
+#
+# Kapittelnavnene i regler/lover.md er kilden: hver ytelse her har sin
+# hjemmel i et kapittel i én av de to folketrygdlovene.
 NORSKE_YTELSER = {
-    "dagpenger", "sykepenger", "uforetrygd", "arbeidsavklaringspenger",
-    "foreldrepenger", "overgangsstonad", "barnetrygd", "kontantstotte",
-    "alderspensjon", "uforepensjon",
+    # 1997-loven (gjeldende)
+    "dagpenger",                 # kap. 4
+    "grunnstonad", "hjelpestonad",   # kap. 6
+    "gravferdsstonad",           # kap. 7
+    "sykepenger",                # kap. 8
+    "omsorgspenger", "pleiepenger", "opplaeringspenger",   # kap. 9
+    "arbeidsavklaringspenger",   # kap. 11
+    "tilleggsstonad",            # kap. 11 A
+    "uforetrygd",                # kap. 12
+    "yrkesskadeerstatning",      # kap. 13
+    "foreldrepenger", "svangerskapspenger", "engangsstonad",   # kap. 14
+    "overgangsstonad",           # kap. 15
+    "gjenlevendepensjon",        # kap. 17
+    "barnepensjon",              # kap. 18
+    "alderspensjon",             # kap. 19/20
+    # 1966-loven (opphevet) — egne navn på det som i dag heter noe annet
+    "uforepensjon",              # kap. 8 (i dag: uføretrygd)
+    "etterlattepensjon",         # kap. 10
+    "attforingspenger",          # kap. 5B (i dag: arbeidsavklaringspenger)
+    "rehabiliteringspenger",     # kap. 5A (i dag: arbeidsavklaringspenger)
+    # ytelser utenfor folketrygdloven, men i samme dokumentflyt
+    "barnetrygd", "kontantstotte",
 }

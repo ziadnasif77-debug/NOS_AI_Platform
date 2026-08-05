@@ -118,14 +118,45 @@ def sok_ytelse(navn: str, lov_id: str = None) -> list:
     og søker man uten å skille lovene, blander man dem.
 
     Hvert treff sier hvilken lov det kom fra og om den er gjeldende."""
-    leddet = (navn or "").strip().lower()
+    from delt.tekstuttrekk import _uten_saertegn
+
+    # æøå skrives på tre måter, og kapitteltitlene bruker tegnene mens
+    # ytelseslista er skrevet uten. Uten normalisering fant «uforetrygd»
+    # aldri kapitlet «Uføretrygd».
+    leddet = _uten_saertegn((navn or "").strip())
     if not leddet:
         return []
+    treff = _sok_kapitler(leddet, lov_id)
+    if treff:
+        return _sorter_gjeldende_forst(treff)
+    # Andre forsøk med STAMMEN: kapitlene navngir ikke alltid ytelsen med
+    # samme endelse. «attføringspenger» står i kapitlet «Ytelser under
+    # yrkesrettet attføring» — stammen «attføring» finner det, uten at
+    # vi løsner kravet til at ordet faktisk skal stå der.
+    # «s»-en er en fugebokstav og hører til sammensetningen, ikke til
+    # stammen: «attføringspenger» → «attføring», ikke «attførings».
+    stamme = re.sub(r"s?(penger|trygd|pensjon|stonad|stotte|erstatning)$",
+                    "", leddet)
+    if len(stamme) >= 5 and stamme != leddet:
+        return _sorter_gjeldende_forst(_sok_kapitler(stamme, lov_id))
+    return []
+
+
+def _sorter_gjeldende_forst(treff: list) -> list:
+    """Gjeldende rett først — den er som regel den man er ute etter."""
+    treff.sort(key=lambda t: (t["status"] != "gjeldende", t["lov"],
+                              t["kapittel"]))
+    return treff
+
+
+def _sok_kapitler(leddet: str, lov_id: str = None) -> list:
+    from delt.tekstuttrekk import _uten_saertegn
+
     treff = []
     for lid in ([lov_id] if lov_id else sorted(_les_register())):
         meta = lov(lid)
         for nummer, tittel in kapitler(lid).items():
-            if leddet in tittel.lower():
+            if leddet in _uten_saertegn(tittel):
                 treff.append({
                     "lov": lid,
                     "lov_tittel": meta.get("tittel"),
@@ -135,9 +166,6 @@ def sok_ytelse(navn: str, lov_id: str = None) -> list:
                     "gjelder_fra": meta.get("gjelder_fra"),
                     "gjelder_til": meta.get("gjelder_til") or None,
                 })
-    # gjeldende rett først — den er som regel den man er ute etter
-    treff.sort(key=lambda t: (t["status"] != "gjeldende", t["lov"],
-                              t["kapittel"]))
     return treff
 
 

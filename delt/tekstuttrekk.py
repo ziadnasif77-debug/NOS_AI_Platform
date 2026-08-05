@@ -1152,14 +1152,31 @@ def finn_kontornavn(tekst: str):
     return f"NAV {kandidat}"
 
 
+def _uten_saertegn(tekst: str) -> str:
+    """æøå (og ae/oe/aa) skrevet ned til a/o, så de tre skrivemåtene av
+    samme ord kan sammenlignes."""
+    lav = (tekst or "").lower()
+    for fra, til in (("æ", "a"), ("ø", "o"), ("å", "a"),
+                     ("ae", "a"), ("oe", "o"), ("aa", "a")):
+        lav = lav.replace(fra, til)
+    return lav
+
+
 def finn_ytelse(tekst: str):
     """Nøkkelordssøk mot den kanoniske ytelseslisten — sikrere enn å
-    gjette at enhver ORG-entitet er en ytelse."""
-    tekst_lav = tekst.lower()
-    for ytelse in NORSKE_YTELSER:
-        if ytelse in tekst_lav:
-            return ytelse
-    return None
+    gjette at enhver ORG-entitet er en ytelse.
+
+    BEGGE sider normaliseres for æøå. Lista er skrevet uten særtegn, og
+    dokumentene skriver «uføretrygd»: uten normaliseringen fant vi
+    ALDRI uføretrygd, uførepensjon, overgangsstønad eller kontantstøtte
+    — fire av de viktigste ytelsene, og de falt stille bort som «ingen
+    ytelse nevnt».
+
+    Lengste treff vinner, så «uførepensjon» ikke blir til «pensjon» og
+    «arbeidsavklaringspenger» ikke til «penger»."""
+    flat = _uten_saertegn(tekst)
+    treff = [y for y in NORSKE_YTELSER if _uten_saertegn(y) in flat]
+    return max(treff, key=len) if treff else None
 
 
 def finn_fylke(tekst: str):

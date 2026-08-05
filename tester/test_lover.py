@@ -209,3 +209,86 @@ def test_ytelsessok_kan_avgrenses_til_en_lov():
 def test_tomt_sok_gir_ingen_treff():
     assert L.sok_ytelse("") == []
     assert L.sok_ytelse(None) == []
+
+
+@trenger_tekst
+@pytest.mark.parametrize("navn,lov,kapittel", [
+    ("attforingspenger", "ftrl-1966", "5B"),
+    ("rehabiliteringspenger", "ftrl-1966", "5A"),
+])
+def test_stammen_finner_kapitlet_naar_endelsen_er_en_annen(navn, lov, kapittel):
+    """Kapitlene navngir ikke alltid ytelsen med samme endelse:
+    «attføringspenger» står i «Ytelser under yrkesrettet attføring».
+    Fugebokstaven «s» hører til sammensetningen, ikke til stammen."""
+    treff = L.sok_ytelse(navn)
+    assert (treff[0]["lov"], treff[0]["kapittel"]) == (lov, kapittel)
+
+
+@trenger_tekst
+def test_sok_taaler_alle_tre_skrivemaatene_av_aeoeaa():
+    """Ytelseslista er skrevet uten særtegn, kapitlene med. Uten
+    normalisering fant «uforetrygd» aldri kapitlet «Uføretrygd»."""
+    for skrivemaate in ("uføretrygd", "uforetrygd", "ufoeretrygd"):
+        treff = L.sok_ytelse(skrivemaate, lov_id="ftrl-1997")
+        assert treff and treff[0]["kapittel"] == "12", skrivemaate
+
+
+# ------------------------------------------------------------------ #
+#  Hjemmel etter dokumentets alder — begge lovene i bruk               #
+# ------------------------------------------------------------------ #
+
+def _profil(tekst):
+    from delt.dokumentprofil import bygg_profil
+    from delt.tekstuttrekk import (finn_dokumentdato, klassifiser_datoer,
+                                   sett_dato_roller, strukturert_uttrekk)
+    datoer = sett_dato_roller(klassifiser_datoer(tekst))
+    return bygg_profil(tekst, datoer_detaljert=datoer,
+                       dokumentdato=finn_dokumentdato(datoer),
+                       struktur=strukturert_uttrekk(tekst))
+
+
+@trenger_tekst
+@pytest.mark.parametrize("tekst,lov,status", [
+    ("Vedtak om uførepensjon\nVedtaksdato: 12.03.1994", "ftrl-1966",
+     "opphevet"),
+    ("Vedtak om uføretrygd\nVedtaksdato: 12.03.2026", "ftrl-1997",
+     "gjeldende"),
+])
+def test_hjemmelen_folger_dokumentets_alder(tekst, lov, status):
+    """Et vedtak fra 1994 skal leses mot loven som gjaldt DA — ikke mot
+    dagens. Den gamle loven er hjemmelen for vedtak som fortsatt har
+    virkning."""
+    hjemmel = _profil(tekst)["hjemmel"]
+    assert hjemmel["lov"] == lov
+    assert hjemmel["status"] == status
+
+
+@trenger_tekst
+def test_samme_ytelse_gir_ULIKT_kapittel_i_de_to_lovene():
+    """Kjernen i hele oppsettet: «sykepenger» er kapittel 3 i den gamle
+    loven og kapittel 8 i den nye. Uten å velge lov etter dokumentets
+    alder ville det ene svaret vært feil — og sett riktig ut."""
+    gammel = _profil("Vedtak om sykepenger\nVedtaksdato: 12.03.1994")
+    ny = _profil("Vedtak om sykepenger\nVedtaksdato: 12.03.2026")
+    assert gammel["hjemmel"]["ytelse_kapittel"] == "3"
+    assert ny["hjemmel"]["ytelse_kapittel"] == "8"
+
+
+@trenger_tekst
+def test_hjemmel_uten_dokumentdato_velger_ikke_lov():
+    hjemmel = _profil("Vedtak om sykepenger uten dato.")["hjemmel"]
+    assert hjemmel["lov"] is None
+    assert "ukjent" in hjemmel["begrunnelse"].lower()
+
+
+@trenger_tekst
+def test_hvert_dokument_i_en_bunke_far_sin_egen_lov():
+    """En arkivbunke kan spenne over lovskiftet i 1997. Da har
+    dokumentene i den ULIK hjemmel, og én lov for hele filen ville vært
+    feil for halvparten."""
+    bunke = ("[Side 1 av 2]\nVedtak om uførepensjon\nVedtaksdato: 12.03.1994\n"
+             "[Side 2 av 2]\nVedtak om uføretrygd\nVedtaksdato: 12.03.2026\n")
+    dokumenter = _profil(bunke)["dokumenter"]
+    assert len(dokumenter) == 2
+    assert [d["lov"] for d in dokumenter] == ["ftrl-1966", "ftrl-1997"]
+    assert [d["lov_status"] for d in dokumenter] == ["opphevet", "gjeldende"]
