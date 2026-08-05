@@ -233,6 +233,36 @@ def test_kjent_sti_uten_klient_id_er_heller_ikke_gront_lys(tmp_path, capsys,
     assert "kan ikke tilskrives noen" in capsys.readouterr().out
 
 
+def test_roterte_arkiver_leses_med(tmp_path):
+    """Tilgangsloggen roterer nå. Leste rapporten bare den AKTIVE fila,
+    ville en spørring over 365 dager sett noen få dager og meldt «ingen
+    bruker dette» om et endepunkt med årelang trafikk — et falskt
+    negativ som ikke engang ser rart ut."""
+    logg = tmp_path / "tilgang.log"
+    _skriv_logg(logg, [{"t": "2026-08-05T12:00:00", "klient_id": "ny",
+                        "sti": "/dokument", "kode": 200}])
+    _skriv_logg(tmp_path / "tilgang.log.1",
+                [{"t": "2026-08-04T12:00:00", "klient_id": "gammel",
+                  "sti": "/analyser", "kode": 200}])
+    _skriv_logg(tmp_path / "tilgang.log.2",
+                [{"t": "2026-08-03T12:00:00", "klient_id": "eldst",
+                  "sti": "/uttrekk", "kode": 200}])
+    rader = klientrapport.les_rader(str(logg))
+    assert len(rader) == 3
+    assert [r["klient_id"] for r in rader] == ["eldst", "gammel", "ny"]
+
+
+def test_filer_som_bare_ligner_et_arkiv_leses_ikke(tmp_path):
+    """«tilgang.log.gammel» eller «tilgang.log.bak» er ikke arkiver
+    logging lagde — bare tallsuffiks teller."""
+    logg = tmp_path / "tilgang.log"
+    _skriv_logg(logg, [{"t": "2026-08-05T12:00:00", "klient_id": "ny",
+                        "sti": "/dokument", "kode": 200}])
+    (tmp_path / "tilgang.log.bak").write_text("noe helt annet\n",
+                                              encoding="utf-8")
+    assert len(klientrapport.les_rader(str(logg))) == 1
+
+
 def test_halvskrevet_siste_linje_stopper_ikke_rapporten(tmp_path):
     """Normalt når serveren skriver mens rapporten leser."""
     logg = tmp_path / "t.log"

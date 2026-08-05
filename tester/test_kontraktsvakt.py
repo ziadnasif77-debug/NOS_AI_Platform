@@ -260,6 +260,63 @@ def test_openapi_dekker_hver_profilseksjon():
         f"Legg dem inn i _skjemaer()['Dokumentprofil'].")
 
 
+def _deprecated_i_spek():
+    """Alle stier i OpenAPI som er merket `deprecated: true`."""
+    def gaa(node, sti=""):
+        if isinstance(node, dict):
+            if node.get("deprecated"):
+                yield sti
+            for nokkel, verdi in node.items():
+                yield from gaa(verdi, f"{sti}/{nokkel}")
+        elif isinstance(node, list):
+            for i, verdi in enumerate(node):
+                yield from gaa(verdi, f"{sti}[{i}]")
+    return set(gaa(api._openapi()["components"]["schemas"]))
+
+
+def test_hvert_UTGATT_felt_i_koden_er_deprecated_i_openapi():
+    """Deprekeringsløpet begynner med at feltet er MERKET. Står «UTGÅTT»
+    bare som en kommentar i Python, ser en integrator som leser
+    /openapi.json et helt ordinært felt — og bygger nytt på det.
+
+    Lista hentes fra kommentarene i koden, så et nytt utgått felt tvinger
+    fram en OpenAPI-oppdatering i stedet for å bli glemt."""
+    import re
+    from pathlib import Path
+    kilde = Path(__file__).resolve().parent.parent / "delt" / "dokumentprofil.py"
+    tekst = kilde.read_text(encoding="utf-8")
+    # «"navn": … ,  # UTGÅTT» — feltnavnet rett foran markøren
+    merket = set(re.findall(r'"([a-z_]+)":[^\n]*#\s*UTG[ÅA]TT', tekst))
+    assert merket, "fant ingen UTGÅTT-markører — er formen endret?"
+
+    i_spek = " ".join(sorted(_deprecated_i_spek()))
+    mangler = sorted(navn for navn in merket if f"/{navn}" not in i_spek)
+    assert not mangler, (
+        f"Disse er merket UTGÅTT i koden, men ikke «deprecated» i "
+        f"OpenAPI: {mangler}. En integrator som leser spesifikasjonen ser "
+        f"da et helt ordinært felt.")
+
+
+def test_ingen_deprecated_uten_et_alternativ_i_teksten():
+    """Et felt merket utgått uten å si HVA man skal bruke i stedet, er
+    bare en advarsel uten utvei."""
+    skjemaer = api._openapi()["components"]["schemas"]
+
+    def gaa(node):
+        if isinstance(node, dict):
+            if node.get("deprecated"):
+                yield node
+            for verdi in node.values():
+                yield from gaa(verdi)
+        elif isinstance(node, list):
+            for verdi in node:
+                yield from gaa(verdi)
+
+    for felt in gaa(skjemaer):
+        tekst = felt.get("description") or ""
+        assert "bruk «" in tekst, f"utgått felt uten alternativ: {felt}"
+
+
 def test_ingen_brutte_referanser_i_openapi():
     """En $ref til et skjema som ikke finnes gjør at Swagger UI viser
     tomt felt i stedet for å feile."""

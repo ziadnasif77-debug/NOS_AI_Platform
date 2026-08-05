@@ -42,9 +42,11 @@ NIVAAER = ("ingen", "viktige", "alle")
 _DATOMETODE = {"etikett": "etikett", "posisjon": "posisjon",
                "pdf_metadata": "metadata"}
 
-# Partens «grunnlag» er en beviskategori. Bare «etikett» er et positivt
-# funn; resten forteller HVORFOR vi ikke har noe, og blir «ingen».
-_PARTMETODE = {"etikett": "etikett", "eneste_nummer": "sjekksum"}
+# Partens «grunnlag» er en beviskategori med FEM verdier (se _GRUNNLAG i
+# dokumentprofil.py). Bare «etikett» er et positivt funn; «flertydig»,
+# «bare_andre_roller», «umerket» og «ingen» forteller alle HVORFOR vi
+# ikke har et nummer — og da er metoden «ingen», ikke en svakere metode.
+_PARTMETODE = {"etikett": "etikett"}
 
 # … og hvor sikkert det er. Skalaen er den ene felles, ikke en fjerde.
 _PARTKONFIDENS = {"merket": "hoy", "flertydig": "lav",

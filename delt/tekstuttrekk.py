@@ -2154,6 +2154,88 @@ def refererte_felt(mal) -> list:
     return sorted(navn)
 
 
+# Hvilke ord i en mal som ber om hvilken identifikatortype.
+#
+# To lister per type, og skillet er ikke pirk: norsk setter sammen ord.
+# «kontonummer» er konto+nummer, men «kontornavn» er kontor+navn — og
+# begge inneholder delstrengen «konto». Matchet vi «konto» som
+# delstreng, ville en mal som spør om KONTORETS navn fått
+# kontonumrene til personen servert til modellen.
+#
+#   delstreng  entydige, sammensatte ord — trygge hvor som helst
+#   helord     korte ord som ER andre ords begynnelse — må stå alene
+_IDENTIFIKATORORD = {
+    "fodselsnummer": {
+        "delstreng": ("fodselsnummer", "fodselsnr", "personnummer",
+                      "personnr", "fnummer"),
+        "helord": ("fnr", "pnr", "dnr", "dnummer", "id")},
+    "kontonummer": {
+        "delstreng": ("kontonummer", "kontonr", "bankkonto", "iban"),
+        "helord": ("konto",)},
+    "organisasjonsnummer": {
+        "delstreng": ("organisasjonsnummer", "organisasjonsnr",
+                      "orgnummer", "foretaksnummer", "bedriftsnummer"),
+        "helord": ("orgnr", "org")},
+    "telefonnummer": {
+        "delstreng": ("telefonnummer", "telefonnr", "telefon",
+                      "mobilnummer", "mobilnr"),
+        "helord": ("tlf", "mobil")},
+    "epost": {
+        "delstreng": ("epost", "email", "eposadresse"),
+        "helord": ("mail",)},
+}
+
+
+def _malord(mal) -> tuple:
+    """(hele navn, enkeltord) fra en mal — nøkler, tekstverdier og
+    plassholdere. Alt normalisert uten æøå og særtegn."""
+    hele, ord = set(), set()
+
+    def _ta(raa):
+        flat = _uten_saertegn(str(raa)).lower()
+        reint = re.sub(r"[^a-z0-9]+", " ", flat).strip()
+        if not reint:
+            return
+        hele.add(reint.replace(" ", ""))
+        ord.update(reint.split())
+
+    def _gaa(node):
+        if isinstance(node, dict):
+            for nokkel, verdi in node.items():
+                _ta(nokkel)
+                _gaa(verdi)
+        elif isinstance(node, list):
+            for verdi in node:
+                _gaa(verdi)
+        elif isinstance(node, str):
+            _ta(node)
+            for m in _PLASSHOLDER.finditer(node):
+                _ta(m.group(1))
+
+    _gaa(mal)
+    return hele, ord
+
+
+def identifikatortyper_i_mal(mal) -> set:
+    """Hvilke identifikatortyper malen faktisk spør om.
+
+    Uten dette fikk modellen HVER type servert — også fødselsnummer og
+    kontonummer i en mal som bare ba om et beløp. Det er persondata
+    sendt til språkmodellen uten at noen ba om dem, og det spiser av
+    promptbudsjettet som ellers går til dokumentteksten.
+
+    Ingen treff gir tom mengde: da nevnes ingen identifikatorer i
+    prompten i det hele tatt."""
+    hele, ord = _malord(mal)
+    typer = set()
+    for type_, m in _IDENTIFIKATORORD.items():
+        if any(n in navn for navn in hele for n in m["delstreng"]):
+            typer.add(type_)
+        elif ord & set(m["helord"]):
+            typer.add(type_)
+    return typer
+
+
 def flett_mal(mal, tekst: str = None, ocr_brukt: bool = False, flat: dict = None):
     """Fyller en klients JSON-mal deterministisk fra dokumentteksten.
 

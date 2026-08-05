@@ -47,25 +47,51 @@ ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TILGANGSLOGG_STI = os.environ.get("TILGANGSLOGG", "data/logger/tilgang.log")
 
 
-def les_rader(sti: str, fra_tid: float = 0.0) -> list:
-    """Radene i loggen som er nyere enn `fra_tid`. Ugyldige linjer hoppes
-    over uten å stoppe rapporten — en halvskrevet siste linje er normalt
-    når serveren kjører mens dette leses."""
-    rader = []
+def loggfiler(sti: str) -> list:
+    """Den aktive loggen OG de roterte arkivene (`tilgang.log.1`, `.2`, …).
+
+    Uten arkivene ville en rapport over 365 dager bare sett den siste
+    filen — typisk noen dager — og meldt «ingen bruker dette» om et
+    endepunkt med årelang trafikk. Det er samme farlige falske negativ
+    som en ukjent sti gir, og her ville det ikke engang sett rart ut.
+    """
     if not os.path.exists(sti):
-        return rader
-    with open(sti, encoding="utf-8", errors="replace") as f:
-        for linje in f:
-            linje = linje.strip()
-            if not linje:
-                continue
-            try:
-                rad = json.loads(linje)
-            except ValueError:
-                continue
-            if fra_tid and _tid(rad) < fra_tid:
-                continue
-            rader.append(rad)
+        return []
+    mappe = os.path.dirname(sti) or "."
+    grunnnavn = os.path.basename(sti)
+    arkiv = []
+    for navn in os.listdir(mappe):
+        if not navn.startswith(grunnnavn + "."):
+            continue
+        hale = navn[len(grunnnavn) + 1:]
+        if hale.isdigit():
+            arkiv.append((int(hale), os.path.join(mappe, navn)))
+    # eldst først, så radene kommer i tidsrekkefølge
+    return [p for _, p in sorted(arkiv, reverse=True)] + [sti]
+
+
+def les_rader(sti: str, fra_tid: float = 0.0) -> list:
+    """Radene i loggen som er nyere enn `fra_tid` — arkivene inkludert.
+    Ugyldige linjer hoppes over uten å stoppe rapporten; en halvskrevet
+    siste linje er normalt når serveren kjører mens dette leses."""
+    rader = []
+    for fil in loggfiler(sti):
+        try:
+            with open(fil, encoding="utf-8", errors="replace") as f:
+                for linje in f:
+                    linje = linje.strip()
+                    if not linje:
+                        continue
+                    try:
+                        rad = json.loads(linje)
+                    except ValueError:
+                        continue
+                    if fra_tid and _tid(rad) < fra_tid:
+                        continue
+                    rader.append(rad)
+        except OSError:
+            # en fil som roterte bort mens vi leste er ikke en feil
+            continue
     return rader
 
 

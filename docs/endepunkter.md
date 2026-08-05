@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R97 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R101 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -817,6 +817,21 @@ python skript/klientrapport.py --dager 30
 ```bash
 python skript/klientrapport.py --sti /analyser --dager 365
 ```
+
+**Utgåtte felter er merket i spesifikasjonen (R99).** Fem felter har
+`deprecated: true` i `/openapi.json` — `eier`, `andre_personer`,
+`sammendrag.sikkerhet`, `part.sikkerhet` og `ytelse.implementasjon` —
+hver med det nye navnet i beskrivelsen. Ingen av dem fjernes før v2.
+
+`Sunset`-headeren (RFC 8594) sendes IKKE, fordi v2 ikke har noen
+besluttet dato. Et vilkårlig tidspunkt ville vært et løfte ingen har
+tatt (R100).
+
+**Loggen roterer (R101).** `TILGANGSLOGG_MAKS_MB` (standard 10) og
+`TILGANGSLOGG_ARKIV` (standard 12) — omtrent et halvt år ved normal
+last. Rapporten leser arkivfilene i tillegg til den aktive, ellers ville
+en spørring over 365 dager sett noen få dager og meldt «ingen bruker
+dette».
 
 **Hva rapporten kan og ikke kan svare på (R92).** Loggen ser
 FORESPØRSELEN. Den svarer sikkert på om noen fortsatt kaller

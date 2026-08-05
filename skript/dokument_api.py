@@ -39,6 +39,7 @@ import re
 import sys
 import tempfile
 import logging
+import logging.handlers
 import socket
 import threading
 import time
@@ -102,7 +103,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_organisasjonsnummer,
                                finn_alle_telefoner, finn_dato,
                                finn_dokumentdato, finn_koder_med_kontekst,
-                               felter_flatt, flett_mal, klassifiser_datoer,
+                               felter_flatt, flett_mal,
+                               identifikatortyper_i_mal, klassifiser_datoer,
                                refererte_felt, sett_dato_roller,
                                sladd_tekst, strukturert_uttrekk,
                                utvid_entiteter, FLETT_REGEL_VERSJON,
@@ -370,6 +372,14 @@ def _rate_tillatt(ip: str) -> bool:
 # (som kan inneholde PII). Tom sti = av. Svarer §3.3-kravet om at
 # revisjonssporet viser hvem/hva som traff hvert endepunkt.
 TILGANGSLOGG_STI = os.environ.get("TILGANGSLOGG", "data/logger/tilgang.log").strip()
+# Loggen roterte IKKE — den vokste fritt, og med klient_id på hver rad
+# vokser den litt raskere. Et revisjonsspor som fyller disken slutter å
+# være et revisjonsspor. Vinduet er bevisst romslig: klientrapporten
+# spør typisk 30–365 dager tilbake, og en fil som roterer bort før
+# spørsmålet stilles er verdiløs. 10 MB × 12 ≈ et halvt år med normal
+# last, og filene ligger under nav/ som alt annet (CLAUDE.md §1).
+TILGANGSLOGG_MAKS_MB = int(os.environ.get("TILGANGSLOGG_MAKS_MB", "10"))
+TILGANGSLOGG_ARKIV = int(os.environ.get("TILGANGSLOGG_ARKIV", "12"))
 _tilgang_logger = None
 _tilgang_init_lock = threading.Lock()
 
@@ -391,7 +401,14 @@ def _tilgangslogger():
                     mappe = os.path.dirname(TILGANGSLOGG_STI)
                     if mappe:
                         os.makedirs(mappe, exist_ok=True)
-                    h = logging.FileHandler(TILGANGSLOGG_STI, encoding="utf-8")
+                    # Roterende, ikke voksende: se TILGANGSLOGG_MAKS_MB.
+                    # delay=False (standard) åpner fila nå, så en
+                    # rettighetsfeil oppdages ved oppstart og ikke ved
+                    # første forespørsel.
+                    h = logging.handlers.RotatingFileHandler(
+                        TILGANGSLOGG_STI, encoding="utf-8",
+                        maxBytes=TILGANGSLOGG_MAKS_MB * 1024 * 1024,
+                        backupCount=TILGANGSLOGG_ARKIV)
                     h.setFormatter(logging.Formatter("%(message)s"))
                     lg.addHandler(h)
                 except Exception:
@@ -2335,14 +2352,20 @@ def _skjemaer() -> dict:
                                            "vite hvilke av fem "
                                            "«sikkerhet»-ord som betyr ja"),
                 "grunnlag": s(example="etikett",
-                              enum=["etikett", "eneste_nummer", "ingen"],
+                              enum=["etikett", "flertydig",
+                                    "bare_andre_roller", "umerket", "ingen"],
                               description="Hva funnet BYGGER PÅ. En "
                                           "kategori, ikke et trinn på en "
                                           "skala — ikke sammenlign med </>"),
-                "sikkerhet": s(example="merket",
-                               enum=["merket", "flertydig",
-                                     "bare_andre_roller", "umerket",
-                                     "ingen"]),
+                "sikkerhet": {**s(example="merket",
+                                  enum=["merket", "flertydig",
+                                        "bare_andre_roller", "umerket",
+                                        "ingen"],
+                                  description="UTGÅTT — bruk «grunnlag», "
+                                              "som bærer de samme fem "
+                                              "verdiene. Fjernes tidligst "
+                                              "i v2"),
+                              "deprecated": True},
                 "begrunnelse": s()}},
         "Opphav": {
             "type": "object",
@@ -2644,9 +2667,12 @@ def _skjemaer() -> dict:
                                        description="Nytt navn. "
                                                    "«sikkerhet» under er "
                                                    "samme verdi"),
-                        "sikkerhet": s(example="middels", enum=KONFIDENS,
-                                       description="Gammelt navn for "
-                                                   "«konfidens»")}},
+                        "sikkerhet": {**s(example="middels", enum=KONFIDENS,
+                                          description="UTGÅTT — bruk "
+                                                      "«konfidens». Samme "
+                                                      "verdi; fjernes "
+                                                      "tidligst i v2"),
+                                      "deprecated": True}}},
                 "dokumenter": {
                     "type": "array", "items": {"type": "object"},
                     "description": (
@@ -2671,11 +2697,10 @@ def _skjemaer() -> dict:
                         "uleselige_sider": {"type": "array", "nullable": True,
                                             "items": {"type": "integer"}}}},
                 "part": ref("Part"),
-                "eier": {**ref("Part"),
-                         "description": "Gammelt navn for «part». Samme "
+                "eier": {**ref("Part"), "deprecated": True,
+                         "description": "UTGÅTT — bruk «part». Samme "
                                         "objekt, ikke en kopi som kan "
-                                        "avvike. Beholdes — ingenting "
-                                        "fjernes i denne versjonen"},
+                                        "avvike. Fjernes tidligst i v2"},
                 "andre_fodselsnummer": {
                     "type": "array", "items": {"type": "object"},
                     "description": "Alle ANDRE fødselsnummer i dokumentet, "
@@ -2683,10 +2708,11 @@ def _skjemaer() -> dict:
                                    "aldri her"},
                 "andre_personer": {
                     "type": "array", "items": {"type": "object"},
-                    "description": "Gammelt navn for "
-                                   "«andre_fodselsnummer». Lista "
-                                   "inneholder fødselsnummer, ikke "
-                                   "personposter — derav omdøpingen"},
+                    "deprecated": True,
+                    "description": "UTGÅTT — bruk «andre_fodselsnummer». "
+                                   "Lista inneholder fødselsnummer, ikke "
+                                   "personposter; derav omdøpingen. "
+                                   "Fjernes tidligst i v2"},
                 "dokument": {
                     "type": "object",
                     "description": (
@@ -2768,8 +2794,13 @@ def _skjemaer() -> dict:
                                                 "under ett navn. Det "
                                                 "andre ligger nå i "
                                                 "«dekning»"),
-                        "implementasjon": s(example="delvis",
-                                            enum=DEKNINGSGRAD)}},
+                        "implementasjon": {**s(example="delvis",
+                                               enum=DEKNINGSGRAD,
+                                               description="UTGÅTT — bruk "
+                                                           "«dekning.ytelse». "
+                                                           "Fjernes tidligst "
+                                                           "i v2"),
+                                           "deprecated": True}}},
                 "ytelser": {
                     "type": "array", "items": ref("Kodet"),
                     "description": (
@@ -5794,15 +5825,24 @@ def fyll_skjema_kjerne(dok: str, mal: dict) -> dict:
     # måtte tømme feltet. Den deterministiske parseren VET hvilket
     # av tallene som er et gyldig norsk telefonnummer — den
     # kunnskapen skal modellen få, ikke gjette seg til.
+    #
+    # …men BARE de typene malen faktisk spør om (S5). Lista ble tidligere
+    # bygget uansett innhold, så en mal som bare ba om et beløp fikk
+    # fødselsnummer og kontonummer servert til språkmodellen. Persondata
+    # ingen hadde bedt om, og plass som ellers går til dokumentteksten.
+    onsket = identifikatortyper_i_mal(mal)
     merket = []
-    for etikett, verdier in (
-        ("telefonnummer", finn_alle_telefoner(dok)),
-        ("organisasjonsnummer", finn_alle_organisasjonsnummer(dok)),
-        ("fødselsnummer", finn_alle_fodselsnummer(dok)),
-        ("kontonummer", finn_alle_kontonummer(dok)),
-        ("e-postadresse", finn_alle_eposter(dok)),
+    for nokkel, etikett, finn in (
+        ("telefonnummer", "telefonnummer", finn_alle_telefoner),
+        ("organisasjonsnummer", "organisasjonsnummer",
+         finn_alle_organisasjonsnummer),
+        ("fodselsnummer", "fødselsnummer", finn_alle_fodselsnummer),
+        ("kontonummer", "kontonummer", finn_alle_kontonummer),
+        ("epost", "e-postadresse", finn_alle_eposter),
     ):
-        for verdi in verdier[:5]:
+        if nokkel not in onsket:
+            continue
+        for verdi in finn(dok)[:5]:
             merket.append(f"- {verdi} er et gyldig {etikett}")
     if merket:
         belop_del += ("\n"
