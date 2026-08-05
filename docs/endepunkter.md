@@ -30,7 +30,6 @@ unntatt `/hjelp` — se [Klientidentitet](#klientidentitet--navngitte-api-nøkle
 | Avvise et dårlig skann FØR GPU-en brukes | `POST /forhandssjekk` |
 | Sladde beviste identifikatorer (fnr, konto, …) | `POST /sladd` |
 | Finne ut hva serveren FAKTISK mottok fra deg | `POST /ekko` |
-| Ha et RYDDET svar uten utgåtte navn | `POST /api/v2/dokument` |
 | Kjøre en operasjonsliste som egen ressurs | `POST /dokument/operasjoner` |
 
 **`/dokument` er hovedveien.** De øvrige dokumentendepunktene er eldre og
@@ -133,7 +132,7 @@ utgjør typisk ~40 % av responsen på et flersidig dokument).
 
 **`opphav` — ett oppslag for «hvor kom dette fra?» (R88).** API-et
 forklarte proveniens på fem uavhengige måter — `dato_kilde`,
-`dato_sikkerhet`, `part.sikkerhet`, `kilde_per_felt` og `kilde` — med
+`dato_sikkerhet`, `part.grunnlag`, `kilde_per_felt` og `kilde` — med
 hvert sitt ordforråd, og to av dem brukte samme ord om ulike ting. En
 klient som ville vite «hvor sikkert er dette, og hvorfor?» måtte lære
 alle fem.
@@ -172,7 +171,7 @@ To LUKKEDE ordforråd, aldri gjenbrukt til noe annet:
 `lav`, `ingen`.
 
 **Kartet erstatter ingenting.** `dato_kilde`, `dato_sikkerhet`,
-`part.sikkerhet` og `kilde_per_felt` står urørt ved siden av — `opphav`
+`part.grunnlag` og `kilde_per_felt` står urørt ved siden av — `opphav`
 er en PROJEKSJON av dem, ikke en sjette uavhengig mening. Kombinerer du
 med `profil=sammendrag`, faller pekerne til de utelatte seksjonene bort:
 en peker til et fjernet felt ville lekket nettopp det bryteren skjuler.
@@ -194,13 +193,13 @@ stedet for når noe brekker. Se
 
 ```json
 {
-  "skjemaversjon": "1.4",
+  "skjemaversjon": "2.0",
 
   "sammendrag": {"navn": "Ola Nordmann", "fnr": "12345678910",
                  "dokumentdato": "2026-05-12", "dokumenttype": "vedtak",
                  "ytelse": "dagpenger", "saksnummer": "4417820",
                  "antall_sider": 10, "antall_dokumenter": 5,
-                 "konfidens": "middels", "sikkerhet": "middels"},
+                 "konfidens": "middels"},
 
   "dokumenter": [
     {"sider": [1,2], "dato": "2026-05-12", "type": "vedtak",
@@ -216,20 +215,18 @@ stedet for når noe brekker. Se
 
   "part":  {"navn": "Ola Nordmann", "fnr": "12345678910",
             "fodselsdato": "1990-01-01", "fastslatt": true,
-            "grunnlag": "etikett", "sikkerhet": "merket",
+            "grunnlag": "etikett",
             "begrunnelse": "Fødselsnummeret står under «Dokumentet gjelder» …"},
-  "eier": { /* samme objekt som "part" — se aliasene under */ },
 
   "andre_fodselsnummer": [
     {"fnr": "<saksbehandlerens nr>", "rolle": "annen",
      "etikett": "Saksbehandler", "navn": "Kari Hansen"}
   ],
-  "andre_personer": [ /* samme liste som "andre_fodselsnummer" */ ],
 
   "dokument": {
     "type": "vedtak", "tittel": "Vedtak om dagpenger", "sprak": "norsk",
     "kontornavn": "NAV Arbeid", "fylke": "Oslo",
-    "dato": "2026-05-08", "dato_norsk": "08.05.2026", "ar": 2026,
+    "dato": "2026-05-08", "dato_norsk": "08.05.2026", "aarstall": 2026,
     "alder": {"dager": 89, "tekst": "2 måneder gammelt", "fremtidig": false},
     "dato_kilde": "etikett", "dato_sikkerhet": "hoy",
     "dato_begrunnelse": "etiketten «Vedtaksdato» står rett før datoen",
@@ -243,8 +240,7 @@ stedet for når noe brekker. Se
             "referanse": null, "sakstype": null},
 
   "ytelse": {"navn": "dagpenger", "type": null, "utfall": null,
-             "gyldig_fra": null, "gyldig_til": null, "status": null,
-             "implementasjon": "delvis"},
+             "gyldig_fra": null, "gyldig_til": null, "status": null},
 
   "dekning": {"ytelse": "delvis", "sakstype": "ingen",
               "signatur_sider": "ingen", "uleselige_sider": "ingen",
@@ -319,22 +315,31 @@ selv, er `dokumentdato` `null` og `dokumentdato_begrunnelse` sier
 hvorfor. Stempeldatoer («Mottatt NAV 20.05.2024») ligger i
 `stempel_datoer` og blir aldri dokumentdato (R68).
 
-**Navn som finnes i to utgaver.** Tre felter har fått et nytt navn ved
-siden av det gamle. Begge peker på NØYAKTIG samme verdi, en test vokter
-at de ikke gliser fra hverandre, og ingen av de gamle navnene fjernes i
-denne versjonen:
+**Ett navn per felt (R81).** Tidligere lå flere felter under to navn
+samtidig — `eier`/`part`, `andre_personer`/`andre_fodselsnummer`,
+`sammendrag.sikkerhet`/`konfidens`. Det var bakoverkompatibilitet for
+klienter som ikke fantes, siden API-et aldri var utgitt, og prisen var at
+hvert felt lå to steder med en vakttest for hvert par. De gamle navnene
+er **fjernet**, ikke merket:
 
-| Nytt navn | Gammelt navn | Hvorfor det nye |
-|---|---|---|
-| `part` | `eier` | «Part» er forvaltningslovens ord (§ 2 e). I dokumenthåndtering betyr «dokumenteier» arkivets eier eller saksbehandleren — altså akkurat den personen R69 skal holde UTENFOR feltet. |
-| `andre_fodselsnummer` | `andre_personer` | Lista inneholder fødselsnummer, ikke personer. En klient som leste navnet bokstavelig ventet seg personposter. |
-| `sammendrag.konfidens` | `sammendrag.sikkerhet` | `sikkerhet` leses like gjerne som *security* som *confidence*. |
+| Bruk | Ikke lenger |
+|---|---|
+| `part` | `eier` |
+| `andre_fodselsnummer` | `andre_personer` |
+| `sammendrag.konfidens` | `sammendrag.sikkerhet` |
+| `part.grunnlag` | `part.sikkerhet` |
+| `dekning.ytelse` | `ytelse.implementasjon` |
+| `dokument.aarstall` | `dokument.ar` |
 
-Konfidensskalaen har nå ÉN verdimengde overalt: `hoy`, `middels`,
-`lav`, `ingen`. Ordet `usikker` var et fjerde navn på det `lav` allerede
-het, så en klient som filtrerte på `lav` aldri traff sammendraget.
+«Part» er forvaltningslovens ord (§ 2 e). I dokumenthåndtering betyr
+«dokumenteier» arkivets eier eller saksbehandleren — altså akkurat den
+personen R69 skal holde UTENFOR feltet.
 
-**`part` / `eier` — personen dokumentet gjelder (R69):**
+Konfidensskalaen har ÉN verdimengde overalt: `hoy`, `middels`, `lav`,
+`ingen`. Ordet `usikker` var et fjerde navn på det `lav` allerede het, så
+en klient som filtrerte på `lav` aldri traff sammendraget.
+
+**`part` — personen dokumentet gjelder (R69):**
 
 Et NAV-dokument nevner ofte flere personer med fødselsnummer: den saken
 gjelder, saksbehandleren, legen, arbeidsgiverens kontakt. Nummeret
@@ -787,65 +792,7 @@ kilde er "deterministisk"    →  regex + mod11, ingen gjetning
 
 ---
 
-## v2 — samme innhold, ryddet form
-
-`POST /api/v2/dokument` tar **nøyaktig samme felter** som `/dokument` og
-gjør nøyaktig samme arbeid. Bare svarformen er en annen. Det er ingen
-egen kodevei — to veier ville drevet fra hverandre, slik de to
-`/dokument`-kontraktene en gang gjorde.
-
-v1 har 21 toppnøkler uten ordning: fakta om dokumentet, opplysninger om
-forespørselen og diagnostikk ligger om hverandre. v2 deler dem i tre
-(R103):
-
-```json
-{
-  "ok": true,
-  "status": "ok",
-  "data":        { "part": …, "dokument": …, "sak": …, "ytelser": [ … ],
-                   "hjemler": [ … ], "tekst": …, "felter": … },
-  "metadata":    { "filnavn": …, "antall_sider": 2, "fil": { … },
-                   "skjemaversjon": "1.4", "versjon": { … } },
-  "diagnostikk": { "status": "ok", "varsler": [], "kvalitet": { … },
-                   "opphav": { … }, "dekning": { … },
-                   "modell_brukt": false, "tid_sekunder": 0.6 }
-}
-```
-
-| Gruppe | Svarer på |
-|---|---|
-| `data` | Hva står i DOKUMENTET |
-| `metadata` | Hva ble sendt inn, og hva svarte |
-| `diagnostikk` | Hvordan gikk det |
-
-`fil` er metadata — den handler om filen vi fikk, ikke om innholdet.
-`dekning` er diagnostikk — den sier hva SYSTEMET kan ennå. `ok` og
-`status` blir liggende på rot: de svarer på ulike spørsmål (R83), og
-begge skal kunne leses uten å gå ned et nivå.
-
-**Utgåtte navn finnes ikke i v2 (R104):**
-
-| Borte i v2 | Bruk |
-|---|---|
-| `eier` | `part` |
-| `andre_personer` | `andre_fodselsnummer` |
-| `sammendrag.sikkerhet` | `sammendrag.konfidens` |
-| `part.sikkerhet` | `part.grunnlag` |
-| `ytelse.implementasjon` | `dekning.ytelse` |
-| `dokument.ar` | `dokument.aarstall` |
-
-Den siste er en omdøping, ikke en fjerning: `ar` sto rett ved siden av
-`alder.aar` — to skrivemåter av samme bokstav, to betydninger.
-
-**v1 er UENDRET og fjernes ikke.** v2 er en projeksjon av det v1 alt
-bygger (R102), ikke omvendt: v1 er i drift hos skjøre klienter og gjerdet
-inn av over 800 tester, og å legge om produksjonsveien dit ville vært
-risiko uten gevinst utenfra.
-
-Feilsvar har samme form i begge versjoner — RFC 9457 er allerede en
-standard, og to feilformer ville tvunget klienten til å håndtere begge.
-
-### POST /dokument/operasjoner
+## POST /dokument/operasjoner
 
 Samme motor som feltet `operasjoner` på `/dokument`, men som egen
 ressurs. Grunnen (R105): på `/dokument` overstyrer feltet bryterne i
@@ -855,7 +802,7 @@ En egen URL gjør valget synlig.
 
 Her er `operasjoner` **påkrevd**: uten feltet får du 400 i stedet for et
 svar som stilltiende ble noe annet. Feltveien på `/dokument` beholdes
-uendret. v2-formen ligger på `/api/v2/dokument/operasjoner`.
+uendret.
 
 ---
 
@@ -892,14 +839,11 @@ python skript/klientrapport.py --dager 30
 python skript/klientrapport.py --sti /analyser --dager 365
 ```
 
-**Utgåtte felter er merket i spesifikasjonen (R99).** Fem felter har
-`deprecated: true` i `/openapi.json` — `eier`, `andre_personer`,
-`sammendrag.sikkerhet`, `part.sikkerhet` og `ytelse.implementasjon` —
-hver med det nye navnet i beskrivelsen. Ingen av dem fjernes før v2.
-
-`Sunset`-headeren (RFC 8594) sendes IKKE, fordi v2 ikke har noen
-besluttet dato. Et vilkårlig tidspunkt ville vært et løfte ingen har
-tatt (R100).
+**Ingenting er merket utgått (R99).** Så lenge API-et er uutgitt,
+FJERNES et felt som skal bort — merking og et tolv måneders løp er
+prisen man betaler for å slippe å bryte klienter, og de finnes ikke
+ennå. En vakttest slår fast at `/openapi.json` ikke har et eneste
+`deprecated`-felt.
 
 **Loggen roterer (R101).** `TILGANGSLOGG_MAKS_MB` (standard 10) og
 `TILGANGSLOGG_ARKIV` (standard 12) — omtrent et halvt år ved normal

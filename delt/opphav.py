@@ -1,7 +1,7 @@
 """Opphav — ÉN proveniensmodell for hele svaret fra `POST /dokument`.
 
 Bakgrunn (revisjonen, §5): API-et forklarte hvor et funn kom fra på fem
-uavhengige måter — `dato_kilde`, `dato_sikkerhet`, `eier.sikkerhet`,
+uavhengige måter — `dato_kilde`, `dato_sikkerhet`, `part.grunnlag`,
 `kilde_per_felt` og `kilde` — med hvert sitt ordforråd. En klient som
 ville vite «hvor sikkert er dette, og hvorfor?» måtte lære alle fem, og
 to av dem brukte samme ord om ulike ting.
@@ -48,8 +48,9 @@ _DATOMETODE = {"etikett": "etikett", "posisjon": "posisjon",
 # ikke har et nummer — og da er metoden «ingen», ikke en svakere metode.
 _PARTMETODE = {"etikett": "etikett"}
 
-# … og hvor sikkert det er. Skalaen er den ene felles, ikke en fjerde.
-_PARTKONFIDENS = {"merket": "hoy", "flertydig": "lav",
+# … og hvor sikkert funnet er. Nøklene er GRUNNLAG-verdier: «sikkerhet»
+# var det gamle navnet på samme akse og finnes ikke lenger.
+_PARTKONFIDENS = {"etikett": "hoy", "flertydig": "lav",
                   "bare_andre_roller": "ingen", "umerket": "lav",
                   "ingen": "ingen"}
 
@@ -77,14 +78,14 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
         return {}
 
     kart = {}
-    part = profil.get("part") or profil.get("eier") or {}
+    part = profil.get("part") or {}
     dokument = profil.get("dokument") or {}
 
     # --- parten (R69) -------------------------------------------------
     grunnlag = part.get("grunnlag")
     kart["/dokumentprofil/part/fnr"] = _post(
         _PARTMETODE.get(grunnlag, "ingen"),
-        _PARTKONFIDENS.get(part.get("sikkerhet"), "ingen"),
+        _PARTKONFIDENS.get(grunnlag, "ingen"),
         part.get("begrunnelse"))
 
     # --- dokumentets egen dato (R80) ----------------------------------
@@ -102,7 +103,7 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
     # som et selvstendig funn.
     if part.get("fodselsdato"):
         kart["/dokumentprofil/part/fodselsdato"] = _post(
-            "avledet", _PARTKONFIDENS.get(part.get("sikkerhet"), "ingen"),
+            "avledet", _PARTKONFIDENS.get(grunnlag, "ingen"),
             "Regnet ut av fødselsnummerets seks første siffer — står ikke "
             "nødvendigvis skrevet i dokumentet")
 

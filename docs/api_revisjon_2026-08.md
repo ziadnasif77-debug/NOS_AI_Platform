@@ -4,8 +4,25 @@
 sitt mandat, deretter kryssgjennomgått. Alt her er **verifisert mot koden
 eller målt**; anslag er merket **[anslag]**.
 
-**Status: FORSLAG. Ingen kode er endret.** Implementering venter på
-godkjenning.
+**Status: GJENNOMFØRT.** Alle 38 punktene i migrasjonsplanen er
+implementert.
+
+> **ETTERSKRIFT — én premiss holdt ikke.** Rapporten regnet med at
+> API-et var i drift hos klienter. Det var det aldri: v1 ble ikke
+> utgitt. Alt som bygde på den premissen falt derfor bort etterpå —
+> aliasene i fase 3 (punkt 23–25), deprekeringsløpet på tolv måneder,
+> og hele v2-laget i fase 4 (punkt 34). Uten klienter er et utgått felt
+> ikke noe man merker og bærer videre; det fjernes.
+>
+> Det som IKKE falt bort er verdt å merke seg: alle feilene i fase 1 og
+> 2 var ekte og er rettet, klientidentiteten (punkt 33) er nyttig når
+> API-et faktisk slippes, og navnene fase 3 innførte (`part`,
+> `andre_fodselsnummer`, `konfidens`, `grunnlag`) er de som står igjen —
+> bare uten de gamle ved siden av.
+>
+> Lærdommen er ikke at analysen var feil, men at ingen av de åtte
+> revisjonene spurte om API-et faktisk hadde brukere. Det spørsmålet
+> avgjorde hva halvparten av arbeidet var verdt.
 
 | Revisjon | Mandat |
 |---|---|

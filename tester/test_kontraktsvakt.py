@@ -83,15 +83,17 @@ def test_strekkodene_er_de_samme_i_rot_og_profil():
         sorted(k["side"] for k in i_profil)
 
 
-def test_aliasene_peker_paa_samme_verdi():
-    """«part»/«eier» og «andre_fodselsnummer»/«andre_personer» er samme
-    faktum under to navn i overgangsperioden. De MÅ være like — ellers
-    er dupliseringen blitt en motsigelse."""
+def test_ett_navn_per_felt():
+    """v1 ble aldri utgitt, så de doble navnene beskyttet klienter som
+    ikke fantes. Hvert felt har nå ETT navn — og testen her hindrer at
+    et gammelt sniker seg inn igjen fordi noen «husket» det."""
     profil = _profil()
-    assert profil["part"] == profil["eier"]
-    assert profil["andre_fodselsnummer"] == profil["andre_personer"]
-    assert profil["sammendrag"]["konfidens"] in ("hoy", "middels", "lav",
-                                                 "ingen")
+    for gammelt in ("eier", "andre_personer"):
+        assert gammelt not in profil, f"«{gammelt}» er borte — bruk det nye"
+    assert "sikkerhet" not in profil["part"]         # bruk «grunnlag»
+    assert "sikkerhet" not in profil["sammendrag"]   # bruk «konfidens»
+    assert "implementasjon" not in profil["ytelse"]  # bruk «dekning.ytelse»
+    assert "ar" not in profil["dokument"]            # bruk «aarstall»
 
 
 def test_konfidensskalaen_er_EN_skala():
@@ -237,11 +239,13 @@ def test_uten_verdi_er_det_kodede_paret_null_ikke_et_tomt_par():
     assert tom["ytelse"]["navn_kodet"] is None
 
 
-def test_dekningsgraden_sier_det_samme_som_ytelsen():
-    """`dekning.ytelse` er avledet av `ytelse.implementasjon`. Skiller
-    noen dem senere, blir det to svar på ett spørsmål."""
+def test_dekningsgraden_folger_om_ytelsen_faktisk_ble_funnet():
+    """`dekning.ytelse` sier om systemet LETER etter ytelsen ennå. Den
+    lå tidligere også i `ytelse.implementasjon` — to navn på samme
+    faktum — og har nå bare ett hjem."""
     profil = _profil()
-    assert profil["dekning"]["ytelse"] == profil["ytelse"]["implementasjon"]
+    ventet = "delvis" if profil["ytelse"]["navn"] else "ingen"
+    assert profil["dekning"]["ytelse"] == ventet
 
 
 # ------------------------------------------------------------------ #
@@ -260,48 +264,10 @@ def test_openapi_dekker_hver_profilseksjon():
         f"Legg dem inn i _skjemaer()['Dokumentprofil'].")
 
 
-def _deprecated_i_spek():
-    """Alle stier i OpenAPI som er merket `deprecated: true`."""
-    def gaa(node, sti=""):
-        if isinstance(node, dict):
-            if node.get("deprecated"):
-                yield sti
-            for nokkel, verdi in node.items():
-                yield from gaa(verdi, f"{sti}/{nokkel}")
-        elif isinstance(node, list):
-            for i, verdi in enumerate(node):
-                yield from gaa(verdi, f"{sti}[{i}]")
-    return set(gaa(api._openapi()["components"]["schemas"]))
-
-
-def test_hvert_UTGATT_felt_i_koden_er_deprecated_i_openapi():
-    """Deprekeringsløpet begynner med at feltet er MERKET. Står «UTGÅTT»
-    bare som en kommentar i Python, ser en integrator som leser
-    /openapi.json et helt ordinært felt — og bygger nytt på det.
-
-    Lista hentes fra kommentarene i koden, så et nytt utgått felt tvinger
-    fram en OpenAPI-oppdatering i stedet for å bli glemt."""
-    import re
-    from pathlib import Path
-    kilde = Path(__file__).resolve().parent.parent / "delt" / "dokumentprofil.py"
-    tekst = kilde.read_text(encoding="utf-8")
-    # «"navn": … ,  # UTGÅTT» — feltnavnet rett foran markøren
-    merket = set(re.findall(r'"([a-z_]+)":[^\n]*#\s*UTG[ÅA]TT', tekst))
-    assert merket, "fant ingen UTGÅTT-markører — er formen endret?"
-
-    i_spek = " ".join(sorted(_deprecated_i_spek()))
-    mangler = sorted(navn for navn in merket if f"/{navn}" not in i_spek)
-    assert not mangler, (
-        f"Disse er merket UTGÅTT i koden, men ikke «deprecated» i "
-        f"OpenAPI: {mangler}. En integrator som leser spesifikasjonen ser "
-        f"da et helt ordinært felt.")
-
-
-def test_ingen_deprecated_uten_et_alternativ_i_teksten():
-    """Et felt merket utgått uten å si HVA man skal bruke i stedet, er
-    bare en advarsel uten utvei."""
-    skjemaer = api._openapi()["components"]["schemas"]
-
+def test_ingenting_er_merket_deprecated():
+    """Det finnes ikke lenger et eneste utgått felt: v1 var aldri utgitt,
+    så alt som bare eksisterte for bakoverkompatibilitet er fjernet i
+    stedet for å bli merket og båret videre i tolv måneder."""
     def gaa(node):
         if isinstance(node, dict):
             if node.get("deprecated"):
@@ -312,9 +278,11 @@ def test_ingen_deprecated_uten_et_alternativ_i_teksten():
             for verdi in node:
                 yield from gaa(verdi)
 
-    for felt in gaa(skjemaer):
-        tekst = felt.get("description") or ""
-        assert "bruk «" in tekst, f"utgått felt uten alternativ: {felt}"
+    merket = list(gaa(api._openapi()))
+    assert not merket, (
+        f"{len(merket)} felt er merket deprecated. Er et felt utgått, skal "
+        f"det FJERNES så lenge API-et er uutgitt — merking er for felter "
+        f"klienter allerede bruker.")
 
 
 def test_ingen_brutte_referanser_i_openapi():

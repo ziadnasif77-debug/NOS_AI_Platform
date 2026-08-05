@@ -5,7 +5,7 @@ Formålet med dette dokumentet er å avgjøre FORMEN på svaret fra
 svaret felt for felt til det blir stort, usammenhengende og umulig å
 endre uten å bryte klienter.
 
-Status: **implementert, `skjemaversjon: "1.4"`.** Seksjonsformen i §3
+Status: **implementert, `skjemaversjon: "2.0"`.** Seksjonsformen i §3
 er den som svares i dag, i begge kontraktene. Feltreferansen ligger i
 [endepunkter.md](endepunkter.md); reglene som håndhever den er
 R71–R73, R79–R97 i [regler_lokal_api.md](regler_lokal_api.md).
@@ -18,27 +18,24 @@ Derfor ligger nøkkelsettet nå som fasit i
 `tester/fasit_profilnokler.json`, og `test_kontraktsvakt.py` feiler når
 det endres — versjonen kan ikke lenger glemmes i stillhet (R87).
 
-**Tillegg i 1.3 (additive — ingenting fjernet):**
+**2.0 — ett navn per felt.** 1.3 og 1.4 la til nye navn ved siden av de
+gamle for ikke å bryte klienter. API-et var aldri utgitt, så de klientene
+fantes ikke — og prisen var at hvert felt lå to steder med en vakttest
+for hvert par. I 2.0 er de gamle navnene fjernet:
 
-| Felt | Hva |
+| Bruk | Fjernet |
 |---|---|
-| `part` | Nytt navn for `eier`; samme objekt (R81) |
-| `andre_fodselsnummer` | Nytt navn for `andre_personer`; samme liste (R81) |
-| `sammendrag.konfidens` | Nytt navn for `sammendrag.sikkerhet` (R81) |
-| `part.fastslatt` | «Har vi en part?» som ÉN boolsk verdi |
-| `part.grunnlag` | Hva funnet bygger på — kategori, ikke skala (R82) |
-| `dekning` | Hvilke felter systemet LETER etter ennå (R84) |
-| `ytelse.status` | Frigjort til ytelsens egen status; modenheten flyttet til `dekning` |
+| `part` | `eier` |
+| `andre_fodselsnummer` | `andre_personer` |
+| `sammendrag.konfidens` | `sammendrag.sikkerhet` |
+| `part.grunnlag` | `part.sikkerhet` |
+| `dekning.ytelse` | `ytelse.implementasjon` |
+| `dokument.aarstall` | `dokument.ar` |
 
-**Tillegg i 1.4 (additive):**
-
-| Felt | Hva |
-|---|---|
-| `dokument.type_kodet` | `{kode, term}` ved siden av `type` (R94) |
-| `ytelse.navn_kodet` | Termen sier også når en ytelse er historisk |
-| `sak.sakstype_kodet` | Med fra nå, står `null` til reglene lander |
-| `ytelser[]` | Alle ytelsene dokumentet nevner (R95) |
-| `hjemler[]` | Bestemmelsene dokumentet VISER TIL — ikke det samme som `hjemmel` (R96) |
+Nytt i samme omgang: `part.fastslatt` (fant vi personen — som ÉN boolsk
+verdi), `dekning` (hva systemet leter etter ennå), `ytelser[]` og
+`hjemler[]` (et dokument kan gjelde flere), og `{kode, term}`-par for
+dokumenttype og ytelse.
 
 ---
 

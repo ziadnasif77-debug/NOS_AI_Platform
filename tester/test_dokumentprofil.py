@@ -107,13 +107,13 @@ def test_dokumentdato_velges_ikke_fra_lopende_tekst():
         "Du må klage innen 12.06.2024.\n"
         "Perioden gjelder fra 01.01.2023.\n")
     assert profil["dokument"]["dato"] == "2024-05-17"
-    assert profil["dokument"]["ar"] == 2024
+    assert profil["dokument"]["aarstall"] == 2024
 
 
 def test_bare_innholdsdatoer_gir_null_ikke_en_tilfeldig_dato():
     profil = _profil("Fristen er 12.06.2024 og du er født 01.01.1990.")
     assert profil["dokument"]["dato"] is None
-    assert profil["dokument"]["ar"] is None
+    assert profil["dokument"]["aarstall"] is None
     assert profil["dokument"]["dato_sikkerhet"] == "ingen"
     assert "Fant ingen dato" in profil["dokument"]["dato_begrunnelse"]
 
@@ -355,8 +355,9 @@ def test_dekning_skiller_ikke_bygget_fra_ikke_funnet():
 
 SEKSJONER = {
     "fil": ("filnavn", "antall_sider", "blanke_sider", "uleselige_sider"),
-    "eier": ("navn", "fnr", "fodselsdato", "sikkerhet", "begrunnelse"),
-    "dokument": ("type", "tittel", "sprak", "dato", "dato_norsk", "ar",
+    "part": ("navn", "fnr", "fodselsdato", "fastslatt", "grunnlag",
+             "begrunnelse"),
+    "dokument": ("type", "tittel", "sprak", "dato", "dato_norsk", "aarstall",
                  "alder", "dato_kilde", "dato_sikkerhet", "dato_begrunnelse",
                  "periode_start", "periode_slutt", "spenn_fra", "spenn_til",
                  "flere_dokumenter"),
@@ -384,7 +385,7 @@ def test_alle_seksjoner_finnes_selv_i_et_tomt_dokument(seksjon):
     finnes før den leser den, har ingen kontrakt."""
     profil = _profil("")
     assert seksjon in profil
-    assert isinstance(profil[seksjon], dict) or seksjon == "andre_personer"
+    assert isinstance(profil[seksjon], dict)
 
 
 @pytest.mark.parametrize("seksjon,felter", sorted(SEKSJONER.items()))
@@ -394,12 +395,12 @@ def test_alle_felt_i_hver_seksjon_finnes_alltid(seksjon, felter):
     assert not mangler, f"{seksjon} mangler {mangler}"
 
 
-def test_andre_personer_er_en_egen_seksjon_paa_toppniva():
+def test_andre_fodselsnummer_er_en_egen_seksjon_paa_toppniva():
     """Kravet: de øvrige fødselsnumrene skal IKKE ligge sammen med
-    eierens — heller ikke nestet inne i eier-seksjonen."""
+    partens — heller ikke nestet inne i part-seksjonen."""
     profil = _profil("")
-    assert profil["andre_personer"] == []
-    assert "andre_fodselsnummer" not in profil["eier"]
+    assert profil["andre_fodselsnummer"] == []
+    assert "andre_fodselsnummer" not in profil["part"]
 
 
 # ------------------------------------------------------------------ #
@@ -432,14 +433,14 @@ def test_sammendraget_gir_de_faa_feltene_de_fleste_vil_ha():
     assert s["dokumentdato"] == "2026-05-12"
     assert s["dokumenttype"] == "vedtak"
     assert s["saksnummer"] == "4417820"
-    assert s["sikkerhet"] == "hoy"
+    assert s["konfidens"] == "hoy"
 
 
 def test_sikkerheten_er_det_svakeste_leddet():
     """Er eieren usikker, hjelper det ikke at datoen er sikker."""
     s = _profil("Vedtaksdato: 12.05.2026\nEt brev uten person.")["sammendrag"]
     assert s["fnr"] is None
-    assert s["sikkerhet"] == "usikker"
+    assert s["konfidens"] == "lav"
 
 
 def test_bunken_deles_i_dokumentene_den_bestaar_av():
@@ -458,7 +459,7 @@ def test_bunken_deles_i_dokumentene_den_bestaar_av():
 def test_sammendraget_teller_dokumentene_i_bunken():
     s = _profil(BUNKE, antall_sider=4)["sammendrag"]
     assert s["antall_dokumenter"] == 3
-    assert s["sikkerhet"] != "hoy", "en bunke er aldri «hoy» sikkerhet"
+    assert s["konfidens"] != "hoy", "en bunke er aldri «hoy» konfidens"
 
 
 def test_ett_dokument_gir_en_liste_med_en_oppforing():
@@ -481,7 +482,7 @@ def test_et_ukjent_dokument_laaner_ikke_naboens_type():
 def test_skjemaversjonen_folger_med():
     """Endres formen senere, skal en klient kunne se det på tallet i
     stedet for å oppdage det når noe brekker."""
-    assert _profil("")["skjemaversjon"] == "1.4"
+    assert _profil("")["skjemaversjon"] == "2.0"
 
 
 def test_profilen_folger_med_i_dokumentsvaret_uten_at_noen_ber_om_det():
@@ -492,7 +493,7 @@ def test_profilen_folger_med_i_dokumentsvaret_uten_at_noen_ber_om_det():
         antall_sider=1)
     profil = ktx.profil
     assert profil["dokument"]["dato"] == "2024-05-17"
-    assert profil["eier"]["fnr"] == EIER
+    assert profil["part"]["fnr"] == EIER
     assert profil["fil"]["antall_sider"] == 1
 
 

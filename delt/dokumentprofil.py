@@ -575,21 +575,23 @@ def _sammendrag(profil: dict, antall_dokumenter: int) -> dict:
     Profilen er komplett og derfor lang. Et sammendrag gjør at den som
     bare skal vite «hvem og når» slipper å lete — uten at noe fjernes
     for den som trenger resten. «sikkerhet» er det SVAKESTE leddet, ikke
-    et gjennomsnitt: er eieren usikker, hjelper det ikke at datoen er
+    et gjennomsnitt: er PARTEN usikker, hjelper det ikke at datoen er
     sikker."""
-    eier, dok = profil["eier"], profil["dokument"]
-    ledd = [eier["sikkerhet"] == "merket",
+    part, dok = profil["part"], profil["dokument"]
+    # «etikett» er den ENESTE grunnlagsverdien som er et positivt funn;
+    # resten forteller hvorfor vi ikke har et nummer.
+    ledd = [part["grunnlag"] == "etikett",
             dok["dato_sikkerhet"] == "hoy",
             antall_dokumenter <= 1]
     if all(ledd):
         sikkerhet = "hoy"
-    elif eier["fnr"] and dok["dato"]:
+    elif part["fnr"] and dok["dato"]:
         sikkerhet = "middels"
     else:
         sikkerhet = "usikker"
     return {
-        "navn": eier["navn"],
-        "fnr": eier["fnr"],
+        "navn": part["navn"],
+        "fnr": part["fnr"],
         "dokumentdato": dok["dato"],
         "dokumenttype": dok["type"],
         "ytelse": profil["ytelse"]["navn"],
@@ -597,12 +599,10 @@ def _sammendrag(profil: dict, antall_dokumenter: int) -> dict:
         "antall_sider": profil["fil"]["antall_sider"],
         "antall_dokumenter": antall_dokumenter,
         # «sikkerhet» betyr fire ulike ting i dette API-et — security i
-        # /hjelp, konfidens her, beviskategori i eier, og en annen skala
-        # i dato_sikkerhet («usikker» mot «lav» for samme akse). Ordet
-        # pensjoneres fra verdidomenet: «konfidens» er nå navnet, med ÉN
-        # skala overalt. Det gamle feltet blir liggende til v2.
+        # /hjelp, konfidens her, beviskategori i parten, og en annen
+        # skala i dato_sikkerhet («usikker» mot «lav» for samme akse).
+        # «konfidens» er navnet, med ÉN skala overalt.
         "konfidens": _EN_SKALA.get(sikkerhet, sikkerhet),
-        "sikkerhet": sikkerhet,          # UTGÅTT — bruk «konfidens»
     }
 
 
@@ -624,19 +624,19 @@ _GRUNNLAG = {
 
 
 def _part(eier: dict) -> dict:
-    """Personen dokumentet gjelder, med begge navnesettene.
+    """Personen dokumentet gjelder (R69).
 
-    «grunnlag» erstatter «sikkerhet» her: verdiene er beviskategorier,
-    ikke grader. Og «fastslatt» svarer på det spørsmålet de fleste
-    faktisk stiller — fant dere personen? — så nye bevistilstander kan
-    legges til i «grunnlag» uten å brekke noen som matcher på enum."""
+    «grunnlag» er en BEVISKATEGORI, ikke en grad: «flertydig» betyr at
+    vi fant MER bevis, ikke mindre, og kan ikke rangeres mot «umerket».
+    «fastslatt» svarer på det spørsmålet de fleste faktisk stiller —
+    fant dere personen? — så nye bevistilstander kan legges til i
+    «grunnlag» uten å brekke noen som matcher på enum."""
     return {
         "navn": eier["navn"],
         "fnr": eier["fnr"],
         "fodselsdato": _fodselsdato_av_fnr(eier["fnr"]),
         "fastslatt": eier["fnr"] is not None,
         "grunnlag": _GRUNNLAG.get(eier["sikkerhet"], eier["sikkerhet"]),
-        "sikkerhet": eier["sikkerhet"],      # UTGÅTT — bruk «grunnlag»
         "begrunnelse": eier["begrunnelse"],
     }
 
@@ -676,7 +676,7 @@ def _valuta(tekst: str) -> dict:
     return {"valuta": kode, "valuta_merknad": None}
 
 
-SKJEMAVERSJON = "1.4"
+SKJEMAVERSJON = "2.0"
 
 
 def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
@@ -723,14 +723,14 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         # for å utelukke. En integrasjon som mapper «eier» mot sitt
         # arkivsystems eierfelt treffer feil person.
         "part": _part(eier),
-        "eier": _part(eier),             # UTGÅTT — bruk «part»
+
 
         # ALDRI sammenblandet med parten — se R69. Feltet er nøklet på
         # fødselsnummer og deduplisert på det, så en person nevnt bare
-        # ved navn kommer ikke med. «andre_personer» lovet mer enn det
-        # kan holde; det interne navnet var det ærlige.
+        # ved navn kommer ikke med. Navnet «andre_personer» lovet mer
+        # enn feltet kan holde, og ble derfor forkastet.
         "andre_fodselsnummer": eier["andre_fodselsnummer"],
-        "andre_personer": eier["andre_fodselsnummer"],   # UTGÅTT
+
 
         "dokument": {
             "type": s_dok.get("dokumenttype") or None,
@@ -747,7 +747,10 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
 
             "dato": dato_iso,
             "dato_norsk": dato_norsk,
-            "ar": int(dato_iso[:4]) if dato_iso else None,
+            # «aarstall», ikke «ar»: den sto rett ved siden av
+            # «alder.aar» — to skrivemåter av samme bokstav, to
+            # betydninger (årstallet kontra hvor gammelt dokumentet er).
+            "aarstall": int(dato_iso[:4]) if dato_iso else None,
             "alder": dokumentets_alder(dato_norsk) if dato_norsk else None,
             "dato_kilde": dokumentdato.get("kilde"),
             "dato_sikkerhet": dokumentdato.get("konfidens") or "ingen",
@@ -797,8 +800,6 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             "gyldig_fra": None,
             "gyldig_til": None,
             "status": None,
-            # UTGÅTT — flyttet til profilens «dekning»-seksjon
-            "implementasjon": "delvis" if s_dok.get("ytelse") else "ingen",
         },
 
         "okonomi": {
@@ -867,7 +868,7 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     # kommentar i koden og ingen markør i JSON-en — en klient kunne ikke
     # skille «vi så etter og fant ingenting» fra «vi så aldri etter».
     profil["dekning"] = {
-        "ytelse": profil["ytelse"]["implementasjon"],
+        "ytelse": "delvis" if profil["ytelse"]["navn"] else "ingen",
         "sakstype": "ingen",
         "signatur_sider": "ingen",
         "uleselige_sider": "ingen",

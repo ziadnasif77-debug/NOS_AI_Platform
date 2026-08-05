@@ -116,7 +116,6 @@ from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
                            finn_klient, gjenbrukte_nokler, les_nokler,
                            svake_nokler)
-from delt.v2 import til_v2
 from delt.opphav import (NIVAAER, bygg_opphav, opphav_for_skjema,
                          uten_utelatte)
 
@@ -154,7 +153,6 @@ API_NOKLER = les_nokler(os.environ.get("API_NOKLER", ""))
 # prefikssjekk: «startswith» ville gjort /api/v2noeannet til en
 # v2-rute, og prefikset alene ser dessuten ut som en rute for
 # vakttesten som krever at hver rute er dokumentert.
-V2_STIER = ("/api/v2/dokument", "/api/v2/dokument/operasjoner")
 # Prefiksene _sti() normaliserer bort. Navngitt fordi de er PREFIKSER,
 # ikke ruter: skrevet som strengliteraler rett i startswith() ble de
 # lest som endepunkter av vakttesten som krever at hver rute er
@@ -364,8 +362,7 @@ _kapasitet_port = _Kapasitetsport()
 # kapasitetsporten, og serveren kunne overlastes gjennom en dør mens
 # den andre var stengt.
 _TUNGE_STIER = ("/analyser", "/spor", "/uttrekk", "/fyll_skjema", "/dokument",
-                "/dokument/operasjoner", "/api/v2/dokument",
-                "/api/v2/dokument/operasjoner", "/sladd")
+                "/dokument/operasjoner", "/sladd")
 _rate_lock = threading.Lock()
 _rate_teller = {}   # klient-ip -> [vindu_minutt, antall]
 
@@ -494,7 +491,7 @@ GZIP_NIVAA = 6
 MAKS_MODELLOPERASJONER = 8
 OPERASJON_FRIST_S = 75.0
 
-API_VERSJON = "1.6.0"
+API_VERSJON = "2.0.0"
 # Promptversjonen står i regler/prompter.md, sammen med ordlyden den
 # beskriver — så den ikke kan bli glemt når en regel endres. Den slås
 # opp PER SVAR (prompter.versjon()), ikke ved oppstart: reglene kan
@@ -2376,47 +2373,7 @@ def _skjemaer() -> dict:
                               description="Hva funnet BYGGER PÅ. En "
                                           "kategori, ikke et trinn på en "
                                           "skala — ikke sammenlign med </>"),
-                "sikkerhet": {**s(example="merket",
-                                  enum=["merket", "flertydig",
-                                        "bare_andre_roller", "umerket",
-                                        "ingen"],
-                                  description="UTGÅTT — bruk «grunnlag», "
-                                              "som bærer de samme fem "
-                                              "verdiene. Fjernes tidligst "
-                                              "i v2"),
-                              "deprecated": True},
                 "begrunnelse": s()}},
-        "DokumentSvarV2": {
-            "type": "object",
-            "description": (
-                "v2-formen. Tre grupper som svarer på tre ulike spørsmål, "
-                "i stedet for 21 toppnøkler om hverandre. Samme innhold "
-                "som v1 — dette er en projeksjon, ikke en ny beregning."),
-            "properties": {
-                "ok": b(description="Gikk forespørselen igjennom"),
-                "status": s(enum=["ok", "delvis", "feil"],
-                            description="Fikk du det du ba om (R83). Står "
-                                        "også i «diagnostikk»"),
-                "data": {"type": "object",
-                         "description": "Hva som står i DOKUMENTET: "
-                                        "profilseksjonene flatet ut (part, "
-                                        "dokument, sak, ytelse, ytelser, "
-                                        "hjemmel, hjemler, okonomi, arbeid, "
-                                        "kontakt, koder, visuelt, dokumenter) "
-                                        "pluss delene du ba om (tekst, felter, "
-                                        "struktur, svar, skjema, koordinater, "
-                                        "strekkoder)"},
-                "metadata": {"type": "object",
-                             "description": "Om forespørselen og svaret: "
-                                            "filnavn, antall_sider, "
-                                            "antall_tegn, fil, skjemaversjon, "
-                                            "versjon"},
-                "diagnostikk": {"type": "object",
-                                "description": "Hvordan det gikk: status, valg, "
-                                               "varsler, kvalitet, opphav, "
-                                               "dekning, modell_brukt, "
-                                               "fra_cache, tid_sekunder, "
-                                               "kilde"}}},
         "Opphav": {
             "type": "object",
             "description": (
@@ -2714,15 +2671,9 @@ def _skjemaer() -> dict:
                                          "nullable": True},
                         "antall_dokumenter": {"type": "integer"},
                         "konfidens": s(example="middels", enum=KONFIDENS,
-                                       description="Nytt navn. "
-                                                   "«sikkerhet» under er "
-                                                   "samme verdi"),
-                        "sikkerhet": {**s(example="middels", enum=KONFIDENS,
-                                          description="UTGÅTT — bruk "
-                                                      "«konfidens». Samme "
-                                                      "verdi; fjernes "
-                                                      "tidligst i v2"),
-                                      "deprecated": True}}},
+                                       description="ÉN skala for hele "
+                                                   "API-et: hoy/middels/"
+                                                   "lav/ingen")}},
                 "dokumenter": {
                     "type": "array", "items": {"type": "object"},
                     "description": (
@@ -2747,22 +2698,12 @@ def _skjemaer() -> dict:
                         "uleselige_sider": {"type": "array", "nullable": True,
                                             "items": {"type": "integer"}}}},
                 "part": ref("Part"),
-                "eier": {**ref("Part"), "deprecated": True,
-                         "description": "UTGÅTT — bruk «part». Samme "
-                                        "objekt, ikke en kopi som kan "
-                                        "avvike. Fjernes tidligst i v2"},
                 "andre_fodselsnummer": {
                     "type": "array", "items": {"type": "object"},
                     "description": "Alle ANDRE fødselsnummer i dokumentet, "
                                    "med rolle og etikett. Partens gjentas "
                                    "aldri her"},
-                "andre_personer": {
-                    "type": "array", "items": {"type": "object"},
-                    "deprecated": True,
-                    "description": "UTGÅTT — bruk «andre_fodselsnummer». "
-                                   "Lista inneholder fødselsnummer, ikke "
-                                   "personposter; derav omdøpingen. "
-                                   "Fjernes tidligst i v2"},
+
                 "dokument": {
                     "type": "object",
                     "description": (
@@ -2785,8 +2726,8 @@ def _skjemaer() -> dict:
                         "fylke": s(nullable=True),
                         "dato": s(nullable=True, example="2026-05-08"),
                         "dato_norsk": s(nullable=True, example="08.05.2026"),
-                        "ar": {"type": "integer", "nullable": True,
-                               "example": 2026},
+                        "aarstall": {"type": "integer", "nullable": True,
+                                     "example": 2026},
                         "alder": {"type": "object", "nullable": True},
                         "dato_kilde": s(nullable=True),
                         "dato_sikkerhet": s(example="hoy"),
@@ -2844,13 +2785,7 @@ def _skjemaer() -> dict:
                                                 "under ett navn. Det "
                                                 "andre ligger nå i "
                                                 "«dekning»"),
-                        "implementasjon": {**s(example="delvis",
-                                               enum=DEKNINGSGRAD,
-                                               description="UTGÅTT — bruk "
-                                                           "«dekning.ytelse». "
-                                                           "Fjernes tidligst "
-                                                           "i v2"),
-                                           "deprecated": True}}},
+                        "navn_kodet": {**ref("Kodet"), "nullable": True}}},
                 "ytelser": {
                     "type": "array", "items": ref("Kodet"),
                     "description": (
@@ -3335,39 +3270,6 @@ def _openapi() -> dict:
                     "503": {"description": "Bare modelldeler bedt om mens Borealis er nede",
                             "content": {"application/json": {"schema": {
                                 "$ref": "#/components/schemas/Feilsvar"}}}}}}},
-            "/api/v2/dokument": {"post": {
-                "summary": "Som POST /dokument, men i v2-form",
-                "description": (
-                    "SAMME behandling og SAMME brytere som POST /dokument — bare en "
-                    "annen svarform. Ingen egen kodevei: to veier ville drevet fra "
-                    "hverandre.\n\n"
-                    "v1 har 21 toppnøkler uten ordning: fakta om dokumentet, "
-                    "opplysninger om forespørselen og diagnostikk ligger om hverandre. "
-                    "v2 deler dem i tre:\n"
-                    "- data: hva som står i dokumentet (profilseksjonene, flatet ut)\n"
-                    "- metadata: filnavn, sideantall, versjoner, skjemaversjon\n"
-                    "- diagnostikk: status, varsler, kvalitet, opphav, dekning, tid\n\n"
-                    "«ok» og «status» blir liggende på rot — de svarer på ULIKE "
-                    "spørsmål (R83), og begge skal kunne leses uten å gå ned et nivå.\n\n"
-                    "UTGÅTTE NAVN FINNES IKKE HER: eier, andre_personer, "
-                    "sammendrag.sikkerhet, part.sikkerhet og ytelse.implementasjon er "
-                    "borte (bruk part, andre_fodselsnummer, konfidens, grunnlag, "
-                    "dekning.ytelse). «dokument.ar» heter «dokument.aarstall», som ikke "
-                    "kan forveksles med «dokument.alder.aar».\n\n"
-                    "v1 er UENDRET og fjernes ikke. Feilsvar har samme form i begge "
-                    "versjoner (RFC 9457)."),
-                "tags": ["dokument"],
-                "requestBody": {"content": {"multipart/form-data": {"schema": {
-                    "type": "object", "required": ["fil"],
-                    "description": "Nøyaktig samme felter som POST /dokument",
-                    "properties": {"fil": fil_felt}}}}},
-                "responses": {
-                    "200": {"description": "Samme innhold som v1, i tredelt form",
-                            "content": {"application/json": {"schema": {
-                                "$ref": "#/components/schemas/DokumentSvarV2"}}}},
-                    "400": {"description": "Ukjent bryterverdi eller ugyldig JSON-mal",
-                            "content": {"application/json": {"schema": {
-                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/dokument/operasjoner": {"post": {
                 "summary": "Operasjonslista som EGEN ressurs",
                 "description": (
@@ -3378,8 +3280,7 @@ def _openapi() -> dict:
                     "deler ble utført. En egen URL gjør valget synlig.\n\n"
                     "«operasjoner» er PÅKREVD her; uten feltet får du 400 i stedet for "
                     "et svar som stilltiende ble noe annet. Feltveien på /dokument "
-                    "beholdes uendret.\n\n"
-                    "v2-formen ligger på /api/v2/dokument/operasjoner."),
+                    "beholdes uendret."),
                 "tags": ["dokument"],
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object", "required": ["fil", "operasjoner"],
@@ -3397,22 +3298,6 @@ def _openapi() -> dict:
                             "content": {"application/json": {"schema": {
                                 "type": "object"}}}},
                     "400": {"description": "«operasjoner» mangler eller er ugyldig JSON",
-                            "content": {"application/json": {"schema": {
-                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
-            "/api/v2/dokument/operasjoner": {"post": {
-                "summary": "Operasjonsressursen i v2-form",
-                "description": ("Som POST /dokument/operasjoner, men svaret er delt i "
-                                "data/metadata/diagnostikk og uten utgåtte navn."),
-                "tags": ["dokument"],
-                "requestBody": {"content": {"multipart/form-data": {"schema": {
-                    "type": "object", "required": ["fil", "operasjoner"],
-                    "properties": {"fil": fil_felt,
-                                   "operasjoner": {"type": "string"}}}}}},
-                "responses": {
-                    "200": {"description": "Tredelt form",
-                            "content": {"application/json": {"schema": {
-                                "$ref": "#/components/schemas/DokumentSvarV2"}}}},
-                    "400": {"description": "«operasjoner» mangler eller er ugyldig",
                             "content": {"application/json": {"schema": {
                                 "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/spor": {"post": {
@@ -3977,12 +3862,6 @@ class Handler(BaseHTTPRequestHandler):
                     data["problem"] = _problem_detaljer(
                         kode, data.get("feil"), korr, self._sti(),
                         data.pop("felter_feil", None))
-        # v2-form: ETT punkt for projeksjonen, så begge kontraktene
-        # (brytere og operasjoner) får den uten å duplisere noe. Feilsvar
-        # er urørt — de er allerede RFC 9457 og har samme form i begge
-        # versjoner.
-        if getattr(self, "_v2", False) and isinstance(data, dict)                 and data.get("ok") is not False:
-            data = til_v2(data)
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         # gzip når klienten sier den tåler det. Målt på et vanlig
         # /dokument-svar: 33 424 → 6 422 byte (−80,8 %). Innrykket alene
@@ -5357,10 +5236,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if sti not in ("/analyser", "/spor", "/jobb", "/uttrekk",
                        "/fyll_skjema", "/innsyn", "/dokument",
-                       "/dokument/operasjoner", "/api/v2/dokument",
-                       "/api/v2/dokument/operasjoner", "/ekko",
+                       "/dokument/operasjoner", "/ekko",
                        "/forhandssjekk", "/sladd"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument (eller /api/v2/dokument), /dokument/operasjoner, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
+            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /dokument/operasjoner, /analyser, /spor, /uttrekk, /fyll_skjema, /innsyn eller /jobb (se /hjelp)"})
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
         # tråd allerede hele opplastingen (og den normaliserte PDF-en) i
@@ -5485,11 +5363,7 @@ class Handler(BaseHTTPRequestHandler):
         if sti == "/innsyn":
             return self._innsyn(filnavn, slag, innhold, maks_ocr)
 
-        # v2 er SAMME behandling, annen svarform. Ingen egen kodevei —
-        # to veier ville drevet fra hverandre, som de to /dokument-
-        # kontraktene alt gjorde en gang (revisjonen, funn 8).
-        if sti in ("/dokument", "/api/v2/dokument"):
-            self._v2 = sti in V2_STIER
+        if sti == "/dokument":
             return self._dokument_samlet(filnavn, slag, innhold, maks_ocr,
                                          tekstfelter, les_strekkoder)
 
@@ -5497,8 +5371,7 @@ class Handler(BaseHTTPRequestHandler):
         # «operasjoner» et felt som overstyrer bryterne i stillhet —
         # sender en klient begge deler, skjer det ingenting med bryterne.
         # En egen sti gjør valget synlig i URL-en. Feltveien beholdes.
-        if sti in ("/dokument/operasjoner", "/api/v2/dokument/operasjoner"):
-            self._v2 = sti in V2_STIER
+        if sti == "/dokument/operasjoner":
             raa = (tekstfelter.get("operasjoner") or "").strip()
             if not raa:
                 return self._svar(400, {"ok": False, "feil": (
