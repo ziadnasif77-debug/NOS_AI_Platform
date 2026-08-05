@@ -169,6 +169,21 @@ def sjekk_regler():
                  "fyll_skjema.mal"):
         if navn not in blokker:
             feil(f"promptblokken «{navn}» mangler i regler/prompter.md")
+    # Lovregisteret: tekstene ligger i data/ (for store for git), så en
+    # ufullstendig kopi skal oppdages HER — ikke ved første oppslag
+    try:
+        from delt import lover as _lover
+        for lov_id, meta in sorted(_lover.lover().items()):
+            sti = Path(ROT) / meta["fil"]
+            if sti.exists():
+                antall = len(_lover.kapitler(lov_id))
+                ok(f"lov {lov_id} ({meta['status']}): {antall} kapitler")
+            else:
+                adv(f"lovteksten for {lov_id} mangler ({meta['fil']}) — "
+                    f"hent med skript/hent_lovtekst.py {meta['kilde']}")
+    except Exception as exc:
+        adv(f"lovregisteret kunne ikke leses: {exc}")
+
     # Brukerfilene er valgfrie — mangler de, kjører systemet videre
     # uten dem, og da skal det SIES, ikke antas
     for navn in ("egne_regler.txt", "egne_etiketter.txt"):

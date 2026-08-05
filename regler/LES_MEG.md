@@ -7,6 +7,7 @@ steder. Tre filer, og de leses alle på nytt så snart du lagrer —
 | Fil | Hva den styrer | Hvem endrer den |
 |-----|----------------|-----------------|
 | [`prompter.md`](prompter.md) | All tekst som sendes til språkmodellen | Utvikler (går i git) |
+| [`lover.md`](lover.md) | Hvilke lover vi slår opp i, og hvordan de skilles | Utvikler (går i git) |
 | [`egne_regler.txt`](egne_regler.txt) | Stil og form på svarene fra `/spor` | Dere selv, når som helst |
 | [`egne_etiketter.txt`](egne_etiketter.txt) | Nye ord foran datoer i nye dokumenttyper | Dere selv, når som helst |
 
@@ -25,6 +26,12 @@ OCR-retting), legg til en linje, og øk `versjon` nederst i fila.
 
 **«Dokumentet bruker et ord vi ikke kjenner foran datoen»** — f.eks.
 «hentedato» → `egne_etiketter.txt`, én linje: `hentedato = hentedato`.
+
+**«Vi skal slå opp i en lov til»** → `lover.md`. Hent teksten med
+`skript/hent_lovtekst.py`, legg til en blokk i registeret. Merk at
+folketrygdlovene av 1966 og 1997 bruker de SAMME paragrafnumrene om
+ULIKE ting — derfor svarer `delt/lover.py` «flertydig» på en referanse
+uten lov i stedet for å velge.
 
 **«Svaret må GARANTERT være riktig»** — da holder ikke en prompt. En
 språkmodell følger en instruks nesten alltid, og «nesten» er ikke godt

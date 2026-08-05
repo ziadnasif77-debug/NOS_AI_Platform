@@ -51,6 +51,42 @@ def _ren_tekst(element) -> str:
     return "\n".join(deler)
 
 
+def _er_lovnode(tag) -> bool:
+    """Er dette en overskrift eller en paragraf som hører til LOVEN?
+
+    Sidene har også overskrifter som ikke er lovtekst («Hovedmeny»,
+    «Trenger du brukerveiledning?»). Lovens egne står alltid inne i et
+    element med id «KAPITTEL_…» — det skillet er tydeligere enn å
+    gjette på klassenavn."""
+    if str(tag.get("id", "")).startswith("PARAGRAF_"):
+        return True
+    if tag.name not in ("h2", "h3"):
+        return False
+    return any(str(f.get("id", "")).startswith("KAPITTEL_")
+               for f in tag.parents)
+
+
+def _overskriftsnivaa(navn: str):
+    """Hvilket NIVÅ en overskrift er, avgjort av teksten — ikke av
+    HTML-taggen.
+
+    De to folketrygdlovene bruker taggene ulikt: i 1997-loven er h2 en
+    «Del» og h3 et «Kapittel», mens 1966-loven ikke har deler i det hele
+    tatt og bruker h3 til selve paragrafene. Mapper vi på tagg, blir 245
+    paragrafer til «kapitler» i den gamle loven. Teksten sier det samme
+    i begge: «Del …», «Kapittel …»/«Kap. …», «§ …».
+
+    Returnerer «##» (del), «###» (kapittel), «*» (underoverskrift) eller
+    None for en paragrafoverskrift, som håndteres for seg."""
+    if re.match(r"^Del\s+[IVXLC0-9]", navn, re.IGNORECASE):
+        return "##"
+    if re.match(r"^Kap(?:ittel|\.)?\s*[0-9IVXLC]", navn, re.IGNORECASE):
+        return "###"
+    if navn.lstrip().startswith("§"):
+        return None
+    return "*"                 # mellomoverskrift inne i et kapittel
+
+
 def _rens_navn(navn: str) -> str:
     """Fjerner usynlige fotnotemarkører (zero-width space + tall) fra
     kapittel- og paragrafnavn."""
@@ -89,7 +125,7 @@ def hent_lov(url: str, utfil: str = None) -> str:
 
     antall_paragrafer = 0
     sette_paragrafer = set()   # §-id-er på tvers av sider (mot duplikater)
-    forrige_kapittel = None    # samme kapittel kan spenne flere delsider
+    sette_overskrifter = set()  # samme del/kapittel spenner flere delsider
     for kap_url in kapittel_urler:
         side = _hent(kap_url)
         artikkel = side.find("article") or side
@@ -98,19 +134,33 @@ def hent_lov(url: str, utfil: str = None) -> str:
         for sup in artikkel.find_all("sup"):
             sup.extract()
 
-        kap_hode = artikkel.find(class_=re.compile(r"kapittelhode")) \
-            or artikkel.find("h2")
-        kap_navn = _rens_navn(kap_hode.get_text(" ", strip=True)) \
-            if kap_hode else kap_url.rsplit("/", 1)[-1]
-        if kap_navn != forrige_kapittel:
-            linjer += [f"## {kap_navn}", ""]
-            forrige_kapittel = kap_navn
-
-        # Unike paragraf-id-er (samme id finnes i både anker og innhold)
         nye = 0
-        for el in artikkel.find_all(id=re.compile(r"^PARAGRAF_")):
+        siste_kapittel = None
+        # Del, kapittel og paragraf i DOKUMENTREKKEFØLGE. Nivåene må
+        # skilles: URL-ene («KAPITTEL_4-3») er en dokumenttre-sti, ikke
+        # lovens kapittelnummer — den siden inneholder faktisk kapittel
+        # 7. Og kapittelnummeret er nettopp det som navngir ytelsen
+        # (kap. 8 sykepenger, 11 arbeidsavklaringspenger, 12 uføretrygd),
+        # så det kan ikke gå tapt.
+        for el in artikkel.find_all(_er_lovnode):
+            if el.name in ("h2", "h3"):
+                navn = _rens_navn(el.get_text(" ", strip=True))
+                if not navn or navn in sette_overskrifter:
+                    continue
+                nivaa = _overskriftsnivaa(navn)
+                if nivaa is None:        # paragrafoverskrift — tas nedenfor
+                    continue
+                sette_overskrifter.add(navn)
+                # mellomoverskrifter beholdes som uthevet tekst: de sier
+                # noe, men de er ikke kapitler og skal ikke telle som det
+                linjer += [f"**{navn}**" if nivaa == "*"
+                           else f"{nivaa} {navn}", ""]
+                if nivaa == "###":
+                    siste_kapittel = navn
+                continue
+
             pid = el.get("id")
-            hode = el.find(class_=re.compile(r"paragrafhode"))
+            hode = el.find(class_=re.compile(r"paragrafhode|paragrafHeader"))
             if hode is None or pid in sette_paragrafer:
                 continue
             sette_paragrafer.add(pid)
@@ -118,10 +168,11 @@ def hent_lov(url: str, utfil: str = None) -> str:
             hode_foreldre = hode.find_parent(["h3", "h4"]) or hode
             hode_foreldre.extract()
             tekst = _ren_tekst(el).replace("​", "")
-            linjer += [f"### {para_navn}", "", tekst, ""]
+            linjer += [f"#### {para_navn}", "", tekst, ""]
             antall_paragrafer += 1
             nye += 1
-        print(f"  {kap_navn}: {nye} nye paragrafer")
+        print(f"  {siste_kapittel or kap_url.rsplit('/', 1)[-1]}: "
+              f"{nye} nye paragrafer")
         time.sleep(0.5)
 
     if utfil is None:
