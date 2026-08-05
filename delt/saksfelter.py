@@ -66,7 +66,14 @@ def _merket(tekst: str, etiketter: str, verdi: str, flagg=re.IGNORECASE):
 
 # Et tall etterfulgt av «prosent» eller «%» er en ANDEL, ikke et beløp.
 # «du får utbetalt 100 prosent av dette» ga ellers utbetalt_belop = 100.
-_ANDEL_ETTER = re.compile(r"\s*(?:%|prosent|pst\.?)\b", re.IGNORECASE)
+#
+# «\b» bak markøren duger ikke: en ordgrense krever et ordtegn på den ene
+# siden, og etter «%» kommer det som regel et mellomrom. «100 prosent av»
+# ble derfor riktig avvist mens «100 % av» slapp gjennom som et beløp —
+# halve fiksen virket. Nå kreves bare at markøren ikke fortsetter i et
+# ord, slik at både «%», «prosent» og «pst.» stopper tallet.
+_ANDEL_ETTER = re.compile(r"\s*(?:%|prosent|pst\.?)(?![a-zæøåA-ZÆØÅ0-9])",
+                          re.IGNORECASE)
 
 
 def _merket_belop(tekst: str, etiketter: str):

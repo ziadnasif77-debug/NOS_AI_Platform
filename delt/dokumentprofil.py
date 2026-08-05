@@ -17,6 +17,8 @@ import re
 from delt.saksfelter import arbeid_felter, okonomi_felter, sak_felter
 from delt.tekstuttrekk import (ROLLE_BEHANDLING, ROLLE_DOKUMENT,
                                dokumentets_alder, finn_alle_fodselsnummer,
+                               fodselsdato_av_fnr,
+                               gjelder_periode as _gjelder_periode,
                                rolle_for_type)
 
 # ------------------------------------------------------------------ #
@@ -84,22 +86,10 @@ def koder_med_sider(strekkoder, lest: bool = True) -> dict:
 #  Periode: hva dokumentet GJELDER FOR                                #
 # ------------------------------------------------------------------ #
 
-def gjelder_periode(datoer) -> dict | None:
-    """Perioden dokumentet gjelder for («for perioden 01.01. til 31.12.»).
-
-    Dette er IKKE det samme som dokumentets egen dato, og heller ikke
-    det samme som datospennet i en bunke: et vedtak datert i mai kan
-    gjelde for hele året. Paret bygges av en periodestart etterfulgt av
-    en periodeslutt — står de ikke i par, er det ingen periode."""
-    venter = None
-    for d in datoer or []:
-        if not isinstance(d, dict):
-            continue
-        if d.get("type") == "periode_start":
-            venter = d
-        elif d.get("type") == "periode_slutt" and venter:
-            return {"fra": venter.get("dato"), "til": d.get("dato")}
-    return None
+# Bor nå i tekstuttrekk, sammen med den øvrige datoklassifiseringen, så
+# skjemautfyllingen kan bruke NØYAKTIG samme begrep. Navnet beholdes her
+# fordi profilen og testene importerer det herfra.
+gjelder_periode = _gjelder_periode
 
 
 # ------------------------------------------------------------------ #
@@ -398,24 +388,18 @@ def blanke_sider(tekst: str) -> list | None:
 
 
 def _fodselsdato_av_fnr(fnr):
-    """Fødselsdatoen ligger i de seks første sifrene av et gyldig
-    fødselsnummer. Bare for BEVISTE numre — å regne den ut av et nummer
-    vi ikke har verifisert, ville vært å gjette to ganger."""
-    if not fnr or len(fnr) != 11:
+    """Fødselsdatoen fra et BEVIST fødselsnummer, i ISO.
+
+    Regnestykket — inkludert århundret, som ligger i individsifrene —
+    bor i `tekstuttrekk.fodselsdato_av_fnr`. Denne fila hadde tidligere
+    sin egen kopi som hardkodet `1900 + år`, og ga derfor feil århundre
+    for alle født etter 1999. To kopier av samme regel, og profilen
+    hadde den gale."""
+    deler = fodselsdato_av_fnr(fnr)
+    if not deler:
         return None
-    dag, maaned, aar = int(fnr[:2]), int(fnr[2:4]), int(fnr[4:6])
-    # syntetiske serier: måned +80 (Tenor) eller +40 (D-nummer på dag)
-    if maaned > 80:
-        maaned -= 80
-    elif maaned > 40:
-        maaned -= 40
-    if dag > 40:
-        dag -= 40                      # D-nummer
-    if not (1 <= dag <= 31 and 1 <= maaned <= 12):
-        return None
-    # århundret er ikke entydig av fnr alene; individsifrene avgjør, og
-    # den regelen hører ikke hjemme her. 1900-tallet som utgangspunkt.
-    return f"{1900 + aar:04d}-{maaned:02d}-{dag:02d}"
+    dag, maaned, aar = deler
+    return f"{aar:04d}-{maaned:02d}-{dag:02d}"
 
 
 def _sider(tekst: str) -> list:
@@ -566,13 +550,48 @@ def _sammendrag(profil: dict, antall_dokumenter: int) -> dict:
     }
 
 
-SKJEMAVERSJON = "1.1"
+def _iso_datoer(felter: dict, navn) -> dict:
+    """Gjør de navngitte datofeltene om til ISO, med `_norsk`-tvilling.
+
+    Profilen erklærer ISO («leses av andre systemer»), men feltene fra
+    saksfelter.py kom gjennom `finn_dato` og var norske. Resultatet var
+    `arbeid.startdato: "01.08.2019"` i samme objekt som
+    `dokument.dato: "2026-05-28"` — en klient kunne ikke vite hvilket
+    format et datofelt hadde uten en tabell."""
+    ut = dict(felter)
+    for n in navn:
+        norsk = ut.get(n)
+        ut[n] = til_iso(norsk)
+        ut[f"{n}_norsk"] = norsk
+    return ut
+
+
+# Valutamarkører slik de faktisk står i norske dokumenter
+_VALUTA = re.compile(r"(?i)\b(NOK|SEK|DKK|EUR|USD|GBP|CHF|ISK)\b|(?<![A-Za-z])kr\.?(?![A-Za-z])")
+
+
+def _valuta(tekst: str) -> dict:
+    """Valutaen dokumentet faktisk oppgir.
+
+    Feltet var hardkodet `"NOK"` og ble aldri lest fra dokumentet — en
+    påstand om en måling som ikke var gjort. Er dokumentet i SEK eller
+    EUR, svarte API-et likevel NOK. Nå: finnes en markør, brukes den;
+    finnes ingen, sier vi det i stedet for å gjette."""
+    treff = _VALUTA.search(tekst or "")
+    if not treff:
+        return {"valuta": None,
+                "valuta_merknad": "Ingen valutamarkør funnet i dokumentet"}
+    kode = (treff.group(1) or "NOK").upper()   # bar «kr» ⇒ norske kroner
+    return {"valuta": kode, "valuta_merknad": None}
+
+
+SKJEMAVERSJON = "1.2"
 
 
 def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
                 strekkoder_lest=True, datoer_detaljert=None,
                 dokumentdato=None, struktur=None, handskrift=None) -> dict:
-    """Setter sammen dokumentprofilen — den kanoniske formen (R66).
+    """Setter sammen dokumentprofilen — den kanoniske formen (R79).
 
     Seksjonene er faste og alltid til stede. Alle argumenter er
     allerede utregnet av kalleren (DokumentKontekst cacher dem), så
@@ -664,14 +683,14 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         },
 
         "okonomi": {
-            **okonomi_felter(tekst),
-            "valuta": "NOK",
+            **_iso_datoer(okonomi_felter(tekst), ("utbetalingsdato",)),
+            **_valuta(tekst),
             "kontonummer": s_ident.get("kontonummer") or [],
             "kid": s_ident.get("kid") or [],
         },
 
         "arbeid": {
-            **arbeid_felter(tekst),
+            **_iso_datoer(arbeid_felter(tekst), ("startdato", "sluttdato")),
             "organisasjonsnummer": s_ident.get("organisasjonsnummer") or [],
         },
 

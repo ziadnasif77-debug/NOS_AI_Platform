@@ -1,6 +1,6 @@
 """
 Tester for de OBLIGATORISKE metadataene i svaret fra POST /dokument
-(R66): sideantall, QR-/strekkodesider, dokumentdato med periode og år,
+(R79): sideantall, QR-/strekkodesider, dokumentdato med periode og år,
 stempeldatoer og hvem dokumentet gjelder.
 
 Fellesnevneren for hele fila: profilen skal heller si `null` med en
@@ -351,11 +351,12 @@ SEKSJONER = {
     "ytelse": ("navn", "type", "utfall", "gyldig_fra", "gyldig_til",
                "status"),
     "okonomi": ("dagsats", "manedsbelop", "utbetalt_belop",
-                "tilbakebetalingsbelop", "utbetalingsdato", "valuta",
+                "tilbakebetalingsbelop", "utbetalingsdato",
+                "utbetalingsdato_norsk", "valuta", "valuta_merknad",
                 "kontonummer", "kid"),
     "arbeid": ("arbeidsgiver", "stilling", "stillingsprosent", "startdato",
-               "sluttdato", "arsinntekt", "manedslonn",
-               "organisasjonsnummer"),
+               "startdato_norsk", "sluttdato", "sluttdato_norsk",
+               "arsinntekt", "manedslonn", "organisasjonsnummer"),
     "kontakt": ("telefoner", "eposter", "adresser"),
     "koder": ("lest", "qr", "strekkode", "qr_kode_side", "strekkode_side"),
     "visuelt": ("stempel_datoer", "stempel_sider", "signatur_sider",
@@ -466,7 +467,7 @@ def test_et_ukjent_dokument_laaner_ikke_naboens_type():
 def test_skjemaversjonen_folger_med():
     """Endres formen senere, skal en klient kunne se det på tallet i
     stedet for å oppdage det når noe brekker."""
-    assert _profil("")["skjemaversjon"] == "1.1"
+    assert _profil("")["skjemaversjon"] == "1.2"
 
 
 def test_profilen_folger_med_i_dokumentsvaret_uten_at_noen_ber_om_det():

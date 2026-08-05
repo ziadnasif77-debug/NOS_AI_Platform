@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R70 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R80 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -91,7 +91,7 @@ handskrift, kvalitet, fra_cache, tid_sekunder, kilde, versjon
 Deler du ikke ba om er `null`. `kilde` sier om modellen faktisk kjørte
 (se [Ærlighetsfelter](#ærlighetsfelter)).
 
-### dokumentprofil — følger ALLTID med (R66)
+### dokumentprofil — følger ALLTID med (R79)
 
 Et dokument har egenskaper som gjelder uansett hva du spurte om: hvor
 mange sider det har, når det er datert, hvem det gjelder. De kommer
@@ -108,7 +108,7 @@ stedet for når noe brekker. Se
 
 ```json
 {
-  "skjemaversjon": "1.1",
+  "skjemaversjon": "1.2",
 
   "sammendrag": {"navn": "Ola Nordmann", "fnr": "12345678910",
                  "dokumentdato": "2026-05-12", "dokumenttype": "vedtak",
@@ -198,7 +198,7 @@ Delingen følger dokumentDATOENE: en side med en ny dato med rolle
 oppføring. **Er `sammendrag.antall_dokumenter` større enn 1, les
 `dokumenter[]` — ikke toppnivåfeltene.**
 
-**Tre datofelter som ikke er det samme (R67):**
+**Tre datofelter som ikke er det samme (R80):**
 
 | Felt | Betydning |
 |------|-----------|
@@ -225,7 +225,7 @@ selv, er `dokumentdato` `null` og `dokumentdato_begrunnelse` sier
 hvorfor. Stempeldatoer («Mottatt NAV 20.05.2024») ligger i
 `stempel_datoer` og blir aldri dokumentdato (R68).
 
-**`dokument_eier` — personen dokumentet gjelder (R69):**
+**`eier` — personen dokumentet gjelder (R69):**
 
 Et NAV-dokument nevner ofte flere personer med fødselsnummer: den saken
 gjelder, saksbehandleren, legen, arbeidsgiverens kontakt. Nummeret
@@ -243,10 +243,10 @@ eiersignal kvalifiserer. `sikkerhet` sier hva vi bygger på:
 Et nummer hentes **ikke** bare fordi det står i teksten.
 
 De ØVRIGE fødselsnumrene kastes ikke — de er ekte opplysninger, og en
-klient kan trenge dem. Men de ligger i `andre_fodselsnummer`, med rolle
+klient kan trenge dem. Men de ligger i `andre_personer`, med rolle
 og etikett, **aldri sammen med eierens**. Eierens nummer gjentas aldri
 der. Kan eieren ikke fastslås, er `fnr` null og ALLE numrene ligger i
-`andre_fodselsnummer` — ingenting forsvinner, men ingenting utgir seg
+`andre_personer` — ingenting forsvinner, men ingenting utgir seg
 for å være dokumentets heller.
 
 **`koder`:** `lest: false` betyr at skanningen var slått av — da sier

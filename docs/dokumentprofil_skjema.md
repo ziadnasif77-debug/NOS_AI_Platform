@@ -5,10 +5,10 @@ Formålet med dette dokumentet er å avgjøre FORMEN på svaret fra
 svaret felt for felt til det blir stort, usammenhengende og umulig å
 endre uten å bryte klienter.
 
-Status: **implementert, `skjemaversjon: "1.0"`.** Seksjonsformen i §3
+Status: **implementert, `skjemaversjon: "1.2"`.** Seksjonsformen i §3
 er den som svares i dag, i begge kontraktene. Feltreferansen ligger i
 [endepunkter.md](endepunkter.md); reglene som håndhever den er
-R66–R73 i [regler_lokal_api.md](regler_lokal_api.md).
+R71–R73, R79 og R80 i [regler_lokal_api.md](regler_lokal_api.md).
 
 Endres formen senere, går `skjemaversjon` opp — en klient skal kunne se
 endringen på tallet, ikke oppdage den når noe brekker.
@@ -29,9 +29,9 @@ meste av ønskelista finnes fra før, spredt over tre ulike svarformer
 | `dokumenttype` | ⚠️ | `struktur.dokument.dokumenttype` — **feilklassifiserer** (se §5) |
 | `ytelse` | ⚠️ | `struktur.dokument.ytelse` finnes og traff «dagpenger»; `dokumentprofil.ytelse` er plassholder — **to kilder til samme faktum** |
 | `saksnummer` | ✅ | `struktur.identifikatorer.saksnummer` |
-| `fnr` (eierens) | ✅ | `dokumentprofil.dokument_eier` |
-| andre fnr i dokumentet | ✅ | `dokumentprofil.dokument_eier.andre_fodselsnummer` |
-| `navn` | ✅ | eierens navn; andre navn kun via `andre_fodselsnummer` |
+| `fnr` (eierens) | ✅ | `dokumentprofil.eier` |
+| andre fnr i dokumentet | ✅ | `dokumentprofil.andre_personer` |
+| `navn` | ✅ | eierens navn; andre navn kun via `andre_personer` |
 | `organisasjonsnummer` | ✅ | `struktur.identifikatorer` |
 | `kontonummer`, `kid` | ✅ | `struktur.identifikatorer` |
 | `telefon`, `epost` | ✅ | `struktur.kontakt` |

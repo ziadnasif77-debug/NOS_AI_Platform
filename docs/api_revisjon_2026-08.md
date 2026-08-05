@@ -93,7 +93,7 @@ Disse er de sikreste, fordi de ble nådd via ulike innfallsvinkler.
 | `sikkerhet` betyr flere uforenlige ting | 4, 8 | 2 |
 | Strekkodeskanning er standard på og dominerer kaldt kall | 5, 6 | 2 |
 | Modellkall-eksplosjon på operasjoner-veien | 5, 6 | 2 |
-| R66/R67 finnes to ganger i regelverket (verifisert: 77 ID-er, 2 dubletter) | 1, 8 | 2 |
+| R79/R80 finnes to ganger i regelverket (verifisert: 77 ID-er, 2 dubletter) | 1, 8 | 2 |
 
 ### 2.2 Motsigelser — og hvordan de er avgjort
 
@@ -109,7 +109,7 @@ hovedgrep fordi det ligger utenfor begges mandat. Dette er den sterkeste
 grunnen til å kjøre flere revisjoner: hovedgevinsten lå i sprekken
 mellom to mandater.
 
-**M2 — Skal dokumentprofilen alltid følge med (R66)?**
+**M2 — Skal dokumentprofilen alltid følge med (R79)?**
 Revisjon 3 og 8: ja, den er produktet. Revisjon 5 og 6: den koster 51 ms
 av 64 ms ved cachetreff og har gjort `struktur=nei` virkningsløs.
 Revisjon 7: klienten kan ikke velge bort persondata.
@@ -554,7 +554,7 @@ Feil som gir GALE SVAR i dag. Alle er additive eller rene rettelser.
 9. `eier.fodselsdato` fjernes; `okonomi.valuta` gjøres ærlig
 10. Datoformat: `arbeid.startdato`/`sluttdato`, `okonomi.utbetalingsdato`
     til ISO med `_norsk`-tvilling
-11. R66/R67-dublettene i regelverket løses opp
+11. R79/R80-dublettene i regelverket løses opp
 12. `docs/endepunkter.md` rettes (`dokument_eier`/`andre_fodselsnummer`
     finnes ikke); `dokumentprofil_skjema.md` oppdateres til 1.1
 
@@ -608,7 +608,7 @@ gevinstene og ikke rører kontrakten.
 ### 2. Hva må IKKE endres
 - **Dupliseringen.** 2,4 % av svaret. `sammendrag` særlig — fjerning bytter
   datduplisering mot logikkduplisering.
-- **«Alle nøkler alltid til stede» (R44/R66).** Skillet mellom «vi så etter
+- **«Alle nøkler alltid til stede» (R44/R79).** Skillet mellom «vi så etter
   og fant ingenting» og «vi så ikke etter» er bærende. Prisen er 6 %.
 - **Ærlighetsfeltene** — `tall_verifisert`, `avvik`, `kilde_per_felt`,
   `modell_brukt`, `fra_cache`, `advarsler`. De er over nivået for API-er av

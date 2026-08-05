@@ -12,6 +12,7 @@ for navn (fritekst uten fast mønster).
 import bisect
 import os
 import re
+import threading
 from datetime import date, datetime
 
 from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
@@ -81,22 +82,30 @@ def er_gyldig_kontonummer(konto: str) -> bool:
 # ------------------------------------------------------------------ #
 
 def finn_fodselsnummer(tekst: str):
-    """11 sifre (ev. med mellomrom etter posisjon 6) som består mod11."""
+    """11 sifre (ev. med mellomrom etter posisjon 6) som består mod11.
+
+    ETIKETTEN foran avgjør når tallet består BEGGE sjekksummene — samme
+    regel som flertallsvarianten bruker. Uten den rapporterte denne
+    funksjonen refusjonskontoen som fødselsnummer, mens
+    `struktur.identifikatorer` sa kontonummer om nøyaktig samme tall i
+    samme svar. Verdien gikk dessuten videre inn i skjemautfyllingen via
+    `felter_flatt`, der `{fodselsnummer}` da ble fylt med et kontonummer."""
     for treff in re.finditer(r"\b(\d{6})[ ]?(\d{5})\b", tekst):
         kandidat = treff.group(1) + treff.group(2)
-        if er_gyldig_fnr(kandidat):
+        if _ellevesiffer_type(tekst, treff.start(), kandidat) == "fodselsnummer":
             return kandidat
     return None
 
 
 def finn_kontonummer(tekst: str):
     """11 sifre, ev. formatert dddd.dd.ddddd, som består konto-mod11.
-    Gyldige fødselsnummer hoppes over (kan kollidere i ren sifferform)."""
+
+    Samme etikettregel som over: et dobbeltgyldig tall under
+    «Kontonummer:» ER et kontonummer. Før dette hoppet funksjonen over
+    ALLE fnr-gyldige tall, så en merket refusjonskonto forsvant helt."""
     for treff in re.finditer(r"\b(\d{4})[. ]?(\d{2})[. ]?(\d{5})\b", tekst):
         kandidat = "".join(treff.groups())
-        if er_gyldig_fnr(kandidat):
-            continue
-        if er_gyldig_kontonummer(kandidat):
+        if _ellevesiffer_type(tekst, treff.start(), kandidat) == "kontonummer":
             return kandidat
     return None
 
@@ -408,6 +417,63 @@ def _til_dato(dato_str):
         return date(a, m, d)
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def fodselsdato_av_fnr(fnr: str):
+    """(dag, måned, år) fra et fødselsnummer — eller None.
+
+    Århundret ligger i INDIVIDSIFRENE, ikke i årstallet alene, og
+    dokumentprofilen hadde en egen kopi som hardkodet `1900 + år`. Den
+    ga altså feil århundre for ALLE født etter 1999 — en gjetning
+    presentert som et faktum. Én regel, ett sted.
+
+    Månedstillegg håndteres også: +80 er syntetiske testnumre (Tenor),
+    og dag +40 er D-nummer."""
+    if not fnr or len(fnr) != 11 or not fnr.isdigit():
+        return None
+    dag, maaned, aa = int(fnr[0:2]), int(fnr[2:4]), int(fnr[4:6])
+    individ = int(fnr[6:9])
+    if maaned > 80:
+        maaned -= 80            # syntetisk testnummer
+    if dag > 40:
+        dag -= 40               # D-nummer
+    if not (1 <= dag <= 31 and 1 <= maaned <= 12):
+        return None
+    # Individsifrene bestemmer århundret (forenklet, men langt riktigere
+    # enn å anta 1900 for alle)
+    if individ >= 500 and aa <= 39:
+        aar = 2000 + aa
+    elif individ >= 500 and aa >= 54:
+        aar = 1800 + aa
+    else:
+        aar = 1900 + aa
+    return dag, maaned, aar
+
+
+def gjelder_periode(datoer: list):
+    """Perioden dokumentet GJELDER FOR («for perioden 01.01. til 31.12.»).
+
+    Tre datobegreper må holdes fra hverandre, og dette er det andre:
+      1) dokumentets egen dato   — finn_dokumentdato()
+      2) perioden det gjelder for — DENNE
+      3) datospennet i en bunke  — dokumentets_periode()
+
+    Skjemautfyllingen brukte tidligere (3) under navnet «periode_start»
+    mens dokumentprofilen brukte (2) under samme navn. Samme svar kunne
+    da si 2026-04-02 i profilen og 01.08.2019 i «{periode_start}». Begge
+    henter nå fra denne funksjonen.
+
+    Paret bygges av en periodestart etterfulgt av en periodeslutt —
+    står de ikke i par, er det ingen periode."""
+    venter = None
+    for d in datoer or []:
+        if not isinstance(d, dict):
+            continue
+        if d.get("type") == "periode_start":
+            venter = d
+        elif d.get("type") == "periode_slutt" and venter:
+            return {"fra": venter.get("dato"), "til": d.get("dato")}
+    return None
 
 
 def dokumentets_periode(datoer: list) -> dict:
@@ -846,14 +912,11 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
             "aar_antatt": aar_antatt,
         })
 
-    # 5) Fødselsdato avledet fra gyldig fødselsnummer (forenklet
-    #    århundreregel via individnummer)
+    # 5) Fødselsdato avledet fra gyldig fødselsnummer
     fnr = finn_fodselsnummer(tekst)
     if fnr:
-        d, m, yy = int(fnr[0:2]), int(fnr[2:4]), int(fnr[4:6])
-        individ = int(fnr[6:9])
-        aar = 2000 + yy if (individ >= 500 and yy <= 39) else 1900 + yy
-        if _gyldig_dato(d, m, aar):
+        d, m, aar = fodselsdato_av_fnr(fnr) or (None, None, None)
+        if d and _gyldig_dato(d, m, aar):
             resultater.append({
                 "dato": f"{d:02d}.{m:02d}.{aar}",
                 "raatekst": fnr[:6] + "*****",
@@ -936,7 +999,13 @@ def finn_postnummer_sted(tekst: str):
     «Postboks 6600 Etterstad» er IKKE et postnummer: 6600 er
     postboksnummeret, og Etterstad navnet på postboksanlegget. Målt på
     testbunken kom den fella FØRST i teksten (NAVs egen adresselinje) og
-    stjal feltet fra det ekte postnummeret på samme linje (0607 OSLO)."""
+    stjal feltet fra det ekte postnummeret på samme linje (0607 OSLO).
+
+    «Rema 1000 AS» er heller ikke et postnummer. Den vakten fantes bare i
+    `finn_adresser`, så de to adressefinnerne svarte ULIKT på samme
+    dokument: `struktur.adresser` sa Storgata 14 B / 3044 DRAMMEN mens
+    `felter.postnummer/poststed` sa 1000 / AS — og det er den siste som
+    mater `{postnummer}` i skjemautfyllingen."""
     for treff in re.finditer(
         r"\b(\d{4})[ \t]+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+"
         r"(?:[ \t][iI][ \t][A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)?)\b",
@@ -944,6 +1013,8 @@ def finn_postnummer_sted(tekst: str):
     ):
         forfelt = tekst[max(0, treff.start() - 12):treff.start()]
         if re.search(r"(?i)postboks\s*$", forfelt):
+            continue
+        if treff.group(2).upper() in _SELSKAPSFORM:
             continue
         return treff.group(1), treff.group(2)
     return None, None
@@ -1249,7 +1320,13 @@ def _unike(verdier) -> list:
     return ut
 
 
-_opptatt_cache = {"nokkel": None, "omraader": ()}
+# TRÅDLOKAL: serveren er en ThreadingHTTPServer, og denne bufferen
+# styrer hvilke sifferkandidater som blir fødselsnummer og hvilke som
+# blir kontonummer. Som én delt global — skrevet med update() og lest
+# tilbake i neste setning — kunne tråd A returnere tråd B sine områder,
+# og da påvirker ett dokument uttrekket i et annet. Én bøtte per tråd
+# fjerner både kappløpet og behovet for en lås.
+_opptatt_lokal = threading.local()
 
 
 def _opptatte_omraader(tekst: str) -> tuple:
@@ -1260,15 +1337,21 @@ def _opptatte_omraader(tekst: str) -> tuple:
     Enkelt-nivås buffer: strukturert_uttrekk kaller fire
     identifikatorfunksjoner på samme tekst, og alle trenger det samme."""
     nokkel = (len(tekst), hash(tekst))
-    if _opptatt_cache["nokkel"] != nokkel:
-        omraader = [(s, sl) for s, sl, *_ in _alle_datotreff(tekst)]
-        for m in re.finditer(
-                r"(?:kr\.?|NOK)\s?(?:" + _BELOP_TALL + r")|"
-                r"\b[\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-)|"
-                + _BELOP_ETTER, tekst, re.IGNORECASE):
-            omraader.append((m.start(), m.end()))
-        _opptatt_cache.update(nokkel=nokkel, omraader=tuple(omraader))
-    return _opptatt_cache["omraader"]
+    if getattr(_opptatt_lokal, "nokkel", None) == nokkel:
+        return _opptatt_lokal.omraader
+    omraader = [(s, sl) for s, sl, *_ in _alle_datotreff(tekst)]
+    for m in re.finditer(
+            r"(?:kr\.?|NOK)\s?(?:" + _BELOP_TALL + r")|"
+            r"\b[\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-)|"
+            + _BELOP_ETTER, tekst, re.IGNORECASE):
+        omraader.append((m.start(), m.end()))
+    omraader = tuple(omraader)
+    _opptatt_lokal.nokkel = nokkel
+    _opptatt_lokal.omraader = omraader
+    # returner den LOKALE verdien, ikke et oppslag i bufferen: da kan
+    # svaret ikke bli et annet dokuments områder uansett hva som skjer
+    # mellom skriving og lesing
+    return omraader
 
 
 def _tallkandidater(tekst: str, lengde: int):
@@ -1826,8 +1909,15 @@ def felter_flatt(tekst: str, ocr_brukt: bool = False) -> dict:
     Dette er kilden plassholderne i en mal fylles fra. Navnene her er
     kontrakten klienten skriver mot — hold dem stabile."""
     ent = utvid_entiteter(tekst, {})
-    dd = finn_dokumentdato(klassifiser_datoer(tekst), ocr_brukt=ocr_brukt)
-    periode = dd.get("periode") or {}
+    klassifiserte = klassifiser_datoer(tekst)
+    dd = finn_dokumentdato(klassifiserte, ocr_brukt=ocr_brukt)
+    # «periode_start» betydde her BUNKESPENNET (dd["periode"]) mens
+    # dokumentprofilen brukte samme navn om perioden dokumentet GJELDER
+    # FOR. Samme svar kunne si 2026-04-02 i profilen og 01.08.2019 i
+    # «{periode_start}». Begge henter nå fra gjelder_periode; spennet har
+    # fått sine egne navn så ingenting går tapt.
+    periode = gjelder_periode(klassifiserte) or {}
+    spenn = dd.get("periode") or {}
     alder = dokumentets_alder(dd.get("dato")) if dd.get("dato") else None
 
     flat = {
@@ -1860,6 +1950,9 @@ def felter_flatt(tekst: str, ocr_brukt: bool = False) -> dict:
         "dokumentdato_konfidens": dd.get("konfidens"),
         "periode_start": periode.get("fra"),
         "periode_slutt": periode.get("til"),
+        # datospennet i en BUNKE — et annet begrep, egne navn
+        "dokumentspenn_fra": spenn.get("fra"),
+        "dokumentspenn_til": spenn.get("til"),
         "alder_dager": alder.get("dager") if alder else None,
     }
     return flat

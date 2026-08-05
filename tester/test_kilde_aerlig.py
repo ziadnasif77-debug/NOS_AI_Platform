@@ -1,17 +1,23 @@
 """
-«kilde» i /dokument-svaret skal si hva som FAKTISK skjedde.
+«kilde» og «modell_brukt» i /dokument-svaret skal si hva som FAKTISK
+skjedde.
 
-Funnet da brukeren spurte hvilke brytere som bruker modellen: med
-skjema_motor=auto meldte /dokument «kilde: deterministisk» selv når
-Borealis hadde kjørt og fylt et felt (kilde_per_felt viste «modell», og
-kallet tok 0,9 s). Grunnen var at kilden ble utledet av BRYTEREN
-(skjema_motor == "modell") i stedet for av resultatet.
+Første funn: med skjema_motor=auto meldte /dokument «deterministisk» selv
+når Borealis hadde kjørt og fylt et felt. Kilden ble utledet av BRYTEREN i
+stedet for av resultatet.
 
-Det gjorde det umulig for klienten å skille et BEVIST svar fra et
-GJETTET — nettopp skillet hele arkitekturen er bygget rundt.
-/fyll_skjema gjorde det allerede riktig via «modell_brukt».
+Andre funn (arkitekturrevisjonen, august 2026): regelen talte en FEILET
+modelldel som «modellen kjørte». En feilet del er `{ok: False, feil: …}`
+og har ingen «modell_brukt» — den gamle testen `.get("modell_brukt") is
+False` ga da None, og `None is False` er falskt. Resultatet var at et kall
+der Borealis var NEDE meldte `kilde: "borealis+deterministisk"`.
 
-Ren logikk på svarsammensetningen — ingen socket, ingen modell.
+Tredje funn: operasjoner-veien hardkodet `kilde: "motor"` uansett, så en
+robot som fulgte den dokumenterte regelen leste ETHVERT operasjonssvar som
+rent deterministisk.
+
+Denne fila testet tidligere en LOKAL KOPI av regelen, og fanget derfor
+ingen av de to siste feilene. Nå testes funksjonene i API-et direkte.
 """
 import sys
 
@@ -20,52 +26,107 @@ sys.path.insert(0, "skript")
 
 import pytest
 
+from dokument_api import _delen_brukte_modellen, _modellen_kjorte
 
-def _kilde(vil_ha_modell: bool, skjema_del) -> str:
-    """Speiler regelen i dokument_api._svar_dokument. Holdes bevisst kort
-    slik at testen tester REGELEN, ikke hele HTTP-veien."""
-    modell_kjorte = vil_ha_modell or (isinstance(skjema_del, dict)
-                                      and skjema_del.get("modell_brukt"))
-    return "borealis+deterministisk" if modell_kjorte else "deterministisk"
 
+# ------------------------------------------------------------------ #
+#  Én del: brukte den modellen?                                        #
+# ------------------------------------------------------------------ #
+
+def test_feilet_del_teller_ikke_som_modellbruk():
+    """Kjernen i det andre funnet. Borealis nede ⇒ delen feilet ⇒
+    modellen kjørte aldri, uansett hva bryteren sa."""
+    assert _delen_brukte_modellen(
+        {"ok": False, "feil": "Borealis er ikke klar (laster)"}) is False
+
+
+def test_deterministisk_svar_teller_ikke():
+    """R64: en sidelesing besvares uten modell selv om svar=ja var på."""
+    assert _delen_brukte_modellen({"ok": True, "modell_brukt": False}) is False
+
+
+def test_ekte_modellsvar_teller():
+    assert _delen_brukte_modellen({"ok": True, "modell_brukt": True}) is True
+
+
+def test_del_uten_flagg_regnes_som_modellbruk():
+    """`korriger` setter ikke «modell_brukt», men kjører alltid modellen.
+    Standard er derfor True — men bare når delen IKKE feilet."""
+    assert _delen_brukte_modellen({"ok": True}) is True
+
+
+@pytest.mark.parametrize("ikke_en_del", [None, "tekst", 42, []])
+def test_manglende_del_teller_ikke(ikke_en_del):
+    assert _delen_brukte_modellen(ikke_en_del) is False
+
+
+# ------------------------------------------------------------------ #
+#  Hele svaret: kjørte modellen?                                       #
+# ------------------------------------------------------------------ #
 
 def test_auto_som_brukte_modellen_melder_borealis():
-    """Regresjonen: auto-motoren kalte Borealis, men svaret sa
-    «deterministisk»."""
-    auto_med_modell = {"ok": True, "motor": "auto", "modell_brukt": True,
-                       "kilde_per_felt": {"organisasjonsnummer": "modell"}}
-    assert _kilde(False, auto_med_modell) == "borealis+deterministisk"
+    """Det opprinnelige funnet: auto-motoren kalte Borealis."""
+    assert _modellen_kjorte({"skjema": {
+        "ok": True, "motor": "auto", "modell_brukt": True,
+        "kilde_per_felt": {"organisasjonsnummer": "modell"}}}) is True
 
 
 def test_auto_som_beviste_alt_melder_deterministisk():
-    """Motstykket: auto skal IKKE overrapportere. Klarte den alt med
-    regler, kjørte ingen modell — og da er svaret deterministisk."""
-    auto_uten_modell = {"ok": True, "motor": "auto", "modell_brukt": False,
-                        "kilde_per_felt": {"belop": "deterministisk"}}
-    assert _kilde(False, auto_uten_modell) == "deterministisk"
+    """Motstykket: auto skal ikke overrapportere."""
+    assert _modellen_kjorte({"skjema": {
+        "ok": True, "motor": "auto", "modell_brukt": False,
+        "kilde_per_felt": {"belop": "deterministisk"}}}) is False
 
 
-@pytest.mark.parametrize("skjema_del", [
-    None,                                        # skjema ikke bedt om
-    {"ok": True, "motor": "felter"},             # ren fletting, ingen flagg
-    {"ok": False, "feil": "noe gikk galt"},      # feilet del
-])
-def test_uten_modellbruk_er_kilden_deterministisk(skjema_del):
-    assert _kilde(False, skjema_del) == "deterministisk"
+def test_borealis_nede_gir_ikke_borealis_i_kilden():
+    """Regresjonen fra revisjonen, i sin helhet: klienten ba om svar,
+    Borealis var nede, delen feilet — kilden skal si deterministisk."""
+    assert _modellen_kjorte({
+        "felter": {"ok": True},
+        "svar": {"ok": False, "feil": "Borealis er ikke tilgjengelig"},
+    }) is False
 
 
-@pytest.mark.parametrize("skjema_del", [None, {"ok": True, "motor": "felter"}])
-def test_sporsmal_eller_korriger_melder_alltid_borealis(skjema_del):
-    """svar/korriger/motor=modell setter vil_ha_modell — uendret oppførsel."""
-    assert _kilde(True, skjema_del) == "borealis+deterministisk"
+def test_en_kjorende_del_er_nok():
+    assert _modellen_kjorte({
+        "svar": {"ok": False, "feil": "nede"},
+        "korriger": {"ok": True},
+    }) is True
 
 
-def test_regelen_er_den_samme_som_i_api_et():
-    """Vakt mot at testen og koden glir fra hverandre: hent regelen fra
-    modulen og sjekk at den fortsatt leser modell_brukt."""
+def test_ingen_deler_bedt_om():
+    assert _modellen_kjorte({}) is False
+    assert _modellen_kjorte({"felter": {"ok": True}, "struktur": {"ok": True}}) \
+        is False
+
+
+# ------------------------------------------------------------------ #
+#  Begge kontraktene bruker SAMME regel                                #
+# ------------------------------------------------------------------ #
+
+def test_operasjonsveien_bruker_samme_regel():
+    """Operasjoner-resultatene er en liste av {type, …}. Mappet på type
+    må de gi nøyaktig samme dom som bryter-veiens deler."""
+    resultater = [{"type": "felter", "ok": True},
+                  {"type": "svar", "ok": False, "feil": "Borealis er nede"}]
+    som_deler = {r["type"]: r for r in resultater}
+    assert _modellen_kjorte(som_deler) is False
+
+    resultater[1] = {"type": "svar", "ok": True, "modell_brukt": True}
+    som_deler = {r["type"]: r for r in resultater}
+    assert _modellen_kjorte(som_deler) is True
+
+
+def test_begge_veiene_kaller_den_ENE_regelen():
+    """Vakt mot at veiene glir fra hverandre igjen: begge svarbyggerne
+    skal kalle _modellen_kjorte, ingen skal regne ut kilden selv."""
     import inspect
 
     import dokument_api
-    kilde = inspect.getsource(dokument_api.Handler._dokument_samlet)
-    assert "modell_kjorte" in kilde
-    assert 'skjema_del.get("modell_brukt")' in kilde
+    for metode in (dokument_api.Handler._dokument_samlet,
+                   dokument_api.Handler._dokument_operasjoner):
+        kilde = inspect.getsource(metode)
+        assert "_modellen_kjorte(" in kilde, metode.__name__
+    # og ingen av dem skal ha en egen kopi av regelen
+    flat = inspect.getsource(dokument_api.Handler._dokument_samlet)
+    assert 'skjema_del.get("modell_brukt")' not in flat

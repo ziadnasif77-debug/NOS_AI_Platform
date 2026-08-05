@@ -421,6 +421,10 @@ LS_KONFIDENS_TERSKEL = float(os.environ.get("LS_KONFIDENS_TERSKEL", "0.85"))
 AUTO_GJENNOMGANG = bool(LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY)
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
+# Hvor mange datoer som LISTES for modellen. Dokumentdatoen velges av
+# hele lista uansett — grensen gjelder bare plassen i prompten.
+MAKS_DATOER_I_PROMPT = 30
+
 API_VERSJON = "1.3.0"
 # Promptversjonen står i regler/prompter.md, sammen med ordlyden den
 # beskriver — så den ikke kan bli glemt når en regel endres. Den slås
@@ -2382,7 +2386,7 @@ def _skjemaer() -> dict:
         "Dokumentprofil": {
             "type": "object",
             "description": (
-                "R66: obligatoriske metadata om dokumentet SELV. Følger "
+                "R79: obligatoriske metadata om dokumentet SELV. Følger "
                 "ALLTID med i svaret fra POST /dokument — i begge "
                 "kontraktene, uansett hva klienten ba om. Seksjonene og "
                 "feltene er FASTE: tomt er null eller [], aldri en "
@@ -2437,7 +2441,7 @@ def _skjemaer() -> dict:
                 "dokument": {
                     "type": "object",
                     "description": (
-                        "R67: «dato» er dokumentets EGEN dato — aldri en "
+                        "R80: «dato» er dokumentets EGEN dato — aldri en "
                         "dato som bare nevnes i teksten. «periode_start/"
                         "slutt» er hva dokumentet GJELDER FOR; «spenn_fra/"
                         "til» er datospennet når filen er en BUNKE. De tre "
@@ -2558,7 +2562,7 @@ def _skjemaer() -> dict:
         "DokumentSvar": {
             "type": "object",
             "description": "Svaret fra POST /dokument. Deler du ikke ba om "
-                           "er null. «dokumentprofil» følger alltid med (R66).",
+                           "er null. «dokumentprofil» følger alltid med (R79).",
             "properties": {
                 "ok": b(),
                 "filnavn": s(),
@@ -4107,6 +4111,7 @@ class Handler(BaseHTTPRequestHandler):
         ocr_brukt, ocr_motorer, fra_cache = False, None, False
         handskrift, strekkoder, sider_regioner = [], [], []
         antall_sider = None
+        ferdig = {}          # deler analysen ALLEREDE har regnet ut
         if slag == "tekst":
             raa_tekst = (innhold or "").strip()
             # Ren tekst har ingen sider. Er teksten derimot lest ut av et
@@ -4126,6 +4131,17 @@ class Handler(BaseHTTPRequestHandler):
             fra_cache = a.get("fra_cache", False)
             sider_regioner = a.get("_sider_regioner") or []
             antall_sider = a.get("antall_sider")
+            # Analysen har allerede klassifisert datoene og funnet
+            # dokumentdatoen — MED PDF-metadata og håndskriftmerking som
+            # konteksten ikke har tilgang til. Kastet vi dem, regnet vi
+            # ikke bare det samme om igjen: vi fikk et ANNET svar, så
+            # /analyser og /dokument kunne melde ulik dokumentdato for
+            # samme fil, og advarselen «datoen er håndskrevet» kunne
+            # aldri utløses i dokumentprofilen.
+            for nokkel in ("felter", "datoer", "datoer_detaljert",
+                           "dokumentdato"):
+                if a.get(nokkel) is not None:
+                    ferdig[nokkel] = a[nokkel]
             if a.get("advarsel"):
                 advarsler.append(a["advarsel"])
             if a.get("melding"):
@@ -4136,7 +4152,8 @@ class Handler(BaseHTTPRequestHandler):
                                sider_regioner=sider_regioner,
                                antall_sider=antall_sider,
                                strekkoder_lest=les_strekkoder,
-                               filnavn=filnavn)
+                               filnavn=filnavn,
+                               ferdig=ferdig)
         return ktx, advarsler, None
 
     # Vern mot misbruk: en enkelt forespørsel kan ikke be om et ubegrenset
@@ -4216,7 +4233,7 @@ class Handler(BaseHTTPRequestHandler):
             if r.get("ok") is False:
                 advarsler.append(f"{r.get('type')}: {r.get('feil')}")
 
-        # R66: profilen følger med her OGSÅ. De to kontraktene på
+        # R79: profilen følger med her OGSÅ. De to kontraktene på
         # /dokument skal svare likt på det som gjelder dokumentet selv —
         # ellers ville en klient miste metadataene ved å bytte kontrakt.
         try:
@@ -4225,9 +4242,16 @@ class Handler(BaseHTTPRequestHandler):
             profil = {"ok": False,
                       "feil": f"Profilen feilet ({type(exc).__name__}): {exc}"[:300]}
 
+        # Samme ærlighetsregel som bryter-veien: en operasjon som feilet
+        # skal ikke telles som «modellen kjørte». Resultatene er en liste
+        # av {type, …}, så de mappes til samme form regelen forventer.
+        modell_kjorte = _modellen_kjorte(
+            {r.get("type"): r for r in resultater if isinstance(r, dict)})
+
         return self._svar(200, {
             "ok": True, "filnavn": filnavn,
             "dokumentprofil": profil,
+            "modell_brukt": modell_kjorte,
             "resultater": resultater,
             "antall_tegn": len(ktx.tekst),
             "antall_sider": ktx.antall_sider,
@@ -4237,7 +4261,10 @@ class Handler(BaseHTTPRequestHandler):
                          "advarsler": advarsler},
             "fra_cache": ktx.fra_cache,
             "tid_sekunder": round(time.time() - t0, 1),
-            "kilde": "motor",
+            # «motor» sa hvilken VEI som ble brukt, ikke om modellen kjørte
+            # — og dokumentasjonen lover at «borealis» i kilde betyr at
+            # den gjorde det. Nå følger begge veier samme regel.
+            "kilde": ("motor+borealis" if modell_kjorte else "motor"),
             "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
                         "modell": _borealis["modellfil"] or _borealis["motor"]},
         })
@@ -4547,15 +4574,7 @@ class Handler(BaseHTTPRequestHandler):
         # Samme ærlighet for svar-delen: en ren sidelesing besvares uten
         # modell (modell_brukt=False fra kjernen), og da skal kilden si
         # «deterministisk» selv om svar=ja var på.
-        skjema_del = deler.get("skjema")
-        svar_del = deler.get("svar")
-        svar_med_modell = (valg["svar"]
-                           and not (isinstance(svar_del, dict)
-                                    and svar_del.get("modell_brukt") is False))
-        modell_kjorte = (svar_med_modell or skjema_med_modell
-                         or valg["korriger"]
-                         or (isinstance(skjema_del, dict)
-                             and skjema_del.get("modell_brukt")))
+        modell_kjorte = _modellen_kjorte(deler)
 
         # Feil i en del skal også være synlig for den som bare leser
         # advarslene (GUI-et, en enkel klient) — ikke bare i deltreet
@@ -4564,7 +4583,7 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(del_, dict) and del_.get("ok") is False:
                 advarsler.append(f"{navn}: {del_.get('feil')}")
 
-        # R66: dokumentprofilen følger ALLTID med — den er ikke en del av
+        # R79: dokumentprofilen følger ALLTID med — den er ikke en del av
         # «valg». Sideantall, koder, dokumentdato og hvem dokumentet
         # gjelder er egenskaper ved dokumentet selv, ikke svar på et
         # spørsmål, og en klient skal ikke måtte be om dem for å få dem.
@@ -4577,6 +4596,10 @@ class Handler(BaseHTTPRequestHandler):
             "tekst": raa_tekst if valg["tekst"] else None,
             "antall_tegn": len(raa_tekst),
             "antall_sider": ktx.antall_sider,
+            # Samme faktum som «kilde», men som bool. «kilde» må
+            # delstreng-søkes etter «borealis», og det er en kontrakt
+            # klienter skriver feil.
+            "modell_brukt": modell_kjorte,
             "felter": deler.get("felter"),
             "struktur": deler.get("struktur"),
             "svar": deler.get("svar"),
@@ -5631,7 +5654,13 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     # R40-klassifiseringen legges ALLTID ved som kontekst når
     # dokumentet inneholder datoer — generelt, uten skjøre
     # nøkkelordbetingelser (spørsmål kan inneholde skrivefeil)
-    klassifisert = sett_dato_roller(klassifiser_datoer(raa_tekst, maks=30))
+    # Dokumentdatoen må regnes ut av HELE datolista, ikke av de 30 første.
+    # Med maks=30 fikk modellen en annen dato enn dokumentprofilen meldte
+    # — målt 01.02.2020 i prompten mot 28.05.2026 i profilen på samme
+    # bunke, mens prompten under sier «besvares med NØYAKTIG denne
+    # datoen». Grensen hører til hvor mange datoer som LISTES for
+    # modellen, ikke til hvilken dato som ER dokumentets.
+    klassifisert = sett_dato_roller(klassifiser_datoer(raa_tekst))
     if klassifisert:
         # DOKUMENTETS EGEN DATO skilles ut i sitt eget avsnitt. Uten dette
         # svarte modellen «01.07.2026» på «når er brevet fra?» fordi det
@@ -5674,8 +5703,12 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                       "er fra, SI at det ikke står i dokumentet; ikke velg "
                       "en dato fra listen under.]")
 
+        # Selve LISTA holdes kort av hensyn til kontekstvinduet — men
+        # dokumentdatoen over er regnet ut av HELE lista, ikke av utsnittet.
+        # Det var sammenblandingen av de to som gjorde at modellen fikk en
+        # annen dato enn profilen meldte.
         etter_rolle = {}
-        for d in klassifisert:
+        for d in klassifisert[:MAKS_DATOER_I_PROMPT]:
             if d["dato"] == dd.get("dato") and d.get("rolle") == "dokument":
                 continue          # allerede oppgitt som dokumentdato over
             etter_rolle.setdefault(d.get("rolle") or "ukjent", []).append(d)
@@ -5778,7 +5811,7 @@ class DokumentKontekst:
     def __init__(self, tekst, ocr_brukt=False, handskrift=None,
                  strekkoder=None, ocr_motorer=None, fra_cache=False,
                  sider_regioner=None, antall_sider=None,
-                 strekkoder_lest=True, filnavn=None):
+                 strekkoder_lest=True, filnavn=None, ferdig=None):
         self.tekst = tekst or ""
         self.filnavn = filnavn
         self.ocr_brukt = ocr_brukt
@@ -5797,12 +5830,17 @@ class DokumentKontekst:
         # Tom for tekstlags-PDF-er (der bygges ordregister fra fitz i
         # stedet) og for rene tekstopplastinger (ingen sider finnes).
         self.sider_regioner = sider_regioner or []
-        self._felter = None
-        self._datoer = None
-        self._datoer_detaljert = None
-        self._dokumentdato = None
         self._struktur = None
         self._profil = None
+        # Deler analysen alt har regnet ut. De ER dovent-cachen, bare
+        # fylt på forhånd — og de er BEDRE enn det konteksten selv kan
+        # regne ut, fordi analysen så PDF-metadata og håndskriftmerking
+        # som ikke overlever i ren tekst.
+        ferdig = ferdig or {}
+        self._felter = ferdig.get("felter")
+        self._datoer = ferdig.get("datoer")
+        self._datoer_detaljert = ferdig.get("datoer_detaljert")
+        self._dokumentdato = ferdig.get("dokumentdato")
 
     # -- doven caching av de deterministiske delene --
     @property
@@ -5838,7 +5876,7 @@ class DokumentKontekst:
 
     @property
     def profil(self):
-        """De obligatoriske metadataene (R66). Bygges av allerede
+        """De obligatoriske metadataene (R79). Bygges av allerede
         utregnede deler, så den koster ingen ny lesing av dokumentet."""
         if self._profil is None:
             self._profil = bygg_profil(
@@ -5856,6 +5894,36 @@ class DokumentKontekst:
     def er_tom(self):
         """Blankt ark: modelldelene skal ikke kjøre mot ingenting."""
         return len(self.tekst.strip()) < 5 and not self.strekkoder
+
+
+def _delen_brukte_modellen(del_) -> bool:
+    """Kjørte modellen for DENNE delen?
+
+    En del som FEILET er `{ok: False, feil: …}` og har ingen
+    «modell_brukt». Den gamle regelen spurte `.get("modell_brukt") is
+    False` — på en feilet del gir `.get()` None, og `None is False` er
+    falskt, så delen ble talt som «modellen kjørte». Resultatet var at
+    `/dokument` meldte `kilde: "borealis+deterministisk"` på et kall der
+    Borealis var NEDE og aldri ble spurt. Nettopp det feltet er
+    dokumentert som robotens raskeste ærlighetssjekk."""
+    if not isinstance(del_, dict):
+        return False
+    if del_.get("ok") is False:
+        return False            # delen feilet — ingen modell kjørte
+    return del_.get("modell_brukt", True) is not False
+
+
+def _modellen_kjorte(deler: dict) -> bool:
+    """Om språkmodellen faktisk bidro til svaret.
+
+    Én regel, brukt av BEGGE /dokument-kontraktene og av
+    operasjonsmotoren, så de ikke kan gi hvert sitt svar på samme
+    spørsmål. Operasjoner-veien hardkodet tidligere `kilde: "motor"`
+    uansett — en robot som fulgte den dokumenterte regelen («inneholder
+    borealis ⇒ modellen bidro») leste ethvert operasjonssvar som rent
+    deterministisk og hoppet over menneskelig kontroll."""
+    return any(_delen_brukte_modellen(deler.get(navn))
+               for navn in ("svar", "skjema", "korriger"))
 
 
 def _borealis_er_klar():
