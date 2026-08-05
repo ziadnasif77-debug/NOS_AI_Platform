@@ -175,9 +175,66 @@ def test_profil_sammendrag_utelater_persondata_og_sier_hva():
     assert "kontakt" in liten["utelatt"]
 
 
+def test_sammendrag_beholder_saksinformasjon_uten_persondata():
+    """`profil=sammendrag` er en PERSONVERNbryter, ikke en
+    størrelsesbryter. `ytelser` og `hjemler` sier hva dokumentet handler
+    om og hvilke bestemmelser det viser til — utelot vi dem, ville
+    `utelatt` påstå at de gikk ut av personvernhensyn, og klienten mistet
+    nettopp den saksinformasjonen den ba om."""
+    liten = api._profilform(_profil(), "sammendrag")
+    assert "ytelser" in liten
+    assert "hjemler" in liten
+    assert "ytelser" not in liten["utelatt"]
+    assert "hjemler" not in liten["utelatt"]
+
+
 def test_profil_full_er_uendret():
     profil = _profil()
     assert api._profilform(profil, "full") == profil
+
+
+def test_hver_dokumenttype_har_et_lesbart_navn():
+    """Uten en term faller `kodeverk()` tilbake til koden, og en bruker
+    får «legeerklaring» i skjermbildet — uten æøå, fordi koden er skrevet
+    slik for å kunne matches mot OCR-tekst. Det er ikke en visningsverdi."""
+    from delt.tekstuttrekk import _DOKUMENTTYPER, DOKUMENTTYPE_TERM
+    mangler = sorted({kode for kode, _ in _DOKUMENTTYPER}
+                     - set(DOKUMENTTYPE_TERM))
+    assert not mangler, f"Dokumenttyper uten term: {mangler}"
+
+
+def test_hver_ytelse_har_et_lesbart_navn():
+    from delt.konstanter import NORSKE_YTELSER, YTELSE_TERM
+    mangler = sorted(NORSKE_YTELSER - set(YTELSE_TERM))
+    assert not mangler, f"Ytelser uten term: {mangler}"
+
+
+def test_ingen_term_uten_en_kode_a_hore_til():
+    """Motsatt vei: en term for en kode som ikke finnes er en gammel
+    verdi som ble omdøpt eller fjernet uten at tabellen fulgte etter."""
+    from delt.konstanter import NORSKE_YTELSER, YTELSE_TERM
+    from delt.tekstuttrekk import _DOKUMENTTYPER, DOKUMENTTYPE_TERM
+    assert not sorted(set(YTELSE_TERM) - NORSKE_YTELSER)
+    assert not sorted(set(DOKUMENTTYPE_TERM) - {k for k, _ in _DOKUMENTTYPER})
+
+
+def test_kodet_par_og_ra_verdi_kan_ikke_avvike():
+    """`type` og `type_kodet.kode` er samme faktum to steder — nok et
+    speil, med samme krav som de andre."""
+    profil = _profil()
+    assert profil["dokument"]["type_kodet"]["kode"] == profil["dokument"]["type"]
+    if profil["ytelse"]["navn"]:
+        assert (profil["ytelse"]["navn_kodet"]["kode"]
+                == profil["ytelse"]["navn"])
+
+
+def test_uten_verdi_er_det_kodede_paret_null_ikke_et_tomt_par():
+    """`{"kode": null, "term": null}` ville sagt at det FINNES en type
+    som bare mangler navn. Null sier at typen ikke ble fastslått."""
+    tom = api.DokumentKontekst("Helt tom tekst uten kjennetegn.",
+                               antall_sider=1).profil
+    assert tom["dokument"]["type_kodet"] is None
+    assert tom["ytelse"]["navn_kodet"] is None
 
 
 def test_dekningsgraden_sier_det_samme_som_ytelsen():

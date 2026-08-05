@@ -15,11 +15,13 @@ stole på; et felt med en tilfeldig dato er ikke det.
 import re
 
 from delt.saksfelter import arbeid_felter, okonomi_felter, sak_felter
-from delt.tekstuttrekk import (ROLLE_BEHANDLING, ROLLE_DOKUMENT,
-                               dokumentets_alder, finn_alle_fodselsnummer,
-                               fodselsdato_av_fnr,
+from delt.konstanter import YTELSE_TERM
+from delt.tekstuttrekk import (DOKUMENTTYPE_TERM, ROLLE_BEHANDLING,
+                               ROLLE_DOKUMENT, dokumentets_alder,
+                               finn_alle_fodselsnummer, finn_alle_ytelser,
+                               finn_lovhenvisninger, fodselsdato_av_fnr,
                                gjelder_periode as _gjelder_periode,
-                               rolle_for_type)
+                               kodeverk, rolle_for_type)
 
 # ------------------------------------------------------------------ #
 #  Datoer: norsk form ut og inn, ISO i profilen                       #
@@ -472,6 +474,54 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
     return ut
 
 
+def _hjemler(tekst, dato_iso, lov_id) -> list:
+    """Bestemmelsene dokumentet SELV viser til, slått opp i riktig lov.
+
+    Skilt fra `hjemmel` med vilje: den sier hvilken lov som GJALDT da
+    dokumentet ble skrevet, dette sier hva dokumentet HENVISER til. Et
+    vedtak kan vise til flere paragrafer, og et klagebrev siterer gjerne
+    både bestemmelsen det klages på og saksbehandlingsregelen.
+
+    Uten kjent lov (ingen dokumentdato) slås ingenting opp — det samme
+    paragrafnummeret betyr ULIKE ting i 1966- og 1997-loven, og å velge
+    én av dem uten grunnlag ville gitt et svar som ser riktig ut. Da står
+    henvisningen der med `kapittel_tittel: null` og `flertydig: true`.
+    """
+    funn = finn_lovhenvisninger(tekst)
+    if not funn:
+        return []
+    try:
+        from delt import lover as _lover
+    except Exception:
+        _lover = None
+
+    ut = []
+    for ref in funn:
+        # En UDELT paragraf (§ 29) kan ikke være folketrygdloven — den
+        # nummererer kapittel-ledd (§ 8-2). Å skrive «ftrl-1997» på den
+        # ville vært en påstand vi VET er feil; den vanligste er
+        # forvaltningsloven, som ikke er registrert her.
+        annen_lov = ref["kapittel"] is None
+        post = {"referanse": ref["referanse"], "kapittel": ref["kapittel"],
+                "lov": None if annen_lov else lov_id,
+                "kapittel_tittel": None,
+                "flertydig": lov_id is None and not annen_lov,
+                "lov_nevnt_i_teksten": ref["lov_nevnt"],
+                "merknad": ("Udelt paragrafnummer — hører til en ANNEN lov "
+                            "enn folketrygdloven (ofte forvaltningsloven). "
+                            "Den loven er ikke registrert, så henvisningen "
+                            "slås ikke opp." if annen_lov else None)}
+        if _lover and lov_id and ref["kapittel"]:
+            try:
+                # kapitler() gir {nummer: tittel} — tittelen ER verdien
+                post["kapittel_tittel"] = \
+                    _lover.kapitler(lov_id).get(ref["kapittel"])
+            except Exception:
+                pass
+        ut.append(post)
+    return ut
+
+
 def _hjemmel(dato_iso, ytelse_navn=None) -> dict:
     """Hvilken lov som gjaldt DA DOKUMENTET BLE TIL.
 
@@ -626,7 +676,7 @@ def _valuta(tekst: str) -> dict:
     return {"valuta": kode, "valuta_merknad": None}
 
 
-SKJEMAVERSJON = "1.3"
+SKJEMAVERSJON = "1.4"
 
 
 def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
@@ -684,6 +734,12 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
 
         "dokument": {
             "type": s_dok.get("dokumenttype") or None,
+            # {kode, term}: koden er stabil og maskinlesbar, termen er
+            # for et menneske. Kodene er skrevet uten æøå fordi de
+            # matches mot OCR-tekst — men et skjermbilde skal vise
+            # «Legeerklæring», ikke «legeerklaring».
+            "type_kodet": kodeverk(s_dok.get("dokumenttype") or None,
+                                   DOKUMENTTYPE_TERM),
             "tittel": s_dok.get("tittel") or None,
             "sprak": s_dok.get("sprak") or None,
             "kontornavn": s_dok.get("kontornavn") or None,
@@ -712,8 +768,12 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             "saksnummer": s_ident.get("saksnummer") or None,
             **sak_felter(tekst),
             # sakstype hører til samme regelverk som ytelse — kommer
-            # sammen med det, ikke gjettet i mellomtiden
+            # sammen med det, ikke gjettet i mellomtiden. Det KODEDE
+            # feltet er med allerede, så formen ikke endres senere:
+            # en klient som leser sakstype_kodet i dag får null, ikke en
+            # manglende nøkkel.
             "sakstype": None,
+            "sakstype_kodet": None,
         },
 
         # Ytelsesreglene kommer senere. Navnet hentes fra den ENE
@@ -728,6 +788,10 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         # «dekning»; «status» er frigjort til å bety ytelsens status.
         "ytelse": {
             "navn": s_dok.get("ytelse") or None,
+            # Termen sier også når en ytelse er HISTORISK: et vedtak fra
+            # 1994 om «uførepensjon» skal ikke leses som om det gjaldt
+            # dagens uføretrygd, som har andre vilkår (R77).
+            "navn_kodet": kodeverk(s_dok.get("ytelse") or None, YTELSE_TERM),
             "type": None,
             "utfall": None,
             "gyldig_fra": None,
@@ -782,6 +846,21 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         egen = _hjemmel(dok["dato"])
         dok["lov"] = egen["lov"]
         dok["lov_status"] = egen["status"]
+
+    # ÉN ytelse taper informasjon: et AAP-vedtak viser nesten alltid til
+    # sykepengeperioden som tok slutt, og profilen sa da bare
+    # «arbeidsavklaringspenger». Lista har alle, i den rekkefølgen de
+    # står; «ytelse» over er fortsatt den mest spesifikke og ligger
+    # ALLTID i lista (vokterprøve).
+    profil["ytelser"] = [kodeverk(navn, YTELSE_TERM)
+                         for navn in finn_alle_ytelser(tekst)]
+
+    # «hjemmel» sier hvilken lov som GJALDT. «hjemler» sier hvilke
+    # bestemmelser dokumentet SELV viser til — to ulike spørsmål. Et
+    # klagebrev siterer gjerne både bestemmelsen det klages på og
+    # saksbehandlingsregelen, og én hjemmel kan ikke bære det.
+    profil["hjemler"] = _hjemler(tekst, profil["dokument"]["dato"],
+                                 profil["hjemmel"]["lov"])
 
     # Hva systemet FAKTISK er i stand til å fastslå ennå. Profilen hadde
     # fire «ikke bygget ennå»-nuller spredt rundt, hver med sin egen

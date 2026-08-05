@@ -481,7 +481,7 @@ def test_et_ukjent_dokument_laaner_ikke_naboens_type():
 def test_skjemaversjonen_folger_med():
     """Endres formen senere, skal en klient kunne se det på tallet i
     stedet for å oppdage det når noe brekker."""
-    assert _profil("")["skjemaversjon"] == "1.3"
+    assert _profil("")["skjemaversjon"] == "1.4"
 
 
 def test_profilen_folger_med_i_dokumentsvaret_uten_at_noen_ber_om_det():

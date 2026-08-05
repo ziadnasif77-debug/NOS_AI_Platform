@@ -1250,6 +1250,93 @@ def finn_ytelse(tekst: str):
     return max(treff, key=len) if treff else None
 
 
+def finn_alle_ytelser(tekst: str) -> list:
+    """ALLE ytelsene dokumentet nevner, i den rekkefølgen de står.
+
+    `finn_ytelse` gir bare ÉN — den lengste. Det er riktig når to navn
+    overlapper, men det taper informasjon når dokumentet nevner to ULIKE
+    ytelser: et AAP-vedtak viser nesten alltid til sykepengeperioden som
+    tok slutt, og et etterbetalingsbrev kan gjelde to ordninger. Da sa
+    profilen «arbeidsavklaringspenger» og tidde om resten.
+
+    Rekkefølgen er FØRSTE FOREKOMST, ikke lengde. Den er stabil for
+    samme tekst, og «hva står øverst» er det en leser ser først.
+    """
+    flat = _uten_saertegn(tekst)
+    med_posisjon = []
+    for ytelse in NORSKE_YTELSER:
+        i = flat.find(_uten_saertegn(ytelse))
+        if i >= 0:
+            med_posisjon.append((i, ytelse))
+    # posisjon først, så navn: to ytelser kan ikke starte på samme
+    # indeks, men sorteringen skal være total uansett input
+    return [y for _, y in sorted(med_posisjon)]
+
+
+# Paragraf- og kapittelhenvisninger i løpende tekst. «§ 8-2», «§§ 8-2 og
+# 8-3», «kapittel 11», «kap. 4». Lovnavnet står ofte foran, men ikke
+# alltid — derfor fanges det separat og kan mangle.
+# Rekkefølgen betyr noe: den TODELTE formen prøves først, ellers ville
+# «§ 8-2» blitt lest som den udelte «§ 8» og leddet forsvunnet stille.
+_PARAGRAF_REF = re.compile(
+    r"§{1,2}\s*(\d{1,2})\s*[-–]\s*(\d{1,2}[a-zA-Z]?)"
+    r"|§{1,2}\s*(\d{1,2}[a-zA-Z]?)(?!\s*[-–]\s*\d)"
+    r"|\bkap(?:\.|ittel)?\s*(\d{1,2})\s*([A-Z])?\b")
+
+# Loven henvisningen gjelder, når den er navngitt rett foran.
+_LOVNAVN_FORAN = re.compile(
+    r"(?i)\b(folketrygdloven|folketrygdlova|ftrl|lov\s+om\s+folketrygd)"
+    r"[^.\n]{0,40}$")
+
+
+def finn_lovhenvisninger(tekst: str) -> list:
+    """Paragraf- og kapittelhenvisninger slik de STÅR i dokumentet.
+
+    Dette er noe annet enn `hjemmel`, som sier hvilken lov som GJALDT da
+    dokumentet ble skrevet. Et vedtak kan vise til flere paragrafer, og
+    et klagebrev siterer gjerne både bestemmelsen det klages på og
+    saksbehandlingsregelen. Én hjemmel kan ikke bære det.
+
+    Returnerer `{referanse, kapittel, lov_nevnt, posisjon}` per treff,
+    uten å slå opp noe — oppslaget krever dokumentdatoen og hører hjemme
+    i profilen. Duplikater fjernes; samme paragraf nevnt fem ganger er
+    én henvisning.
+    """
+    funn, sett = [], set()
+    for m in _PARAGRAF_REF.finditer(tekst or ""):
+        kap_p, ledd, alene, kap_k, bokstav = m.groups()
+        if kap_p:
+            referanse = f"§ {kap_p}-{ledd}"
+            kapittel = kap_p
+        elif alene:
+            # Folketrygdloven nummererer «kapittel-ledd» (§ 8-2). En
+            # UDELT paragraf tilhører derfor en ANNEN lov —
+            # forvaltningsloven § 29 er den vanligste i NAV-brev. Vi
+            # kjenner ikke den loven, så kapittelet står tomt i stedet
+            # for å bli gjettet til «kapittel 29» i folketrygdloven,
+            # som ikke finnes.
+            referanse = f"§ {alene}"
+            kapittel = None
+        else:
+            kapittel = f"{kap_k}{bokstav or ''}"
+            referanse = f"kapittel {kapittel}"
+        if referanse in sett:
+            continue
+        sett.add(referanse)
+        foran = tekst[max(0, m.start() - 60):m.start()]
+        navn = _LOVNAVN_FORAN.search(foran)
+        funn.append({
+            "referanse": referanse,
+            "kapittel": kapittel,
+            # Står lovnavnet rett foran, er henvisningen ikke flertydig
+            # selv uten dokumentdato. Står det ikke, sier vi det —
+            # ikke gjetter.
+            "lov_nevnt": bool(navn),
+            "posisjon": m.start(),
+        })
+    return funn
+
+
 def finn_fylke(tekst: str):
     # Lengste navn først → «Troms og Finnmark» matches før «Troms», og
     # resultatet blir deterministisk (NORSKE_FYLKER er et set/uordnet).
@@ -1692,6 +1779,31 @@ _DOKUMENTTYPER = [
     ("boardingkort", r"boardingkort|boarding"),
     ("brev", r"med vennlig hilsen|kj[æa]re"),
 ]
+
+# Lesbart navn per dokumenttype. Samme mønster som _TYPE_TERM for datoer:
+# koden er stabil (en klient forgrener på «legeerklaring» uten å hardkode
+# en norsk streng), termen er for et menneske. Kodene er uten æøå fordi
+# de matches mot OCR-tekst; termen har dem.
+#
+# Hver kode i _DOKUMENTTYPER SKAL ha en term her — en vakttest feiler
+# ellers, så en ny type ikke stille faller tilbake til koden.
+DOKUMENTTYPE_TERM = {
+    "faktura": "Faktura",
+    "kvittering": "Kvittering",
+    "vedtak": "Vedtak",
+    "soknad": "Søknad",
+    "legeerklaring": "Legeerklæring",
+    "inntektsmelding": "Inntektsmelding",
+    "sykmelding": "Sykmelding",
+    "klage": "Klage",
+    "egenerklaring": "Egenerklæring",
+    "meldekort": "Meldekort",
+    "pensjonsbrev": "Pensjonsbrev",
+    "attest": "Attest",
+    "kontrakt": "Kontrakt",
+    "boardingkort": "Boardingkort",
+    "brev": "Brev",
+}
 
 
 # Tittelen veier tyngre enn brødteksten: den sier hva dokumentet ER.

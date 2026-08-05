@@ -5,10 +5,10 @@ Formålet med dette dokumentet er å avgjøre FORMEN på svaret fra
 svaret felt for felt til det blir stort, usammenhengende og umulig å
 endre uten å bryte klienter.
 
-Status: **implementert, `skjemaversjon: "1.3"`.** Seksjonsformen i §3
+Status: **implementert, `skjemaversjon: "1.4"`.** Seksjonsformen i §3
 er den som svares i dag, i begge kontraktene. Feltreferansen ligger i
 [endepunkter.md](endepunkter.md); reglene som håndhever den er
-R71–R73, R79–R87 i [regler_lokal_api.md](regler_lokal_api.md).
+R71–R73, R79–R97 i [regler_lokal_api.md](regler_lokal_api.md).
 
 Endres formen senere, går `skjemaversjon` opp — en klient skal kunne se
 endringen på tallet, ikke oppdage den når noe brekker. Det holdt ikke
@@ -29,6 +29,16 @@ det endres — versjonen kan ikke lenger glemmes i stillhet (R87).
 | `part.grunnlag` | Hva funnet bygger på — kategori, ikke skala (R82) |
 | `dekning` | Hvilke felter systemet LETER etter ennå (R84) |
 | `ytelse.status` | Frigjort til ytelsens egen status; modenheten flyttet til `dekning` |
+
+**Tillegg i 1.4 (additive):**
+
+| Felt | Hva |
+|---|---|
+| `dokument.type_kodet` | `{kode, term}` ved siden av `type` (R94) |
+| `ytelse.navn_kodet` | Termen sier også når en ytelse er historisk |
+| `sak.sakstype_kodet` | Med fra nå, står `null` til reglene lander |
+| `ytelser[]` | Alle ytelsene dokumentet nevner (R95) |
+| `hjemler[]` | Bestemmelsene dokumentet VISER TIL — ikke det samme som `hjemmel` (R96) |
 
 ---
 

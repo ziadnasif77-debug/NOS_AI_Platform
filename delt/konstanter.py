@@ -106,3 +106,44 @@ NORSKE_YTELSER = {
     # ytelser utenfor folketrygdloven, men i samme dokumentflyt
     "barnetrygd", "kontantstotte",
 }
+
+# Lesbart navn for hver ytelseskode (AAREG-mønsteret: koden er stabil og
+# maskinlesbar, termen er for et menneske). Kodene er skrevet UTEN æøå
+# fordi de sammenlignes mot OCR-tekst som kan skrive «uforetrygd»,
+# «uføretrygd» eller «ufoeretrygd» — men et grensesnitt skal vise den
+# norske formen, ikke koden.
+#
+# Hver kode i NORSKE_YTELSER SKAL ha en term her; en vakttest feiler
+# ellers. Uten den ville en ny ytelse stille falt tilbake til koden, og
+# en bruker fått «opplaeringspenger» i skjermbildet.
+YTELSE_TERM = {
+    "dagpenger": "Dagpenger",
+    "grunnstonad": "Grunnstønad",
+    "hjelpestonad": "Hjelpestønad",
+    "gravferdsstonad": "Gravferdsstønad",
+    "sykepenger": "Sykepenger",
+    "omsorgspenger": "Omsorgspenger",
+    "pleiepenger": "Pleiepenger",
+    "opplaeringspenger": "Opplæringspenger",
+    "arbeidsavklaringspenger": "Arbeidsavklaringspenger",
+    "tilleggsstonad": "Tilleggsstønad",
+    "uforetrygd": "Uføretrygd",
+    "yrkesskadeerstatning": "Yrkesskadeerstatning",
+    "foreldrepenger": "Foreldrepenger",
+    "svangerskapspenger": "Svangerskapspenger",
+    "engangsstonad": "Engangsstønad",
+    "overgangsstonad": "Overgangsstønad",
+    "gjenlevendepensjon": "Gjenlevendepensjon",
+    "barnepensjon": "Barnepensjon",
+    "alderspensjon": "Alderspensjon",
+    # 1966-loven. Termen sier at ytelsen er historisk OG hva den heter i
+    # dag — et vedtak fra 1994 om «uførepensjon» skal ikke leses som om
+    # det gjaldt dagens uføretrygd, som har andre vilkår.
+    "uforepensjon": "Uførepensjon (1966-loven; i dag uføretrygd)",
+    "etterlattepensjon": "Etterlattepensjon (1966-loven)",
+    "attforingspenger": "Attføringspenger (1966-loven; i dag AAP)",
+    "rehabiliteringspenger": "Rehabiliteringspenger (1966-loven; i dag AAP)",
+    # utenfor folketrygdloven
+    "barnetrygd": "Barnetrygd",
+    "kontantstotte": "Kontantstøtte",
+}

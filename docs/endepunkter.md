@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R80 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R97 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -13,7 +13,8 @@ ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
 > ekte fødselsnummer skal ligge i repoet.
 
 Basis-URL lokalt: `http://localhost:8600`. Er serveren startet med
-`API_NOKKEL`, kreves headeren `X-API-Key` på alle kall unntatt `/hjelp`.
+`API_NOKKEL` eller `API_NOKLER`, kreves headeren `X-API-Key` på alle kall
+unntatt `/hjelp` — se [Klientidentitet](#klientidentitet--navngitte-api-nøkler-r91).
 
 ---
 
@@ -191,7 +192,7 @@ stedet for når noe brekker. Se
 
 ```json
 {
-  "skjemaversjon": "1.3",
+  "skjemaversjon": "1.4",
 
   "sammendrag": {"navn": "Ola Nordmann", "fnr": "12345678910",
                  "dokumentdato": "2026-05-12", "dokumenttype": "vedtak",
@@ -366,6 +367,47 @@ for å være dokumentets heller.
 `qr_kode_side: null` ikke at koden mangler, bare at det ikke ble sett
 etter den. `qr_kode_side`/`strekkode_side` er FØRSTE side med en kode;
 alle forekomstene ligger i `qr`- og `strekkode`-listene.
+
+**Kategoriverdier kommer også som `{kode, term}` (R94).**
+`dokument.type_kodet`, `ytelse.navn_kodet` og `sak.sakstype_kodet` står
+ved siden av den rå verdien. Koden er stabil — forgren på den — og
+termen er for et menneske. Kodene er skrevet uten æøå fordi de matches
+mot OCR-tekst; termen har dem:
+
+```json
+"type": "legeerklaring",
+"type_kodet": {"kode": "legeerklaring", "term": "Legeerklæring"}
+```
+
+Uten verdi er hele paret `null`. `{"kode": null, "term": null}` ville
+sagt at det finnes en type som bare mangler navn.
+
+**`ytelser[]` — et dokument kan gjelde flere (R95).** Et AAP-vedtak
+viser nesten alltid til sykepengeperioden som tok slutt. Med ett felt
+forsvant den. Lista har alle, i den rekkefølgen de står i teksten.
+
+`ytelse.navn` er den mest SPESIFIKKE (lengste treff) og ligger alltid i
+lista — men er ikke nødvendigvis `ytelser[0]`. Sammenfaller de ikke, er
+begge riktige; de svarer på ulike spørsmål.
+
+**`hjemler[]` — hva dokumentet VISER TIL (R96).** Ikke det samme som
+`hjemmel`, som sier hvilken lov som GJALDT da dokumentet ble skrevet:
+
+| Felt | Spørsmål |
+|---|---|
+| `hjemmel` | Hvilken lov gjaldt da dokumentet ble skrevet? (av datoen alene) |
+| `hjemler[]` | Hvilke bestemmelser siterer dokumentet? |
+
+Oppslaget går mot loven som gjaldt, så «kapittel 8» blir sykepenger i et
+2024-vedtak og uførepensjon i et 1994-vedtak. Uten dokumentdato er
+henvisningen `flertydig: true` med `lov: null` — å velge én av to lover
+uten grunnlag ville gitt et svar som ser riktig ut.
+
+Et UDELT paragrafnummer (`§ 29`) hører til en annen lov enn
+folketrygdloven, som nummererer kapittel-ledd (`§ 8-2`). Den tas med med
+`lov: null` og en `merknad` (R97) — å tilskrive den folketrygdloven ville
+vært en påstand vi vet er feil, og å droppe den ville skjult noe som
+faktisk står i dokumentet.
 
 **`ytelse`** er en plassholder. Reglene kommer senere; feltet er med fra
 første dag så kontrakten ikke må endres når de gjør det. `ytelse.status`

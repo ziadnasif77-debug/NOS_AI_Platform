@@ -1,5 +1,5 @@
 {
- "skjemaversjon": "1.3",
+ "skjemaversjon": "1.4",
  "nokler": [
   "/andre_fodselsnummer",
   "/andre_personer",
@@ -43,6 +43,9 @@
   "/dokument/sprak",
   "/dokument/tittel",
   "/dokument/type",
+  "/dokument/type_kodet",
+  "/dokument/type_kodet/kode",
+  "/dokument/type_kodet/term",
   "/dokumenter",
   "/dokumenter[]/dato",
   "/dokumenter[]/dato_norsk",
@@ -67,6 +70,7 @@
   "/fil/blanke_sider",
   "/fil/filnavn",
   "/fil/uleselige_sider",
+  "/hjemler",
   "/hjemmel",
   "/hjemmel/begrunnelse",
   "/hjemmel/lov",
@@ -110,6 +114,7 @@
   "/sak/referanse",
   "/sak/saksnummer",
   "/sak/sakstype",
+  "/sak/sakstype_kodet",
   "/sak/vedtaksnummer",
   "/sammendrag",
   "/sammendrag/antall_dokumenter",
@@ -138,8 +143,14 @@
   "/ytelse/gyldig_til",
   "/ytelse/implementasjon",
   "/ytelse/navn",
+  "/ytelse/navn_kodet",
+  "/ytelse/navn_kodet/kode",
+  "/ytelse/navn_kodet/term",
   "/ytelse/status",
   "/ytelse/type",
-  "/ytelse/utfall"
+  "/ytelse/utfall",
+  "/ytelser",
+  "/ytelser[]/kode",
+  "/ytelser[]/term"
  ]
 }

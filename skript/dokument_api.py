@@ -458,7 +458,7 @@ GZIP_NIVAA = 6
 MAKS_MODELLOPERASJONER = 8
 OPERASJON_FRIST_S = 75.0
 
-API_VERSJON = "1.5.0"
+API_VERSJON = "1.6.0"
 # Promptversjonen står i regler/prompter.md, sammen med ordlyden den
 # beskriver — så den ikke kan bli glemt når en regel endres. Den slås
 # opp PER SVAR (prompter.versjon()), ikke ved oppstart: reglene kan
@@ -2365,6 +2365,33 @@ def _skjemaer() -> dict:
                                description="Samme skala som overalt ellers"),
                 "begrunnelse": s(nullable=True),
                 "side": {"type": "integer", "nullable": True}}},
+        "Hjemmel": {
+            "type": "object",
+            "description": (
+                "Én lovhenvisning fra dokumentteksten, slått opp i den "
+                "loven som gjaldt DA DOKUMENTET BLE SKREVET. Samme "
+                "kapittelnummer betyr ULIKE ting i de to "
+                "folketrygdlovene — «kapittel 8» er sykepenger i "
+                "1997-loven og uførepensjon i 1966-loven — så oppslaget "
+                "uten dokumentdato ville vært en gjetning (R77)."),
+            "properties": {
+                "referanse": s(example="§ 11-5",
+                               description="Slik den STÅR i dokumentet"),
+                "kapittel": s(nullable=True, example="11"),
+                "lov": s(nullable=True, example="ftrl-1997"),
+                "kapittel_tittel": s(nullable=True,
+                                     example="Arbeidsavklaringspenger"),
+                "flertydig": b(description="Ingen dokumentdato ⇒ vi vet "
+                                           "ikke hvilken lov, og gjetter "
+                                           "ikke"),
+                "lov_nevnt_i_teksten": b(
+                    description="Sto lovnavnet rett foran henvisningen"),
+                "merknad": s(nullable=True,
+                             description="Satt når henvisningen IKKE kan "
+                                         "slås opp — f.eks. et udelt "
+                                         "paragrafnummer (§ 29), som "
+                                         "hører til en annen lov enn "
+                                         "folketrygdloven")}},
         "Varsel": {
             "type": "object",
             "description": (
@@ -2670,6 +2697,12 @@ def _skjemaer() -> dict:
                         "er ulike ting"),
                     "properties": {
                         "type": s(nullable=True, example="vedtak"),
+                        "type_kodet": {**ref("Kodet"), "nullable": True,
+                                       "description": "Samme verdi som "
+                                                      "«type», med et "
+                                                      "lesbart navn. null "
+                                                      "når typen ikke ble "
+                                                      "fastslått"},
                         "tittel": s(nullable=True),
                         "sprak": s(nullable=True),
                         "kontornavn": s(nullable=True),
@@ -2702,7 +2735,8 @@ def _skjemaer() -> dict:
                         "referanse": s(nullable=True),
                         "sakstype": s(nullable=True,
                                       description="Kommer sammen med "
-                                                  "ytelsesreglene")}},
+                                                  "ytelsesreglene"),
+                        "sakstype_kodet": {**ref("Kodet"), "nullable": True}}},
                 "ytelse": {
                     "type": "object",
                     "description": "Ytelsesreglene kommer senere. «navn» "
@@ -2710,6 +2744,14 @@ def _skjemaer() -> dict:
                                    "finnes",
                     "properties": {
                         "navn": s(nullable=True, example="dagpenger"),
+                        "navn_kodet": {**ref("Kodet"), "nullable": True,
+                                       "description": "Termen sier også "
+                                                      "når en ytelse er "
+                                                      "HISTORISK: et vedtak "
+                                                      "fra 1994 om "
+                                                      "«uførepensjon» "
+                                                      "gjaldt ikke dagens "
+                                                      "uføretrygd"},
                         "type": s(nullable=True),
                         "utfall": s(nullable=True,
                                     description="innvilget/avslatt/endret/"
@@ -2728,6 +2770,25 @@ def _skjemaer() -> dict:
                                                 "«dekning»"),
                         "implementasjon": s(example="delvis",
                                             enum=DEKNINGSGRAD)}},
+                "ytelser": {
+                    "type": "array", "items": ref("Kodet"),
+                    "description": (
+                        "ALLE ytelsene dokumentet nevner, i den "
+                        "rekkefølgen de står. «ytelse» over er den mest "
+                        "SPESIFIKKE (lengste treff) og ligger alltid i "
+                        "denne lista — men den er ikke nødvendigvis den "
+                        "første. Ett navn tapte informasjon: et "
+                        "AAP-vedtak viser nesten alltid til "
+                        "sykepengeperioden som tok slutt")},
+                "hjemler": {
+                    "type": "array", "items": ref("Hjemmel"),
+                    "description": (
+                        "Bestemmelsene dokumentet SELV viser til. Dette "
+                        "er noe annet enn «hjemmel», som sier hvilken lov "
+                        "som GJALDT da dokumentet ble skrevet: et vedtak "
+                        "kan vise til flere paragrafer, og et klagebrev "
+                        "siterer gjerne både bestemmelsen det klages på "
+                        "og saksbehandlingsregelen")},
                 "dekning": {
                     "type": "object",
                     "description": (
@@ -6359,8 +6420,12 @@ def _profilform(profil: dict, form: str) -> dict:
     stillhet (samme løfte som R65 gir for ukjente feltnavn)."""
     if form != "sammendrag" or not isinstance(profil, dict):
         return profil
+    # «ytelser» og «hjemler» blir med: de sier hva dokumentet HANDLER om
+    # og hvilke bestemmelser det viser til — ingen persondata. Utelot vi
+    # dem, ville «utelatt» påstå at de ble fjernet av personvernhensyn,
+    # og en klient mistet nettopp den saksinformasjonen den ba om.
     behold = ("skjemaversjon", "sammendrag", "fil", "dokument", "sak",
-              "ytelse", "hjemmel", "koder", "dekning")
+              "ytelse", "ytelser", "hjemmel", "hjemler", "koder", "dekning")
     liten = {k: v for k, v in profil.items() if k in behold}
     # sammendraget bærer navn og fnr — også de ut når formålet er å
     # slippe å motta persondata
