@@ -57,7 +57,32 @@ meldinger og dokumentasjon. Æøå brukes normalt.
 - Rapporter ærlig: feiler noe, si det med utdata; hopper du over et
   steg, si det.
 
-## 4. Portabilitetsvakten (sitecustomize.py)
+## 4. All prompttekst bor i regler/prompter.md
+
+**Ingen prompttekst skal skrives i Python-kode.** Alt som sendes til
+språkmodellen står i `regler/prompter.md`, i navngitte blokker, og
+hentes med `prompter.hent("navn", felt=...)` fra `delt/prompter.py`.
+
+- Ny prompt eller ny regel til modellen → ny/endret blokk i
+  `regler/prompter.md`, og øk `versjon` nederst i samme fil.
+- Nytt kallsted → før det opp i `KALLSTEDER` i
+  `tester/test_prompter_samlet.py`, ellers fanger ikke vakten det.
+- Brukerens egne regler ligger i `regler/egne_regler.txt` og
+  `regler/egne_etiketter.txt` — også de i `regler/`, aldri i roten.
+- Endrer du ordlyden rundt «Dokument:», «Spørsmål:», «JSON-mal:» eller
+  «OCR-tekst:», må `_PROMPT_ANKRE` i `dokument_api.py` oppdateres —
+  ellers klippes lange dokumenter på feil sted, stille.
+
+Skillet som gjelder: **prompten styrer, koden garanterer.** Skal noe
+være garantert riktig (tall, identifikatorer, eksklusjoner), håndheves
+det av kode og dokumenteres som KODE i `docs/regler_lokal_api.md`. En
+prompt er sterk styring, ikke en garanti.
+
+**Verifisering:** `tester/test_prompter_samlet.py` feiler hvis
+prompttekst dukker opp i `skript/` eller `delt/`, hvis en blokk mangler,
+eller hvis en plassholder står ufylt.
+
+## 5. Portabilitetsvakten (sitecustomize.py)
 
 `.pyruntime` er gitignorert (kopieres med mappa, ikke via git), så
 selve vaktfila ligger også i `portabilitet/sitecustomize.py` (sporet).

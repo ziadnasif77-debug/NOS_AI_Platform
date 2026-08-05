@@ -7,12 +7,15 @@ Hver test her er en FEIL som faktisk skjedde på bunken — begge
 leseveiene (tekstlag og OCR) ga samme gale felter, fordi feilene lå i
 finnerne, ikke i lesingen. Utdragene under er ordrett fra dokumentet.
 """
+import os
 import sys
 
 sys.path.insert(0, ".")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pytest
 
+from syntetiske_nummer import lag_dobbeltgyldig, lag_fnr
 from delt.tekstuttrekk import (finn_alle_fodselsnummer,
                                finn_alle_kontonummer, finn_alle_telefoner,
                                finn_forfallsdato, finn_postnummer_sted,
@@ -97,28 +100,30 @@ def test_sladding_dekker_mobilformen():
 #  kontonummer vs fnr: etiketten vinner når begge sjekksummer stemmer  #
 # ------------------------------------------------------------------ #
 
-REFUSJON = "Refusjon utbetales til kontonummer: 12345678910"
+DOBBELTGYLDIG = lag_dobbeltgyldig()
+REFUSJON = f"Refusjon utbetales til kontonummer: {DOBBELTGYLDIG}"
 
 
 def test_merket_kontonummer_stjeles_ikke_av_fnr_presedensen():
-    """12345678910 består BEGGE sjekksummene (gyldig som D-nummer). Uten
+    """Nummeret består BEGGE sjekksummene (gyldig som D-nummer). Uten
     etikettvakt ble refusjonskontoen rapportert som FØDSELSNUMMER og
     manglet helt i kontonummerlista."""
-    assert "12345678910" in finn_alle_kontonummer(REFUSJON)
-    assert "12345678910" not in finn_alle_fodselsnummer(REFUSJON)
+    assert DOBBELTGYLDIG in finn_alle_kontonummer(REFUSJON)
+    assert DOBBELTGYLDIG not in finn_alle_fodselsnummer(REFUSJON)
 
 
 def test_umerket_dobbeltgyldig_beholder_fnr_presedens():
     """Uten etikett i nærheten: fnr vinner som før — ingen stille
     endring av etablert presedens."""
-    tekst = "verdien 12345678910 står her uten etikett"
-    assert "12345678910" in finn_alle_fodselsnummer(tekst)
+    tekst = f"verdien {DOBBELTGYLDIG} står her uten etikett"
+    assert DOBBELTGYLDIG in finn_alle_fodselsnummer(tekst)
     assert finn_alle_kontonummer(tekst) == []
 
 
 def test_ekte_fnr_med_etikett_uendret():
-    tekst = "Foedselsnummer: 12345678910"
-    assert finn_alle_fodselsnummer(tekst) == ["12345678910"]
+    fnr = lag_fnr()
+    tekst = f"Foedselsnummer: {fnr}"
+    assert finn_alle_fodselsnummer(tekst) == [fnr]
     assert finn_alle_kontonummer(tekst) == []
 
 

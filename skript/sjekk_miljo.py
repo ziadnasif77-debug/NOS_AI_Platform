@@ -4,9 +4,10 @@ på plass. Kjøres på serveren etter installasjon (og når som helst).
 
 Sjekker, i rekkefølge: Python-versjon, alle kritiske importer, GPU/CUDA,
 system-DLL-er (pyzbar/zbar), EasyOCR-modeller, Borealis-modellfiler, en
-LITEN ekte kjøring (uttrekk fra en tekst), og til slutt PORTABILITET
-(nav-lokal tolk, buntet msvcp140.dll, ingen sti-lekkasje til C). Skriver en
-klar OK/FEIL-rapport — ingenting antas, alt bekreftes.
+LITEN ekte kjøring (uttrekk fra en tekst), PORTABILITET (nav-lokal tolk,
+buntet msvcp140.dll, ingen sti-lekkasje til C) og til slutt REGLENE i
+regler/ (uten dem nekter serveren å starte). Skriver en klar
+OK/FEIL-rapport — ingenting antas, alt bekreftes.
 
 Bruk (fra prosjektroten):
     python skript/sjekk_miljo.py
@@ -141,6 +142,46 @@ def sjekk_ekte_kjoring():
         feil(f"deterministisk uttrekk feilet: {exc}")
 
 
+def sjekk_regler():
+    """Regelfilene i regler/ er ikke pynt: uten prompter.md vet ikke
+    modellen hvilke regler den skal følge, og serveren nekter å starte
+    (med vilje — et svar uten reglene er et feil svar i stillhet). En
+    ufullstendig kopi skal oppdages HER, ikke ved første spørsmål."""
+    print("\n[9] Regler (regler/)")
+    try:
+        sys.path.insert(0, str(ROT))
+        from delt import prompter
+    except Exception as exc:
+        feil(f"kunne ikke laste regelmodulen: {exc}")
+        return
+    try:
+        blokker = prompter.blokknavn()
+        ok(f"prompter.md lest: {len(blokker)} promptblokker, "
+           f"versjon {prompter.versjon()}")
+    except Exception as exc:
+        feil(f"regler/prompter.md mangler eller er ødelagt: {exc} "
+             f"(kopierte du HELE mappa?)")
+        return
+    # Blokkene serveren faktisk slår opp — mangler én, feiler det
+    # midt i en forespørsel i stedet for her
+    for navn in ("spor.dokumentsporsmal", "spor.uten_dokument",
+                 "korriger.forste_pass", "korriger.selvkontroll",
+                 "fyll_skjema.mal"):
+        if navn not in blokker:
+            feil(f"promptblokken «{navn}» mangler i regler/prompter.md")
+    # Brukerfilene er valgfrie — mangler de, kjører systemet videre
+    # uten dem, og da skal det SIES, ikke antas
+    for navn in ("egne_regler.txt", "egne_etiketter.txt"):
+        sti = Path(prompter.regelfil(navn))
+        if not sti.exists():
+            adv(f"{navn} finnes ikke — ingen egne regler er aktive")
+        elif sti.parent.name != "regler":
+            adv(f"{navn} ligger i {sti.parent} og ikke i regler/ — "
+                f"flytt den, ellers er reglene spredt igjen")
+        else:
+            ok(f"regler/{navn} på plass")
+
+
 def sjekk_portabilitet():
     """Bekrefter at KOPIEN kjører fra seg selv (nav-lokal), ikke lener seg på
     C:/gammel maskin. Fanger de vanligste flytte-feilene på en fersk server."""
@@ -199,6 +240,7 @@ def main():
     sjekk_borealis()
     sjekk_ekte_kjoring()
     sjekk_portabilitet()
+    sjekk_regler()
     print("\n" + "=" * 60)
     if _feil:
         print(f"  RESULTAT: {len(_feil)} FEIL, {len(_advarsel)} advarsler")

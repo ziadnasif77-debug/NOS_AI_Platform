@@ -9,7 +9,15 @@ på ID-en — så oppdateres koden tilsvarende.
   eller regelfil; endring krever kodeendring.
 - **PROMPT** — instruks til språkmodellen (Borealis). Sterk styring,
   men ikke en garanti alene — derfor står KODE-vakter bak de viktigste.
-- **BRUKER** — kan endres av dere selv i `egne_regler.txt` uten omstart.
+  Selve ordlyden står i [`regler/prompter.md`](../regler/prompter.md) —
+  ingen prompttekst ligger i koden.
+- **BRUKER** — kan endres av dere selv i `regler/egne_regler.txt` uten
+  omstart.
+
+> Dette dokumentet forklarer HVA reglene er og hvorfor. Skal du ENDRE en
+> PROMPT- eller BRUKER-regel, gjør du det i `regler/` — se
+> [`regler/LES_MEG.md`](../regler/LES_MEG.md). KODE-regler krever
+> kodeendring, med vilje.
 
 ---
 
@@ -24,16 +32,16 @@ på ID-en — så oppdateres koden tilsvarende.
 | R5 | Svar skal være korte og presise. | PROMPT |
 | R6 | Generering er deterministisk (ingen tilfeldighet): samme dokument + samme spørsmål = samme svar, hver gang. | KODE |
 | R7 | Ved OCR-lest tekst får modellen tolke ÅPENBARE feillesninger ut fra sammenhengen (f.eks. «15 OOO» forstås som 15 000) — men aldri dikte innhold. | PROMPT |
-| R8 | Egne regler fra `egne_regler.txt` gjelder kun stil/format på svar. Leses per forespørsel — endringer virker uten omstart. | BRUKER |
+| R8 | Egne regler fra `regler/egne_regler.txt` gjelder kun stil/format på svar. Leses per forespørsel — endringer virker uten omstart. | BRUKER |
 | R8.1 | Vern av regelfilen (kode, ikke løfte): linjer som matcher overstyrings-/regnemønstre avvises og logges; maks 20 regler à 200 tegn; brukerregler plasseres FØR kjernereglene i prompten så kjernereglene får siste ord. Dette er skadebegrensning — den harde garantien mot talljuks er R3. | KODE |
 | R36 | Flersidige dokumenter merkes per side i teksten (`[Side i av n]`) — i alle løp (tekstlag, OCR, bakgrunnsjobb) — så modellen og leseren ser sidegrensene. | KODE |
 | R37 | Ved dokumentomfattende spørsmål («alle sider», totaloversikt) instrueres modellen om å gå gjennom ALLE sidene og ta med alle treff — ikke bare det siste. | PROMPT |
 | R41 | Skrivefeil i SPØRSMÅLET tolkes velvillig: prompten ber om velvillig tolkning, og gir svaret «Finnes ikke», retter koden tastefeilene i spørsmålet (minst mulig endring) og prøver én gang til — tolkningen deklareres i `tolket_sporsmal`. Toleransen gjelder kun spørsmålet — fakta fra dokumentet gjengis fortsatt strengt (R2/R3/R4 uendret). | PROMPT + KODE |
 | R42 | Svar avkortes aldri stille: maks svarlengde er en ressursgrense (`MAKS_SVAR_TOKENS`, standard 1024 — korte svar stopper naturlig uansett). Treffer et svar taket, flagges det eksplisitt (`svar_avkortet: true` + advarsel). | KODE |
 | R43 | Verbatim-forespørsler («hele teksten», «hele dokumentet», «alt innhold») besvares av KODEN med den uavkortede dokumentteksten (`kilde: deterministisk_fulltekst`) — aldri av modellen. En språkmodell som skriver av kan hoppe over linjer; koden kan ikke. | KODE |
-| R44 | Strukturert totaluttrekk (`POST /uttrekk`): komplett JSON-skjema der ALLE nøkler alltid er til stede (tomt = ""/[]), beløp er tall, datoer er normaliserte, og alle identifikatorer med sjekksum valideres matematisk: fødselsnummer og kontonummer (mod11), organisasjonsnummer (mod11), KID (mod10/mod11). Sifferkandidater finnes uansett gruppering («180527 422 30» = «12345678910»). Deterministisk — ingen modell involvert. | KODE |
+| R44 | Strukturert totaluttrekk (`POST /uttrekk`): komplett JSON-skjema der ALLE nøkler alltid er til stede (tomt = ""/[]), beløp er tall, datoer er normaliserte, og alle identifikatorer med sjekksum valideres matematisk: fødselsnummer og kontonummer (mod11), organisasjonsnummer (mod11), KID (mod10/mod11). Sifferkandidater finnes uansett gruppering («123456 789 10» = «12345678910»). Deterministisk — ingen modell involvert. | KODE |
 | R45 | Skjemautfylling mot brukerens egen JSON-mal (`POST /fyll_skjema`): modellen fyller, koden validerer — struktur-lås, tallvakt per felt, feltnavndrevne typesjekker (beløp/orgnr/telefon) og aritmetisk konsistens (enhetspris×antall−rabatt=sum). Alle inngrep rapporteres i `avvik` — ingen stille tømming. | KODE |
-| R46 | Nye ord for nye dokumenttyper krever ALDRI kodeendring: dato-etiketter kan legges til i `egne_etiketter.txt` («ord = type», virker umiddelbart, sjekkes før de innebygde). Ukjente etiketter gir fortsatt ærlig «ukjent» — aldri gjetting. | BRUKER |
+| R46 | Nye ord for nye dokumenttyper krever ALDRI kodeendring: dato-etiketter kan legges til i `regler/egne_etiketter.txt` («ord = type», virker umiddelbart, sjekkes før de innebygde). Ukjente etiketter gir fortsatt ærlig «ukjent» — aldri gjetting. | BRUKER |
 | R47 | Fil sendt UTEN spørsmål (`/spor` uten/med tomt `sporsmal`-felt) → svaret er hele den utleste teksten, ORDRETT og deterministisk (aldri modell) — uten tillegg eller utelatelser. Fil MED tekst → bestillingen utføres. | KODE |
 | R48 | Eksklusjoner i spørsmålet («uten adresse/telefon/epost/dato/fødselsnummer/tall») håndheves av KODE: svaret sjekkes med de deterministiske detektorene; ved brudd én streng ny runde, deretter ærlig varsling i advarsel. Små modeller er svake på negasjoner — derfor kode, ikke tillit. | KODE |
 | R49 | Ber du om en JSON-mal, er `svar`-feltet NØYAKTIG den utfylte malen — ren, parsebar JSON uten påheng. Malens nøkler låses (ingen ekstra felter fra modellen), og eventuelle kodeinngrep ligger separat i `avvik`, aldri limt på JSON-en. Du får nøyaktig det du ba om, ikke mer. | KODE |
