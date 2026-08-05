@@ -100,51 +100,71 @@ uten at du ber om dem. Alt er deterministisk — ingen modell er
 involvert, og et felt som ikke kan fastslås er `null` med en
 begrunnelse ved siden av.
 
+Formen er SEKSJONERT og fast: hver seksjon og hvert felt er alltid til
+stede. Tomt er `null` eller `[]` — aldri en manglende nøkkel. Endres
+formen senere, går `skjemaversjon` opp, så du ser det på tallet i
+stedet for når noe brekker. Se
+[dokumentprofil_skjema.md](dokumentprofil_skjema.md) for begrunnelsen.
+
 ```json
 {
-  "antall_sider": 12,
+  "skjemaversjon": "1.0",
 
-  "koder": {
-    "lest": true,
-    "qr": [{"side": 1, "verdi": "https://…", "type": "QRCODE"}],
-    "strekkode": [{"side": 3, "verdi": "9912345", "type": "CODE128"}],
-    "qr_kode_side": 1,
-    "strekkode_side": 3
-  },
+  "fil":   {"filnavn": "vedtak.pdf", "antall_sider": 12,
+            "blanke_sider": [7], "uleselige_sider": null},
 
-  "dokumentdato": "2024-05-17",
-  "dokumentdato_norsk": "17.05.2024",
-  "dokumentdato_kilde": "etikett",
-  "dokumentdato_konfidens": "hoy",
-  "dokumentdato_begrunnelse": "etiketten «Vedtaksdato» står rett før datoen",
-  "dokumentdato_side": 1,
+  "eier":  {"navn": "Ola Nordmann", "fnr": "12345678910",
+            "fodselsdato": "1990-01-01", "sikkerhet": "merket",
+            "begrunnelse": "Fødselsnummeret står under «Dokumentet gjelder» …"},
 
-  "dokumentdato_fra": "2023-01-01",
-  "dokumentdato_til": "2023-12-31",
-
-  "dokumentspenn_fra": null,
-  "dokumentspenn_til": null,
-  "flere_dokumenter": false,
-
-  "dokument_ar": 2024,
-  "dokument_alder": {"dager": 810, "aar": 2, "tekst": "2 år og 2 måneder gammelt", "fremtidig": false},
-
-  "stempel_datoer": [
-    {"dato": "2024-05-20", "dato_norsk": "20.05.2024", "type": "mottatt", "side": 2, "rolle": "behandling"}
+  "andre_personer": [
+    {"fnr": "<saksbehandlerens nr>", "rolle": "annen",
+     "etikett": "Saksbehandler", "navn": "Kari Hansen"}
   ],
 
-  "dokument_eier": {
-    "navn": "Ola Nordmann",
-    "fnr": "12345678910",
-    "sikkerhet": "merket",
-    "begrunnelse": "Fødselsnummeret står under «Dokumentet gjelder», som peker på personen dokumentet gjelder.",
-    "andre_fodselsnummer": [
-      {"fnr": "<saksbehandlerens nr>", "rolle": "annen", "etikett": "Saksbehandler", "navn": "Kari Hansen"}
-    ]
+  "dokument": {
+    "type": "vedtak", "tittel": "Vedtak om dagpenger", "sprak": "norsk",
+    "kontornavn": "NAV Arbeid", "fylke": "Oslo",
+    "dato": "2026-05-08", "dato_norsk": "08.05.2026", "ar": 2026,
+    "alder": {"dager": 89, "tekst": "2 måneder gammelt", "fremtidig": false},
+    "dato_kilde": "etikett", "dato_sikkerhet": "hoy",
+    "dato_begrunnelse": "etiketten «Vedtaksdato» står rett før datoen",
+    "dato_side": 1,
+    "periode_start": "2025-01-01", "periode_slutt": "2025-12-31",
+    "spenn_fra": null, "spenn_til": null, "flere_dokumenter": false
   },
 
-  "ytelse": null,
-  "ytelse_status": "ikke_implementert"
+  "sak":   {"saksnummer": "4417820", "journalnummer": "2026001234",
+            "vedtaksnummer": "55/9911", "dokumentnummer": null,
+            "referanse": null, "sakstype": null},
+
+  "ytelse": {"navn": "dagpenger", "type": null, "utfall": null,
+             "gyldig_fra": null, "gyldig_til": null,
+             "status": "delvis_implementert"},
+
+  "okonomi": {"dagsats": 1234.00, "manedsbelop": 24680.00,
+              "utbetalt_belop": null, "tilbakebetalingsbelop": null,
+              "utbetalingsdato": null, "valuta": "NOK",
+              "kontonummer": [], "kid": []},
+
+  "arbeid": {"arbeidsgiver": "Rema 1000 AS", "stilling": "Butikkmedarbeider",
+             "stillingsprosent": 80, "startdato": null, "sluttdato": null,
+             "arsinntekt": null, "manedslonn": null,
+             "organisasjonsnummer": ["923609016"]},
+
+  "kontakt": {"telefoner": ["22222222"], "eposter": ["ola@example.no"],
+              "adresser": [{"gate": "Storgata 12", "postnummer": "0181",
+                            "poststed": "OSLO"}]},
+
+  "koder": {"lest": true,
+            "qr": [{"side": 1, "verdi": "https://…", "type": "QRCODE"}],
+            "strekkode": [{"side": 3, "verdi": "9912345", "type": "CODE128"}],
+            "qr_kode_side": 1, "strekkode_side": 3},
+
+  "visuelt": {"stempel_datoer": [{"dato": "2026-05-20", "side": 2,
+                                  "type": "mottatt", "rolle": "behandling"}],
+              "stempel_sider": [2], "signatur_sider": null,
+              "handskrift_funnet": false}
 }
 ```
 
@@ -152,9 +172,22 @@ begrunnelse ved siden av.
 
 | Felt | Betydning |
 |------|-----------|
-| `dokumentdato` | Da dokumentet ble skrevet, fattet, signert, utstedt |
-| `dokumentdato_fra`/`_til` | Perioden dokumentet GJELDER FOR («dagpenger for perioden …») |
-| `dokumentspenn_fra`/`_til` | Datospennet når filen er en BUNKE av flere daterte dokumenter |
+| `dokument.dato` | Da dokumentet ble skrevet, fattet, signert, utstedt |
+| `dokument.periode_start`/`_slutt` | Perioden dokumentet GJELDER FOR («dagpenger for perioden …») |
+| `dokument.spenn_fra`/`_til` | Datospennet når filen er en BUNKE av flere daterte dokumenter |
+
+**Saks-, økonomi- og arbeidsfelter krever en etikett (R71).** De hentes
+bare når ordet står i dokumentet — et tall uten etikett blir aldri et
+vedtaksnummer, og et beløp uten etikett blir aldri en dagsats.
+Etiketten må stå hel (`stilling` treffer ikke inne i
+`Stillingsprosent`), men bøyning godtas (`Dagsatsen er kr 1 234`), og
+æøå leses som `å`/`aa`/`a`.
+
+**Felter merket `null` som ikke betyr «ingenting»:**
+`fil.uleselige_sider` og `visuelt.signatur_sider` er `null` fordi de
+krever analyse vi ikke har bygget ennå — ikke fordi dokumentet mangler
+dem. `fil.blanke_sider` er `null` når teksten ikke har sidemarkører, og
+en liste når den har.
 
 En dato som bare NEVNES i teksten — en frist, en fødselsdato — blir
 aldri dokumentdato. Finnes ingen dato som kan knyttes til dokumentet

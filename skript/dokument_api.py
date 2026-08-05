@@ -2384,78 +2384,177 @@ def _skjemaer() -> dict:
             "description": (
                 "R66: obligatoriske metadata om dokumentet SELV. Følger "
                 "ALLTID med i svaret fra POST /dokument — i begge "
-                "kontraktene, uansett hva klienten ba om. Alt er "
-                "deterministisk (ingen modell); et felt som ikke kan "
-                "fastslås er null med en begrunnelse ved siden av, aldri "
-                "en gjetning."),
+                "kontraktene, uansett hva klienten ba om. Seksjonene og "
+                "feltene er FASTE: tomt er null eller [], aldri en "
+                "manglende nøkkel. Alt er deterministisk (ingen modell); "
+                "et felt som ikke kan fastslås er null med en begrunnelse "
+                "ved siden av, aldri en gjetning. Se "
+                "docs/dokumentprofil_skjema.md."),
             "properties": {
-                "antall_sider": {"type": "integer", "nullable": True,
-                                 "example": 12},
+                "skjemaversjon": s(
+                    example="1.0",
+                    description="Profilens EGEN versjon. Endres formen, går "
+                                "dette tallet opp — en klient skal se det på "
+                                "tallet, ikke når noe brekker"),
+                "fil": {
+                    "type": "object",
+                    "description": "Filen som ble lest. antall_sider er "
+                                   "FILENS sider, ikke sidene med tekst. "
+                                   "blanke_sider/uleselige_sider er null når "
+                                   "vi ikke har grunnlag for å svare — ikke "
+                                   "det samme som «ingen»",
+                    "properties": {
+                        "filnavn": s(nullable=True),
+                        "antall_sider": {"type": "integer", "nullable": True,
+                                         "example": 12},
+                        "blanke_sider": {"type": "array", "nullable": True,
+                                         "items": {"type": "integer"}},
+                        "uleselige_sider": {"type": "array", "nullable": True,
+                                            "items": {"type": "integer"}}}},
+                "eier": {
+                    "type": "object",
+                    "description": (
+                        "R69: personen dokumentet GJELDER — ikke "
+                        "saksbehandler, lege, arbeidsgiver eller "
+                        "kopimottaker. Uten et positivt eiersignal er fnr "
+                        "null, og «sikkerhet» sier hvorfor"),
+                    "properties": {
+                        "navn": s(nullable=True, example="Ola Nordmann"),
+                        "fnr": s(nullable=True),
+                        "fodselsdato": s(nullable=True,
+                                         description="Avledet av et BEVIST "
+                                                     "fødselsnummer"),
+                        "sikkerhet": s(example="merket",
+                                       enum=["merket", "flertydig",
+                                             "bare_andre_roller", "umerket",
+                                             "ingen"]),
+                        "begrunnelse": s()}},
+                "andre_personer": {
+                    "type": "array", "items": {"type": "object"},
+                    "description": "Alle ANDRE fødselsnummer i dokumentet, "
+                                   "med rolle og etikett. Eierens gjentas "
+                                   "aldri her"},
+                "dokument": {
+                    "type": "object",
+                    "description": (
+                        "R67: «dato» er dokumentets EGEN dato — aldri en "
+                        "dato som bare nevnes i teksten. «periode_start/"
+                        "slutt» er hva dokumentet GJELDER FOR; «spenn_fra/"
+                        "til» er datospennet når filen er en BUNKE. De tre "
+                        "er ulike ting"),
+                    "properties": {
+                        "type": s(nullable=True, example="vedtak"),
+                        "tittel": s(nullable=True),
+                        "sprak": s(nullable=True),
+                        "kontornavn": s(nullable=True),
+                        "fylke": s(nullable=True),
+                        "dato": s(nullable=True, example="2026-05-08"),
+                        "dato_norsk": s(nullable=True, example="08.05.2026"),
+                        "ar": {"type": "integer", "nullable": True,
+                               "example": 2026},
+                        "alder": {"type": "object", "nullable": True},
+                        "dato_kilde": s(nullable=True),
+                        "dato_sikkerhet": s(example="hoy"),
+                        "dato_begrunnelse": s(nullable=True),
+                        "dato_side": {"type": "integer", "nullable": True},
+                        "periode_start": s(nullable=True,
+                                           example="2025-01-01"),
+                        "periode_slutt": s(nullable=True,
+                                           example="2025-12-31"),
+                        "spenn_fra": s(nullable=True),
+                        "spenn_til": s(nullable=True),
+                        "flere_dokumenter": b()}},
+                "sak": {
+                    "type": "object",
+                    "description": "R71: hentes bare når etiketten står i "
+                                   "dokumentet",
+                    "properties": {
+                        "saksnummer": s(nullable=True),
+                        "journalnummer": s(nullable=True),
+                        "vedtaksnummer": s(nullable=True),
+                        "dokumentnummer": s(nullable=True),
+                        "referanse": s(nullable=True),
+                        "sakstype": s(nullable=True,
+                                      description="Kommer sammen med "
+                                                  "ytelsesreglene")}},
+                "ytelse": {
+                    "type": "object",
+                    "description": "Ytelsesreglene kommer senere. «navn» "
+                                   "hentes av den ene detektoren som finnes, "
+                                   "«status» sier hvor langt vi er kommet",
+                    "properties": {
+                        "navn": s(nullable=True, example="dagpenger"),
+                        "type": s(nullable=True),
+                        "utfall": s(nullable=True,
+                                    description="innvilget/avslatt/endret/"
+                                                "stanset — ikke implementert"),
+                        "gyldig_fra": s(nullable=True),
+                        "gyldig_til": s(nullable=True),
+                        "status": s(example="delvis_implementert")}},
+                "okonomi": {
+                    "type": "object",
+                    "description": "R71: beløp uten etikett blir aldri en "
+                                   "dagsats",
+                    "properties": {
+                        "dagsats": {"type": "number", "nullable": True},
+                        "manedsbelop": {"type": "number", "nullable": True},
+                        "utbetalt_belop": {"type": "number", "nullable": True},
+                        "tilbakebetalingsbelop": {"type": "number",
+                                                  "nullable": True},
+                        "utbetalingsdato": s(nullable=True),
+                        "valuta": s(example="NOK"),
+                        "kontonummer": {"type": "array", "items": s()},
+                        "kid": {"type": "array", "items": s()}}},
+                "arbeid": {
+                    "type": "object",
+                    "properties": {
+                        "arbeidsgiver": s(nullable=True),
+                        "stilling": s(nullable=True),
+                        "stillingsprosent": {"type": "integer",
+                                             "nullable": True, "example": 80},
+                        "startdato": s(nullable=True),
+                        "sluttdato": s(nullable=True),
+                        "arsinntekt": {"type": "number", "nullable": True},
+                        "manedslonn": {"type": "number", "nullable": True},
+                        "organisasjonsnummer": {"type": "array",
+                                                "items": s()}}},
+                "kontakt": {
+                    "type": "object",
+                    "properties": {
+                        "telefoner": {"type": "array", "items": s()},
+                        "eposter": {"type": "array", "items": s()},
+                        "adresser": {"type": "array",
+                                     "items": {"type": "object"}}}},
                 "koder": {
                     "type": "object",
                     "description": "QR-koder og strekkoder med sidetall. "
                                    "lest=false ⇒ skanningen var AV, og null "
-                                   "betyr «ikke sett etter», ikke «finnes ikke»",
+                                   "betyr «ikke sett etter», ikke «finnes "
+                                   "ikke»",
                     "properties": {
                         "lest": b(),
                         "qr": {"type": "array", "items": {"type": "object"}},
-                        "strekkode": {"type": "array", "items": {"type": "object"}},
+                        "strekkode": {"type": "array",
+                                      "items": {"type": "object"}},
                         "qr_kode_side": {"type": "integer", "nullable": True,
                                          "example": 1},
                         "strekkode_side": {"type": "integer", "nullable": True,
                                            "example": 3},
                         "merknad": s(nullable=True)}},
-                "dokumentdato": s(nullable=True, example="2024-05-17",
-                                  description="ISO. Dokumentets EGEN dato "
-                                              "(R67) — aldri en dato som bare "
-                                              "nevnes i teksten"),
-                "dokumentdato_norsk": s(nullable=True, example="17.05.2024"),
-                "dokumentdato_kilde": s(nullable=True),
-                "dokumentdato_konfidens": s(example="hoy"),
-                "dokumentdato_begrunnelse": s(nullable=True),
-                "dokumentdato_side": {"type": "integer", "nullable": True},
-                "dokumentdato_fra": s(nullable=True, example="2023-01-01",
-                                      description="Perioden dokumentet GJELDER "
-                                                  "FOR — ikke dokumentdatoen"),
-                "dokumentdato_til": s(nullable=True, example="2023-12-31"),
-                "dokumentspenn_fra": s(nullable=True,
-                                       description="Datospenn når filen er en "
-                                                   "BUNKE daterte dokumenter"),
-                "dokumentspenn_til": s(nullable=True),
-                "flere_dokumenter": b(),
-                "dokument_ar": {"type": "integer", "nullable": True,
-                                "example": 2024},
-                "dokument_alder": {"type": "object", "nullable": True},
-                "stempel_datoer": {
-                    "type": "array", "items": {"type": "object"},
-                    "description": "R68: mottatt/arkivert/stemplet. Blir "
-                                   "ALDRI dokumentdato av seg selv"},
-                "dokument_eier": {
+                "visuelt": {
                     "type": "object",
-                    "description": (
-                        "R69: fødselsnummeret til personen dokumentet "
-                        "GJELDER — ikke saksbehandler, lege, arbeidsgiver "
-                        "eller kopimottaker. Uten et positivt eiersignal er "
-                        "fnr null; «sikkerhet» sier hvorfor. De ØVRIGE "
-                        "numrene ligger i «andre_fodselsnummer» — atskilt, "
-                        "aldri sammenblandet med eierens"),
+                    "description": "R68: stempeldatoer blir ALDRI "
+                                   "dokumentdato av seg selv. signatur_sider "
+                                   "er null fordi analysen ikke er bygget "
+                                   "ennå — ikke fordi det mangler signatur",
                     "properties": {
-                        "navn": s(nullable=True, example="Ola Nordmann"),
-                        "fnr": s(nullable=True),
-                        "sikkerhet": s(example="merket",
-                                       enum=["merket", "flertydig",
-                                             "bare_andre_roller", "umerket",
-                                             "ingen"]),
-                        "begrunnelse": s(),
-                        "andre_fodselsnummer": {
-                            "type": "array", "items": {"type": "object"},
-                            "description": "Alle ANDRE fødselsnummer i "
-                                           "dokumentet, med rolle og "
-                                           "etikett. Eierens gjentas aldri "
-                                           "her"}}},
-                "ytelse": s(nullable=True,
-                            description="Plassholder — reglene kommer senere"),
-                "ytelse_status": s(example="ikke_implementert")}},
+                        "stempel_datoer": {"type": "array",
+                                           "items": {"type": "object"}},
+                        "stempel_sider": {"type": "array",
+                                          "items": {"type": "integer"}},
+                        "signatur_sider": {"type": "array", "nullable": True,
+                                           "items": {"type": "integer"}},
+                        "handskrift_funnet": b()}}}},
         "DokumentSvar": {
             "type": "object",
             "description": "Svaret fra POST /dokument. Deler du ikke ba om "
@@ -4036,7 +4135,8 @@ class Handler(BaseHTTPRequestHandler):
                                ocr_motorer=ocr_motorer, fra_cache=fra_cache,
                                sider_regioner=sider_regioner,
                                antall_sider=antall_sider,
-                               strekkoder_lest=les_strekkoder)
+                               strekkoder_lest=les_strekkoder,
+                               filnavn=filnavn)
         return ktx, advarsler, None
 
     # Vern mot misbruk: en enkelt forespørsel kan ikke be om et ubegrenset
@@ -5678,8 +5778,9 @@ class DokumentKontekst:
     def __init__(self, tekst, ocr_brukt=False, handskrift=None,
                  strekkoder=None, ocr_motorer=None, fra_cache=False,
                  sider_regioner=None, antall_sider=None,
-                 strekkoder_lest=True):
+                 strekkoder_lest=True, filnavn=None):
         self.tekst = tekst or ""
+        self.filnavn = filnavn
         self.ocr_brukt = ocr_brukt
         self.handskrift = handskrift or []
         self.strekkoder = strekkoder or []
@@ -5742,11 +5843,14 @@ class DokumentKontekst:
         if self._profil is None:
             self._profil = bygg_profil(
                 self.tekst,
+                filnavn=self.filnavn,
                 antall_sider=self.antall_sider,
                 strekkoder=self.strekkoder,
                 strekkoder_lest=self.strekkoder_lest,
                 datoer_detaljert=self.datoer_detaljert,
-                dokumentdato=self.dokumentdato)
+                dokumentdato=self.dokumentdato,
+                struktur=self.struktur,
+                handskrift=self.handskrift)
         return self._profil
 
     def er_tom(self):

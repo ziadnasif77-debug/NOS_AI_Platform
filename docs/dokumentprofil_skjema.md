@@ -1,13 +1,17 @@
-# Kanonisk skjema for `/dokument` — forslag
+# Kanonisk skjema for `/dokument`
 
 Formålet med dette dokumentet er å avgjøre FORMEN på svaret fra
 `/dokument` før flere felter legges til. Uten en avgjort form vokser
 svaret felt for felt til det blir stort, usammenhengende og umulig å
 endre uten å bryte klienter.
 
-Status: **forslag, ikke implementert.** Dagens `dokumentprofil` er flat
-(R66) og er én commit gammel — ingen ekstern klient leser den ennå.
-Skal formen endres, er dette øyeblikket.
+Status: **implementert, `skjemaversjon: "1.0"`.** Seksjonsformen i §3
+er den som svares i dag, i begge kontraktene. Feltreferansen ligger i
+[endepunkter.md](endepunkter.md); reglene som håndhever den er
+R66–R73 i [regler_lokal_api.md](regler_lokal_api.md).
+
+Endres formen senere, går `skjemaversjon` opp — en klient skal kunne se
+endringen på tallet, ikke oppdage den når noe brekker.
 
 ---
 
@@ -211,10 +215,11 @@ allerede har to konkurrerende kilder etter én dag.
 
 ---
 
-## 5. To ekte feil funnet under kartleggingen
+## 5. To ekte feil funnet under kartleggingen — RETTET
 
-Begge er eldre enn dette arbeidet, og bør rettes uansett hvilken form
-skjemaet får:
+Begge var eldre enn dette arbeidet. De er rettet (R72/R73) med tester i
+`tester/test_saksfelter.py`; beskrivelsen står igjen fordi den forklarer
+hvorfor reglene ser ut som de gjør:
 
 **a) `struktur.adresser` leser feil.** På et vanlig NAV-brev ble
 resultatet:

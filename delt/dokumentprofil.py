@@ -14,6 +14,7 @@ stole på; et felt med en tilfeldig dato er ikke det.
 """
 import re
 
+from delt.saksfelter import arbeid_felter, okonomi_felter, sak_felter
 from delt.tekstuttrekk import (ROLLE_BEHANDLING, dokumentets_alder,
                                finn_alle_fodselsnummer, rolle_for_type)
 
@@ -331,15 +332,66 @@ def finn_dokument_eier(tekst: str) -> dict:
 #  Selve profilen                                                     #
 # ------------------------------------------------------------------ #
 
-def bygg_profil(tekst, *, antall_sider=None, strekkoder=None,
-                strekkoder_lest=True, datoer_detaljert=None,
-                dokumentdato=None) -> dict:
-    """Setter sammen de obligatoriske metadataene.
+def blanke_sider(tekst: str) -> list | None:
+    """Sidene uten lesbart innhold.
 
-    Alle argumenter er allerede utregnet av kalleren (DokumentKontekst
-    cacher dem), så profilen koster ingen ny lesing av dokumentet."""
+    Sidemarkørene «[Side i av n]» er KODE-genererte (R36), så det som
+    står mellom to markører er alt som ble lest på den siden. Er det
+    tomt, kom det ingenting ut av siden — enten fordi den er blank,
+    eller fordi lesingen mislyktes. Begge deler skal fram: en bunke der
+    side 7 er tom, er noe en saksbehandler må vite om.
+
+    None når teksten ikke har sidemarkører — da VET vi ikke, og «ingen
+    blanke sider» ville vært en påstand vi ikke kan stå for."""
+    if not tekst or not re.search(r"\[Side \d+ av \d+\]", tekst):
+        return None
+    biter = re.split(r"\[Side (\d+) av \d+\]", tekst)
+    tomme = []
+    # split gir [før, nr, innhold, nr, innhold, …]
+    for i in range(1, len(biter) - 1, 2):
+        if not biter[i + 1].strip():
+            tomme.append(int(biter[i]))
+    return tomme
+
+
+def _fodselsdato_av_fnr(fnr):
+    """Fødselsdatoen ligger i de seks første sifrene av et gyldig
+    fødselsnummer. Bare for BEVISTE numre — å regne den ut av et nummer
+    vi ikke har verifisert, ville vært å gjette to ganger."""
+    if not fnr or len(fnr) != 11:
+        return None
+    dag, maaned, aar = int(fnr[:2]), int(fnr[2:4]), int(fnr[4:6])
+    # syntetiske serier: måned +80 (Tenor) eller +40 (D-nummer på dag)
+    if maaned > 80:
+        maaned -= 80
+    elif maaned > 40:
+        maaned -= 40
+    if dag > 40:
+        dag -= 40                      # D-nummer
+    if not (1 <= dag <= 31 and 1 <= maaned <= 12):
+        return None
+    # århundret er ikke entydig av fnr alene; individsifrene avgjør, og
+    # den regelen hører ikke hjemme her. 1900-tallet som utgangspunkt.
+    return f"{1900 + aar:04d}-{maaned:02d}-{dag:02d}"
+
+
+SKJEMAVERSJON = "1.0"
+
+
+def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
+                strekkoder_lest=True, datoer_detaljert=None,
+                dokumentdato=None, struktur=None, handskrift=None) -> dict:
+    """Setter sammen dokumentprofilen — den kanoniske formen (R66).
+
+    Seksjonene er faste og alltid til stede. Alle argumenter er
+    allerede utregnet av kalleren (DokumentKontekst cacher dem), så
+    profilen koster ingen ny lesing av dokumentet."""
     dokumentdato = dokumentdato or {}
     datoer = datoer_detaljert or []
+    struktur = struktur or {}
+    s_dok = struktur.get("dokument") or {}
+    s_ident = struktur.get("identifikatorer") or {}
+    s_kontakt = struktur.get("kontakt") or {}
 
     dato_norsk = dokumentdato.get("dato")
     dato_iso = til_iso(dato_norsk)
@@ -347,40 +399,105 @@ def bygg_profil(tekst, *, antall_sider=None, strekkoder=None,
     # Datospennet i en BUNKE er noe annet enn perioden dokumentet gjelder
     # for — begge kan finnes samtidig, og de skal ikke forveksles
     spenn = dokumentdato.get("periode")
+    eier = finn_dokument_eier(tekst)
+    stempler = stempeldatoer(tekst, datoer)
 
-    profil = {
-        "antall_sider": antall_sider,
+    return {
+        "skjemaversjon": SKJEMAVERSJON,
+
+        "fil": {
+            "filnavn": filnavn,
+            "antall_sider": antall_sider,
+            "blanke_sider": blanke_sider(tekst),
+            # krever OCR-konfidens per side; finnes ikke ennå, og «[]»
+            # ville påstått at vi har sjekket
+            "uleselige_sider": None,
+        },
+
+        "eier": {
+            "navn": eier["navn"],
+            "fnr": eier["fnr"],
+            "fodselsdato": _fodselsdato_av_fnr(eier["fnr"]),
+            "sikkerhet": eier["sikkerhet"],
+            "begrunnelse": eier["begrunnelse"],
+        },
+
+        # ALDRI sammenblandet med eier — se R69
+        "andre_personer": eier["andre_fodselsnummer"],
+
+        "dokument": {
+            "type": s_dok.get("dokumenttype") or None,
+            "tittel": s_dok.get("tittel") or None,
+            "sprak": s_dok.get("sprak") or None,
+            "kontornavn": s_dok.get("kontornavn") or None,
+            "fylke": s_dok.get("fylke") or None,
+
+            "dato": dato_iso,
+            "dato_norsk": dato_norsk,
+            "ar": int(dato_iso[:4]) if dato_iso else None,
+            "alder": dokumentets_alder(dato_norsk) if dato_norsk else None,
+            "dato_kilde": dokumentdato.get("kilde"),
+            "dato_sikkerhet": dokumentdato.get("konfidens") or "ingen",
+            "dato_begrunnelse": dokumentdato.get("begrunnelse"),
+            "dato_side": dokumentdato.get("side"),
+
+            # perioden dokumentet GJELDER FOR (null når det ikke er en periode)
+            "periode_start": til_iso(periode["fra"]) if periode else None,
+            "periode_slutt": til_iso(periode["til"]) if periode else None,
+
+            # datospennet når filen er en BUNKE av flere daterte dokumenter
+            "spenn_fra": til_iso(spenn["fra"]) if spenn else None,
+            "spenn_til": til_iso(spenn["til"]) if spenn else None,
+            "flere_dokumenter": bool(spenn and spenn.get("flere_dokumenter")),
+        },
+
+        "sak": {
+            "saksnummer": s_ident.get("saksnummer") or None,
+            **sak_felter(tekst),
+            # sakstype hører til samme regelverk som ytelse — kommer
+            # sammen med det, ikke gjettet i mellomtiden
+            "sakstype": None,
+        },
+
+        # Ytelsesreglene kommer senere. Navnet hentes fra den ENE
+        # detektoren som finnes (struktur), så profilen og /uttrekk ikke
+        # kan si hver sin ting; resten står tomt til reglene er på plass.
+        "ytelse": {
+            "navn": s_dok.get("ytelse") or None,
+            "type": None,
+            "utfall": None,
+            "gyldig_fra": None,
+            "gyldig_til": None,
+            "status": "delvis_implementert" if s_dok.get("ytelse")
+                      else "ikke_implementert",
+        },
+
+        "okonomi": {
+            **okonomi_felter(tekst),
+            "valuta": "NOK",
+            "kontonummer": s_ident.get("kontonummer") or [],
+            "kid": s_ident.get("kid") or [],
+        },
+
+        "arbeid": {
+            **arbeid_felter(tekst),
+            "organisasjonsnummer": s_ident.get("organisasjonsnummer") or [],
+        },
+
+        "kontakt": {
+            "telefoner": s_kontakt.get("telefoner") or [],
+            "eposter": s_kontakt.get("eposter") or [],
+            "adresser": struktur.get("adresser") or [],
+        },
+
         "koder": koder_med_sider(strekkoder, strekkoder_lest),
 
-        "dokumentdato": dato_iso,
-        "dokumentdato_norsk": dato_norsk,
-        "dokumentdato_kilde": dokumentdato.get("kilde"),
-        "dokumentdato_konfidens": dokumentdato.get("konfidens") or "ingen",
-        "dokumentdato_begrunnelse": dokumentdato.get("begrunnelse"),
-        "dokumentdato_side": dokumentdato.get("side"),
-
-        # perioden dokumentet GJELDER FOR (null når det ikke er en periode)
-        "dokumentdato_fra": til_iso(periode["fra"]) if periode else None,
-        "dokumentdato_til": til_iso(periode["til"]) if periode else None,
-
-        # datospennet når filen er en BUNKE av flere daterte dokumenter
-        "dokumentspenn_fra": til_iso(spenn["fra"]) if spenn else None,
-        "dokumentspenn_til": til_iso(spenn["til"]) if spenn else None,
-        "flere_dokumenter": bool(spenn and spenn.get("flere_dokumenter")),
-
-        "dokument_ar": int(dato_iso[:4]) if dato_iso else None,
-        # dokumentets alder regnes fra dokumentdatoen — «fremtidig» settes
-        # når datoen ligger fram i tid, og da er noe galt som skal fram
-        "dokument_alder": dokumentets_alder(dato_norsk) if dato_norsk else None,
-
-        "stempel_datoer": stempeldatoer(tekst, datoer),
-
-        "dokument_eier": finn_dokument_eier(tekst),
-
-        # Reglene for ytelse kommer senere. Feltet er med fra første dag
-        # så kontrakten ikke må endres når de gjør det — en klient som
-        # leser det nå, får null og vet at det ikke er fastslått.
-        "ytelse": None,
-        "ytelse_status": "ikke_implementert",
+        "visuelt": {
+            "stempel_datoer": stempler,
+            "stempel_sider": sorted({s["side"] for s in stempler if s["side"]}),
+            # krever bildeanalyse av signaturfelt; ikke bygget ennå, og
+            # «[]» ville påstått at vi har sett etter
+            "signatur_sider": None,
+            "handskrift_funnet": bool(handskrift),
+        },
     }
-    return profil

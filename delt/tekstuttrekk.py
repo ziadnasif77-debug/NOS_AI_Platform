@@ -1484,23 +1484,53 @@ def finn_koder_med_kontekst(tekst: str, maks: int = 25) -> list:
     return ut
 
 
+# Selskapsformer som følger et FIRMANAVN, ikke et postnummer. Uten dem
+# ble «Rema 1000 AS» lest som postnummer 1000 i poststedet AS.
+_SELSKAPSFORM = {"AS", "ASA", "ANS", "DA", "BA", "SA", "NUF", "AB", "KS"}
+
+# En gateadresse: ord, så husnummer til slutt («Storgata 12», «Storgata
+# 12B», «Postboks 123»). Kolon utelukker den — «Fnr: 12345678910» og
+# «Telefon: 22 22 22 22» er merkede felter, ikke adresser.
+_GATEADRESSE = re.compile(
+    r"^[A-ZÆØÅa-zæøå][A-Za-zÆØÅæøå.'\- ]{2,40}\s\d{1,4}\s?[A-Za-z]?$")
+
+
 def finn_adresser(tekst: str) -> list:
     """Alle postnummer/poststed-forekomster, med gateadresse fra linjen
-    over når den ligner en gate (bokstaver + husnummer)."""
+    over når den FAKTISK ligner en gate.
+
+    To feller styres unna, begge sett i ekte NAV-brev:
+
+    1) «Rema 1000 AS» er ikke postnummer 1000 i poststed AS. Et norsk
+       postnummer står først på linja eller etter komma — aldri klistret
+       inntil et ord — og et poststed er ikke en selskapsform.
+    2) Linja over postnummeret er ikke automatisk en gate. Uten en
+       formsjekk ble «Fnr: 12345678910» gateadressen til mottakeren,
+       og en klient som fylte et adressefelt fikk et fødselsnummer."""
     ut, sett = [], set()
     for treff in re.finditer(
+        r"(?:(?<=^)|(?<=[,\-–]\s)|(?<=[,\-–]))[ \t]*"
         r"\b(\d{4})[ \t]+([A-ZÆØÅ][a-zæøåA-ZÆØÅ]+"
-        r"(?:[ \t][iI][ \t][A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)?)\b", tekst
+        r"(?:[ \t][iI][ \t][A-ZÆØÅ][a-zæøåA-ZÆØÅ]+)?)\b",
+        tekst, re.MULTILINE
     ):
         postnummer, poststed = treff.group(1), treff.group(2)
+        if poststed.upper() in _SELSKAPSFORM:
+            continue
         linje_start = tekst.rfind("\n", 0, treff.start()) + 1
-        forrige_slutt = linje_start - 1
         gate = ""
-        if forrige_slutt > 0:
-            forrige_start = tekst.rfind("\n", 0, forrige_slutt) + 1
-            forrige = tekst[forrige_start:forrige_slutt].strip()
-            if (len(forrige) <= 60
-                    and re.search(r"[A-Za-zÆØÅæøå]{3,}.*\d", forrige)):
+        # gata kan stå PÅ samme linje, foran postnummeret («Storgata 12,
+        # 0181 OSLO») eller på linja over
+        foran = tekst[linje_start:treff.start()].strip().rstrip(",-–").strip()
+        # «Adresse: Storgata 12, 0181 OSLO» — etiketten foran er ikke en
+        # del av gata, men gata er fortsatt en gate
+        foran = re.sub(r"^[A-Za-zÆØÅæøå ]{0,25}:\s*", "", foran)
+        if _GATEADRESSE.match(foran):
+            gate = foran
+        elif linje_start > 1:
+            forrige_start = tekst.rfind("\n", 0, linje_start - 1) + 1
+            forrige = tekst[forrige_start:linje_start - 1].strip()
+            if _GATEADRESSE.match(forrige):
                 gate = forrige
         nokkel = (gate, postnummer, poststed)
         if nokkel not in sett:
@@ -1524,10 +1554,42 @@ _DOKUMENTTYPER = [
 ]
 
 
+# Tittelen veier tyngre enn brødteksten: den sier hva dokumentet ER.
+# «Vedtak om dagpenger» med et beløp og en forfallsdato lenger nede ble
+# ellers klassifisert som FAKTURA, fordi to svake treff i teksten slo
+# ett sterkt treff i overskriften.
+_TITTELVEKT = 5
+_TITTELLINJER = 2
+
+# «Forfallsdato: 24.06.2026» er et FELT, ikke en tittel. Uten denne
+# utelukkelsen havnet feltlinjene i tittelen, og et vedtaksbrev ble
+# klassifisert som faktura fordi «forfallsdato» sto der.
+_FELTLINJE = re.compile(r"^[\w æøåÆØÅ./-]{2,30}:\s*\S")
+
+
+def _tittelen(tekst: str) -> str:
+    """De første linjene med et TITTEL-preg: ikke tomme, ikke
+    sidemarkører, ikke merkede felter."""
+    linjer = []
+    for linje in (tekst or "").splitlines():
+        linje = linje.strip()
+        if (not linje
+                or re.match(r"^\[Side \d+ av \d+\]$", linje)
+                or _FELTLINJE.match(linje)):
+            continue
+        linjer.append(linje)
+        if len(linjer) >= _TITTELLINJER:
+            break
+    return "\n".join(linjer)
+
+
 def gjett_dokumenttype(tekst: str) -> str:
+    tittel = _tittelen(tekst)
     beste, beste_poeng = "", 0
     for navn, monster in _DOKUMENTTYPER:
-        poeng = len(re.findall(monster, tekst, re.IGNORECASE))
+        i_tekst = len(re.findall(monster, tekst, re.IGNORECASE))
+        i_tittel = len(re.findall(monster, tittel, re.IGNORECASE))
+        poeng = i_tekst + i_tittel * _TITTELVEKT
         if poeng > beste_poeng:
             beste, beste_poeng = navn, poeng
     return beste
