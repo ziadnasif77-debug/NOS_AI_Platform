@@ -39,9 +39,16 @@ def _profil(tekst=AAP_VEDTAK):
 
 def test_begge_ytelsene_kommer_med():
     """Kjernen: et AAP-vedtak viser nesten alltid til sykepengeperioden
-    som tok slutt. Med ett felt forsvant den."""
-    koder = [y["kode"] for y in _profil()["ytelser"]]
-    assert koder == ["arbeidsavklaringspenger", "sykepenger"]
+    som tok slutt. Med ett felt forsvant den.
+
+    Dette dokumentet dekker samtidig BEGGE utfallene av temakodingen
+    (R127): sykepenger har en offisiell kode, arbeidsavklaringspenger
+    har den ikke ennå — og da står termen fylt med koden tom, så det er
+    synlig at ytelsen ble funnet men ikke kunne rutes."""
+    assert _profil()["ytelser"] == [
+        {"kode": None, "term": "Arbeidsavklaringspenger"},
+        {"kode": "SYK", "term": "Sykepenger"},
+    ]
 
 
 def test_rekkefolgen_er_forste_forekomst_ikke_lengde():
@@ -52,10 +59,13 @@ def test_rekkefolgen_er_forste_forekomst_ikke_lengde():
 
 def test_entallsfeltet_ligger_alltid_i_lista():
     """Et speil med samme krav som de øvrige: sier de to feltene ulike
-    ting, er dupliseringen blitt en motsigelse."""
+    ting, er dupliseringen blitt en motsigelse.
+
+    HELE paret sammenlignes, ikke bare koden: temakodene er mange-til-én
+    (uføretrygd og uførepensjon er begge UFO), så en kodesammenligning
+    ville godtatt at entallsfeltet og lista pekte på ulike ytelser."""
     profil = _profil()
-    assert profil["ytelse"]["navn"]["kode"] in [
-        y["kode"] for y in profil["ytelser"]]
+    assert profil["ytelse"]["navn"] in profil["ytelser"]
 
 
 def test_entallsfeltet_er_den_mest_spesifikke_ikke_den_forste():

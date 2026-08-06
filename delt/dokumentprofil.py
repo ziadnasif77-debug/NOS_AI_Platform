@@ -21,7 +21,7 @@ from delt.tekstuttrekk import (DOKUMENTTYPE_TERM, ROLLE_BEHANDLING,
                                finn_alle_fodselsnummer, finn_alle_ytelser,
                                finn_lovhenvisninger, fodselsdato_av_fnr,
                                gjelder_periode as _gjelder_periode,
-                               kodeverk, rolle_for_type)
+                               kodeverk, rolle_for_type, ytelse_kodet)
 
 # ------------------------------------------------------------------ #
 #  Datoer: norsk form ut og inn, ISO i profilen                       #
@@ -881,10 +881,15 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         # «innvilget»/«lopende»/«opphort». Modenheten bor nå i
         # «dekning»; «status» er frigjort til å bety ytelsens status.
         "ytelse": {
-            # Termen sier også når en ytelse er HISTORISK: et vedtak
-            # fra 1994 om «uførepensjon» gjaldt ikke dagens uføretrygd,
-            # som har andre vilkår (R77).
-            "navn": kodeverk(s_dok.get("ytelse") or None, YTELSE_TERM),
+            # KODEN er NAVs offisielle temakode («SYK»), ikke vårt
+            # interne norske ord — det er den andre NAV-systemer og en
+            # RPA-robot kan rute på (R127).
+            "navn": ytelse_kodet(s_dok.get("ytelse") or None),
+            # Det norske ordet, internt. Understrek = ute av svaret
+            # (_profilform fjerner det), men «opphav» trenger det for å
+            # finne siden ordet FAKTISK står på: et søk etter «SYK»
+            # ville enten bommet eller truffet inne i «sykemelding».
+            "_ord": s_dok.get("ytelse") or None,
             "type": None,
             "utfall": None,
             "gyldig_fra": None,
@@ -936,9 +941,11 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     # dokumentet påberoper seg. Det dokumentet FAKTISK viser til ligger
     # i «hjemler». To navn som lignet på hverandre skjulte at det var
     # to ulike spørsmål.
+    # Det NORSKE ordet inn i lovoppslaget, ikke temakoden: kapitlene i
+    # folketrygdloven heter «Sykepenger», og `sok_ytelse("SYK")` ville
+    # truffet både kapittel 8 og 9 — flertydig der ordet er entydig.
     profil["gjeldende_lov"] = _hjemmel(
-        profil["dokument"]["dato"],
-        (profil["ytelse"]["navn"] or {}).get("kode"))
+        profil["dokument"]["dato"], profil["ytelse"]["_ord"])
     for dok in profil["dokumenter"]:
         egen = _hjemmel(dok["dato"])
         dok["lov"] = egen["lov"]
@@ -961,8 +968,19 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             _seksjon[_sti[1]] = _med_forbehold(_seksjon[_sti[1]],
                                                dekning_sider)
 
-    profil["ytelser"] = [kodeverk(navn, YTELSE_TERM)
-                         for navn in finn_alle_ytelser(tekst)]
+    # Temakodene er BEVISST mange-til-én (uføretrygd og uførepensjon er
+    # begge UFO; de tre kapittel 9-ytelsene er alle OMS). Uten avduping
+    # ville et brev som nevner både pleiepenger og omsorgspenger fått
+    # OMS to ganger i lista — samme tema listet opp som om det var to.
+    # Rekkefølgen (første forekomst) beholdes.
+    profil["ytelser"] = []
+    _sett = set()
+    for _navn in finn_alle_ytelser(tekst):
+        _par = ytelse_kodet(_navn)
+        _nokkel = (_par["kode"], _par["term"])
+        if _nokkel not in _sett:
+            _sett.add(_nokkel)
+            profil["ytelser"].append(_par)
 
     # «hjemmel» sier hvilken lov som GJALDT. «hjemler» sier hvilke
     # bestemmelser dokumentet SELV viser til — to ulike spørsmål. Et
@@ -982,9 +1000,11 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         "sider": {"lest": dekning_sider["lest"],
                   "totalt": dekning_sider["totalt"]},
         # NB: «navn» er nå ALLTID et par (R118), så en sannhetstest på
-        # selve objektet er alltid sann. Det er KODEN som avgjør om
-        # ytelsen faktisk ble funnet.
-        "ytelse": ("delvis" if (profil["ytelse"]["navn"] or {}).get("kode")
+        # selve objektet er alltid sann. Og det er ORDET, ikke temakoden,
+        # som avgjør om ytelsen ble funnet: arbeidsavklaringspenger har
+        # ingen temakode hos oss ennå, og «kode: null» der ville meldt
+        # «ikke_evaluert» om en ytelse vi tydelig leste i teksten.
+        "ytelse": ("delvis" if profil["ytelse"]["_ord"]
                    else "ikke_evaluert"),
         "sakstype": "ikke_evaluert",
         "signatur_sider": "ikke_evaluert",

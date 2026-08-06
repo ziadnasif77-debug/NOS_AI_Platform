@@ -280,7 +280,11 @@ stedet for når noe brekker. Se
             "vedtaksnummer": "55/9911", "dokumentnummer": null,
             "referanse": null, "sakstype": null},
 
-  "ytelse": {"navn": {"kode": "dagpenger", "term": "Dagpenger"},
+  // «kode» er NAVs offisielle TEMAKODE — det andre NAV-systemer ruter
+  // på (R127). Mangler koden hos oss ennå, står den som null MED fylt
+  // term: {"kode": null, "term": "Arbeidsavklaringspenger"}. Det er
+  // noe annet enn at begge er null, som betyr «fant ingen ytelse».
+  "ytelse": {"navn": {"kode": "DAG", "term": "Dagpenger"},
              "type": null, "utfall": null,
              "gyldig_fra": null, "gyldig_til": null, "status": null},
 

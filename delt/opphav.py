@@ -303,11 +303,15 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
                 (k or {}).get("side") if isinstance(k, dict) else None)
 
     # --- ytelse og dokumenttype: mønsterregler --------------------------
-    ytelse_kode = ((profil.get("ytelse") or {}).get("navn") or {}).get("kode")
-    if ytelse_kode:
+    # Søket må gå på det NORSKE ORDET vi faktisk fant i teksten, ikke på
+    # temakoden: «SYK» står ingen steder i dokumentet, og et normalisert
+    # søk etter tre bokstaver ville i verste fall truffet inne i
+    # «sykemelding» og pekt på feil side.
+    ytelse_ord = (profil.get("ytelse") or {}).get("_ord")
+    if ytelse_ord:
         kart["/dokumentprofil/ytelse/navn"] = _post(
             "regel", "middels", "Kjent ytelsesnavn funnet i teksten",
-            side(ytelse_kode))
+            side(ytelse_ord))
     if (dokument.get("type") or {}).get("kode"):
         # typen avgjøres av TITTELEN, som per definisjon står først
         kart["/dokumentprofil/dokument/type"] = _post(

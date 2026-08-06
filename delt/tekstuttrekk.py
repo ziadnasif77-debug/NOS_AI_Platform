@@ -15,7 +15,8 @@ import re
 import threading
 from datetime import date, datetime
 
-from delt.konstanter import NORSKE_FYLKER, NORSKE_YTELSER
+from delt.konstanter import (NAV_TEMA, NORSKE_FYLKER, NORSKE_YTELSER,
+                             YTELSE_TEMA, YTELSE_TERM)
 
 # Versjon av det deterministiske regelverket. Bumpes når mønstre/vakter
 # endres, så hvert svar kan spores til reglene som produserte det (§4).
@@ -389,6 +390,41 @@ def kodeverk(kode, tabell) -> dict:
     if kode is None:
         return {"kode": None, "term": None}
     return {"kode": kode, "term": tabell.get(kode, str(kode))}
+
+
+def ytelse_kodet(navn) -> dict:
+    """{kode, term} for en ytelse, der KODEN er NAVs offisielle temakode.
+
+    Ute i svaret skal det stå `{"kode": "SYK", "term": "Sykepenger"}` —
+    ikke vår interne streng «sykepenger». Temakoden er det andre
+    NAV-systemer snakker; en RPA-robot som ruter dokumenter videre kan
+    slå den opp i sitt eget kodeverk, mens et norsk substantiv fra vår
+    tekstgjenkjenning bare er vårt.
+
+    Det norske ordet forsvinner IKKE av den grunn — det brukes fortsatt
+    internt til kapitteloppslaget i `lover.py` (`sok_ytelse("SYK")` ville
+    truffet både kapittel 8 og 9 og vært flertydig) og til å finne siden
+    ordet står på i `opphav`. Koden går ut, ordet blir igjen.
+
+    Tre utfall, og de betyr tre ulike ting:
+
+        {"kode": "SYK", "term": "Sykepenger"}   ytelse funnet og kodet
+        {"kode": None,  "term": "Arbeids…"}     funnet, koden mangler HOS OSS
+        {"kode": None,  "term": None}           ingen ytelse funnet
+
+    Den midterste er ikke en feil: NAVs temakodeliste er levert
+    stykkevis, og en ytelse vi kjenner igjen i teksten kan mangle kode
+    her. Å skjule det bak `term: null` ville sagt at vi ikke fant noe —
+    og en klient som ruter på ytelse ville sluppet dokumentet i gulvet
+    uten å vite at det skjedde (R127)."""
+    if not navn:
+        return {"kode": None, "term": None}
+    tema = YTELSE_TEMA.get(navn)
+    if tema:
+        return {"kode": tema, "term": NAV_TEMA.get(tema, tema)}
+    # Kjent ytelse uten temakode ennå — eller et navn vi ikke har i
+    # kartet i det hele tatt. Begge skal vise seg som en fylt term.
+    return {"kode": None, "term": YTELSE_TERM.get(navn, str(navn))}
 
 
 def rolle_for_type(dtype) -> str:

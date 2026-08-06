@@ -327,8 +327,9 @@ def test_ytelsesnavnet_hentes_men_reglene_er_ikke_paa_plass():
     inn i: når reglene lander, er de riktige verdiene «innvilget»,
     «lopende» og «opphort»."""
     profil = _profil("Vedtak om dagpenger\nDokumentdato: 01.03.2024")
-    assert profil["ytelse"]["navn"] == {"kode": "dagpenger",
-                                        "term": "Dagpenger"}
+    # Koden er NAVs offisielle temakode, ikke vårt interne norske ord:
+    # det er DAG andre NAV-systemer ruter på (R127).
+    assert profil["ytelse"]["navn"] == {"kode": "DAG", "term": "Dagpenger"}
     assert profil["ytelse"]["utfall"] is None
     assert profil["ytelse"]["status"] is None       # frigjort til domenet
     assert profil["dekning"]["ytelse"] == "delvis"

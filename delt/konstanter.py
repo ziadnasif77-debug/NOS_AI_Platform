@@ -147,3 +147,134 @@ YTELSE_TERM = {
     "barnetrygd": "Barnetrygd",
     "kontantstotte": "Kontantstøtte",
 }
+
+# NAVs offisielle TEMAKODER (Joark/Gosys). Dette er språket andre
+# NAV-systemer snakker: en robot som ruter et dokument videre trenger
+# «SYK», ikke vår interne streng «sykepenger».
+#
+# Lista er UFULLSTENDIG — den er levert stykkevis, og flere koder
+# kommer. Derfor er «ingen kode ennå» en normal, dokumentert tilstand
+# her, ikke en feil: da står `kode: null` med `term` fylt (R127).
+#
+# Merk at NAV blander tre ting i samme kodeverk: ytelser (SYK, DAG),
+# prosess/hendelse (MOT Skanning, KTR Kontroll) og rent administrative
+# temaer (GEN Generell, OVR Øvrig). Bare de vi faktisk kan kjenne igjen
+# fra en ytelse i teksten er kartlagt i YTELSE_TEMA nedenfor; resten
+# ligger her for at en term skal finnes den dagen koden kommer inn en
+# annen vei.
+NAV_TEMA = {
+    "AAR": "Aa-registeret",
+    "AGR": "Ajourhold - grunnopplysninger",
+    "AKT": "Aktivitetsplan med dialoger",
+    "ARP": "Arbeidsrådgivning - psykologtester",
+    "ARS": "Arbeidsrådgivning - skjermet",
+    "BAR": "Barnetrygd",
+    "BID": "Bidrag",
+    "BII": "Bidrag innkreving",
+    "BIL": "Bil",
+    "DAG": "Dagpenger",
+    "ENF": "Enslig mor eller far",
+    "ERS": "Erstatning",
+    "EYB": "Barnepensjon",
+    "EYO": "Omstillingsstønad",
+    "FEI": "Feilutbetaling",
+    "FIP": "Fiskerpensjon",
+    "FOR": "Foreldre- og svangerskapspenger",
+    "FOS": "Forsikring",
+    "FRI": "Kompensasjon selvstendig næringsdrivende/frilansere",
+    "FUL": "Fullmakt",
+    "GEN": "Generell",
+    "GRA": "Gravferdsstønad",
+    "GRU": "Grunn- og hjelpestønad",
+    "HEL": "Helsetjenester og ort. hjelpemidler",
+    "HJE": "Hjelpemidler",
+    "IAR": "Inkluderende Arbeidsliv",
+    "IND": "Tiltakspenger",
+    "KLL": "Klage - lønnsgaranti",
+    "KNA": "Kontakt NAV",
+    "KOM": "Kommunale tjenester",
+    "KON": "Kontantstøtte",
+    "KTA": "Kontroll - anmeldelse",
+    "KTR": "Kontroll",
+    "LGA": "Lønnsgaranti",
+    "MED": "Medlemskap",
+    "MOB": "Mobilitetsfremmende stønad",
+    "MOT": "Skanning",
+    "OKO": "Økonomi",
+    "OLJ": "Oljepionerene",
+    "OMS": "Omsorgspenger, pleiepenger og opplæringspenger",
+    "OPA": "Oppfølging - arbeidsgiver",
+    "OPP": "Oppfølging",
+    "OVR": "Øvrig",
+    "PAI": "Innsyn",
+    "PEN": "Pensjon",
+    "PER": "Permittering og masseoppsigelser",
+    "POI": "Innsyn etter personopplysningsloven",
+    "REH": "Rehabiliteringspenger",
+    "REK": "Rekruttering",
+    "RPO": "Retting av personopplysninger",
+    "RVE": "Rettferdsvederlag",
+    "SAA": "Sanksjon - Arbeidsgiver",
+    "SAK": "Sakskostnader",
+    "SAP": "Sanksjon - person",
+    "SER": "Serviceklager",
+    "SIK": "Sikkerhetstiltak",
+    "SUP": "Supplerende stønad",
+    "SYK": "Sykepenger",
+    "SYM": "Sykemeldinger",
+    "TIL": "Tiltak",
+    "TRY": "Trygdeavgift",
+    "TSO": "Tilleggsstønad",
+    "TSR": "Tilleggsstønad - arbeidssøkere",
+    "UFM": "Unntak fra medlemskap",
+    "UFO": "Uføretrygd",
+    "UNG": "Ungdomsprogramytelsen",
+    "VEN": "Ventelønn",
+    "YRA": "Yrkesrettet attføring",
+    "YRK": "Yrkesskade og menerstatning",
+}
+
+# Fra vårt interne ytelsesnavn til NAVs temakode.
+#
+# Kartet er BEVISST mange-til-én der NAV selv slår sammen: «uføretrygd»
+# og «uførepensjon» er begge UFO, og de tre kapittel 9-ytelsene er alle
+# OMS. Det taper ikke informasjon vi trenger — hvilken LOV som gjaldt
+# avgjøres av dokumentDATOEN (R77), ikke av ytelsesnavnet, så et
+# 1994-vedtak om uførepensjon får fortsatt ftrl-1966 som hjemmel.
+#
+# `None` betyr «vi kjenner ytelsen, men har ikke fått den offisielle
+# koden ennå». Det er en helt annen tilstand enn «fant ingen ytelse», og
+# skillet er synlig i svaret: den første gir `{kode: null, term: fylt}`,
+# den andre `{kode: null, term: null}`.
+YTELSE_TEMA = {
+    "dagpenger": "DAG",
+    "grunnstonad": "GRU",
+    "hjelpestonad": "GRU",
+    "gravferdsstonad": "GRA",
+    "sykepenger": "SYK",
+    "omsorgspenger": "OMS",
+    "pleiepenger": "OMS",
+    "opplaeringspenger": "OMS",
+    # Arbeidsavklaringspenger står IKKE i lista vi har fått. Ytelsen
+    # finnes åpenbart (den er kapittel 11 og ligger i klagen på side 9 i
+    # testbunken) — koden mangler bare her ennå.
+    "arbeidsavklaringspenger": None,
+    "tilleggsstonad": "TSO",
+    "uforetrygd": "UFO",
+    "yrkesskadeerstatning": "YRK",
+    "foreldrepenger": "FOR",
+    "svangerskapspenger": "FOR",
+    "engangsstonad": "FOR",
+    "overgangsstonad": "ENF",
+    "gjenlevendepensjon": "EYO",
+    "barnepensjon": "EYB",
+    "alderspensjon": "PEN",
+    # 1966-loven
+    "uforepensjon": "UFO",
+    "etterlattepensjon": "EYO",
+    "attforingspenger": "YRA",
+    "rehabiliteringspenger": "REH",
+    # utenfor folketrygdloven
+    "barnetrygd": "BAR",
+    "kontantstotte": "KON",
+}

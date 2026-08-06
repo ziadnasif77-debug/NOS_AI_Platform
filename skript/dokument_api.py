@@ -2779,12 +2779,23 @@ def _skjemaer() -> dict:
                                    "finnes",
                     "properties": {
                         "navn": {**ref("Kodet"), "nullable": True,
-                                 "description": "Termen sier også når en "
-                                                "ytelse er HISTORISK: et "
-                                                "vedtak fra 1994 om "
-                                                "«uførepensjon» gjaldt ikke "
-                                                "dagens uføretrygd, som har "
-                                                "andre vilkår"},
+                                 "example": {"kode": "SYK",
+                                             "term": "Sykepenger"},
+                                 "description":
+                                     "«kode» er NAVs offisielle TEMAKODE — "
+                                     "den andre NAV-systemer ruter på. "
+                                     "Kartet er mange-til-én der NAV selv "
+                                     "slår sammen (uføretrygd og "
+                                     "uførepensjon er begge «UFO»); hvilken "
+                                     "LOV som gjaldt avgjøres likevel av "
+                                     "dokumentdatoen, ikke av koden, så et "
+                                     "1994-vedtak får fortsatt ftrl-1966. "
+                                     "Temakodelista er UFULLSTENDIG: "
+                                     "«kode: null» MED fylt «term» betyr "
+                                     "at ytelsen ble funnet, men at vi ikke "
+                                     "har koden ennå — noe helt annet enn "
+                                     "at begge er null, som betyr at ingen "
+                                     "ytelse ble funnet"},
                         "type": s(nullable=True),
                         "utfall": s(nullable=True,
                                     description="innvilget/avslatt/endret/"
@@ -2811,7 +2822,9 @@ def _skjemaer() -> dict:
                         "denne lista — men den er ikke nødvendigvis den "
                         "første. Ett navn tapte informasjon: et "
                         "AAP-vedtak viser nesten alltid til "
-                        "sykepengeperioden som tok slutt")},
+                        "sykepengeperioden som tok slutt. Lista er "
+                        "avdupet på TEMAKODE: pleiepenger og "
+                        "omsorgspenger er begge «OMS» og står én gang")},
                 "hjemler": {
                     "type": "array", "items": ref("Hjemmel"),
                     "description": (

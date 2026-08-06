@@ -216,12 +216,23 @@ def test_profil_full_er_uendret_bortsett_fra_interne_felt():
     levert = api._profilform(profil, "full")
     assert "_posisjon" in profil["part"], "det interne feltet skal finnes"
     assert "_posisjon" not in levert["part"], "men ALDRI i svaret"
-    # alt annet er identisk
-    uten = {k: v for k, v in profil["part"].items() if not k.startswith("_")}
-    assert levert["part"] == uten
-    for seksjon in profil:
-        if seksjon != "part":
-            assert levert[seksjon] == profil[seksjon]
+    assert "_ord" in profil["ytelse"], "det norske ytelsesordet er internt"
+    assert "_ord" not in levert["ytelse"], "men ALDRI i svaret"
+
+    # Alt ANNET er identisk. Sammenligningen må gjelde hver seksjon, ikke
+    # bare «part»: testen sto med «part» som eneste unntak, og den dagen
+    # ytelsen fikk sitt eget arbeidsfelt feilet den på en endring som var
+    # helt etter boka. Det er formen som skal voktes — hvilke seksjoner
+    # som HAR interne felt er en detalj som får endre seg.
+    def _uten_interne(node):
+        if isinstance(node, dict):
+            return {k: _uten_interne(v) for k, v in node.items()
+                    if not k.startswith("_")}
+        if isinstance(node, list):
+            return [_uten_interne(v) for v in node]
+        return node
+
+    assert levert == _uten_interne(profil)
 
 
 def test_ingen_interne_felt_lekker_ut():
