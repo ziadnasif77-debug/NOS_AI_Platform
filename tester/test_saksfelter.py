@@ -221,7 +221,7 @@ def test_merket_felt_over_postnummeret_blir_ikke_gateadresse():
     """Linja over postnummeret er ikke automatisk en gate. Uten en
     formsjekk ble «Fnr: …» gateadressen til mottakeren."""
     adresser = finn_adresser("Fnr: 12345678910\n0181 OSLO")
-    assert adresser == [{"gate": "", "postnummer": "0181",
+    assert adresser == [{"gate": None, "postnummer": "0181",
                          "poststed": "OSLO"}]
 
 

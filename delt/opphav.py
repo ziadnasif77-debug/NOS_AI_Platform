@@ -142,6 +142,22 @@ def side_for_verdi(tekst: str, verdi, sidekart=None, strippet=None):
     return side
 
 
+def _side_for_posisjon(pos, merker):
+    """Sidetallet for en KJENT tegnposisjon. Brukes når uttrekket alt
+    vet hvor beviset står — da skal ingen lete etter det på nytt."""
+    if pos is None:
+        return None
+    if not merker:
+        return 1
+    side = merker[0][1] if pos >= merker[0][0] else None
+    for merkepos, nr in merker:
+        if pos >= merkepos:
+            side = nr
+        else:
+            break
+    return side
+
+
 def _post(metode, konfidens, begrunnelse=None, side=None) -> dict:
     """Én oppføring. Feltene er alltid til stede, tomt er `null` — samme
     regel som resten av profilen."""
@@ -181,10 +197,17 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
 
     # --- parten (R69) -------------------------------------------------
     grunnlag = part.get("grunnlag")
+    # Siden der BEVISET står — ikke der nummeret først dukker opp.
+    # Målt på en ekte bunke sa begrunnelsen «under Opplysninger om»
+    # (side 4) mens opphav sa side 1, der det samme nummeret sto
+    # UMERKET. En saksbehandler som slo opp side 1 fant ingen etikett,
+    # og da er hele feltet verdiløst.
     kart["/dokumentprofil/part/fnr"] = _post(
         _PARTMETODE.get(grunnlag, "ingen"),
         _PARTKONFIDENS.get(grunnlag, "ingen"),
-        part.get("begrunnelse"), side(part.get("fnr")))
+        part.get("begrunnelse"),
+        _side_for_posisjon(part.get("_posisjon"), merker)
+        if part.get("_posisjon") is not None else side(part.get("fnr")))
 
     # --- dokumentets egen dato (R80) ----------------------------------
     kart["/dokumentprofil/dokument/dato"] = _post(

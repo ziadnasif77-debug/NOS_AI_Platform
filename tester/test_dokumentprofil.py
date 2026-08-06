@@ -449,7 +449,7 @@ def test_bunken_deles_i_dokumentene_den_bestaar_av():
     dokumenter = profil["dokumenter"]
     assert len(dokumenter) == 3
     assert [d["sider"] for d in dokumenter] == [[1, 2], [3], [4]]
-    assert [d["type"] for d in dokumenter] == ["vedtak", "klage",
+    assert [d["type"]["kode"] for d in dokumenter] == ["vedtak", "klage",
                                                "legeerklaring"]
     assert dokumenter[0]["eier_fnr"] == EIER
 
@@ -474,7 +474,7 @@ def test_et_ukjent_dokument_laaner_ikke_naboens_type():
         "[Side 1 av 2]\nVedtak om dagpenger\nVedtaksdato: 12.05.2026\n"
         "[Side 2 av 2]\nEt ark uten kjent type\nUtstedt: 01.06.2026\n",
         antall_sider=2)["dokumenter"]
-    assert dokumenter[1]["type"] is None
+    assert dokumenter[1]["type"]["kode"] is None
 
 
 def test_skjemaversjonen_folger_med():
@@ -499,3 +499,66 @@ def test_profilen_er_bufret_saa_den_ikke_regnes_to_ganger():
     import dokument_api as api
     ktx = api.DokumentKontekst("Dokumentdato: 17.05.2024", antall_sider=1)
     assert ktx.profil is ktx.profil
+
+
+# ------------------------------------------------------------------ #
+#  Funnet på en EKTE bunke (R124–R126)                                 #
+# ------------------------------------------------------------------ #
+
+def test_navnet_hentes_fra_den_forekomsten_som_HAR_et():
+    """Målt på en ekte tisiders bunke: SAMME fødselsnummer sto merket som
+    eier tre steder — «Opplysninger om» (uten navn ved siden av), «navn»
+    og «Arbeidstaker» (begge med «Ola Nordmann»). Koden tok den FØRSTE,
+    og `part.navn` ble null på et dokument der navnet står seks steder."""
+    tekst = f"""[Side 1 av 2]
+1. Opplysninger om deg
+Etternavn; fornavn NOR-ETTERNAVN, OLA
+Foedselsnummer {EIER}
+[Side 2 av 2]
+Pasientens navn og foedselsnummer:
+Ola Nordmann {EIER}
+"""
+    profil = _profil(tekst, antall_sider=2)
+    assert profil["part"]["fnr"] == EIER
+    assert profil["part"]["navn"] == "Ola Nordmann"
+
+
+def test_opphav_peker_paa_siden_der_BEVISET_staar():
+    """Samme bunke: begrunnelsen sa «står under «Opplysninger om»» —
+    side 4 — mens `opphav.side` sa 1, der det samme nummeret sto UMERKET.
+    En saksbehandler som slo opp side 1 fant ingen etikett, og da er hele
+    feltet verdiløst."""
+    import dokument_api as api
+    from delt.opphav import bygg_opphav
+    tekst = f"""[Side 1 av 2]
+Saksnummer: 4417820 Foedselsnummer: {EIER}
+[Side 2 av 2]
+1. Opplysninger om deg
+Foedselsnummer {EIER}
+"""
+    ktx = api.DokumentKontekst(tekst, antall_sider=2)
+    kart = bygg_opphav(ktx.profil, "alle", ktx.tekst)
+    assert "Opplysninger om" in ktx.profil["part"]["begrunnelse"]
+    assert kart["/dokumentprofil/part/fnr"]["side"] == 2, \
+        "siden må være der ETIKETTEN står, ikke der nummeret først dukker opp"
+
+
+def test_dokumenter_og_dokument_bruker_SAMME_typeform():
+    """`dokumenter[].type` var en bar streng mens `dokument.type` var et
+    {kode, term}-par — samme begrep i to representasjoner (R111), så en
+    klient måtte skrive to kodeveier for det samme."""
+    profil = _profil("[Side 1 av 1]\nVedtak om dagpenger\nDatert 01.03.2024",
+                     antall_sider=1)
+    assert set(profil["dokument"]["type"]) == {"kode", "term"}
+    assert set(profil["dokumenter"][0]["type"]) == {"kode", "term"}
+
+
+def test_adresse_uten_gate_gir_null_ikke_tom_streng():
+    """«Postboks 6600 Etterstad, 0607 OSLO» ga {"gate": ""}. En tom
+    streng ser ut som en verdi; R118 sier at tomt er null. En RPA-robot
+    skrev den inn i et felt og fikk en tom rubrikk i stedet for et hull
+    den kunne oppdage."""
+    profil = _profil("Postboks 6600 Etterstad, 0607 OSLO", antall_sider=1)
+    adresser = profil["kontakt"]["adresser"]
+    assert adresser and adresser[0]["gate"] is None
+    assert adresser[0]["postnummer"] == "0607"

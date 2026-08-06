@@ -6434,7 +6434,23 @@ def _profilform(profil: dict, form: str) -> dict:
 
     `utelatt` navngir hva som er borte, så ingenting forsvinner i
     stillhet (samme løfte som R65 gir for ukjente feltnavn)."""
-    if form != "sammendrag" or not isinstance(profil, dict):
+    # Interne arbeidsfelt (understrek) ut av svaret. De finnes for at
+    # «opphav» skal slippe å lete opp noe uttrekket allerede vet — se
+    # part._posisjon — og de er ikke en del av kontrakten. Fjernes i en
+    # KOPI: originalen står igjen i DokumentKontekst, som «opphav»
+    # leser etterpå. Muterte vi, ville sidetallet blitt borte igjen.
+    def _uten_interne(node):
+        if isinstance(node, dict):
+            return {n: _uten_interne(v) for n, v in node.items()
+                    if not n.startswith("_")}
+        if isinstance(node, list):
+            return [_uten_interne(v) for v in node]
+        return node
+
+    if not isinstance(profil, dict):
+        return profil
+    profil = _uten_interne(profil)
+    if form != "sammendrag":
         return profil
     # «ytelser» og «hjemler» blir med: de sier hva dokumentet HANDLER om
     # og hvilke bestemmelser det viser til — ingen persondata. Utelot vi

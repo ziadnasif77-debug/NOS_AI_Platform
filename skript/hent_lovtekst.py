@@ -9,7 +9,7 @@ Bruk (fra D:\\nav):
     python skript/hent_lovtekst.py <lovdata-url> [utfil]
 
 Eksempel:
-    python skript/hent_lovtekst.py https://lovdata.no/dokument/NLO/lov/1966-06-17-12 "data/lover/Lov om folketrygd.md"
+    python skript/hent_lovtekst.py https://lovdata.no/dokument/NLO/lov/1966-06-17-12 data/lover/folketrygdloven-1966-opphevet.md
 
 Uten utfil brukes data/lover/<lovens tittel>.md. Skriptet venter et
 halvt sekund mellom kapitlene av høflighet mot lovdata.no.

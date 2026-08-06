@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R121 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R126 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med

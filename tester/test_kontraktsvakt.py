@@ -208,9 +208,29 @@ def test_sammendrag_beholder_saksinformasjon_uten_persondata():
     assert "hjemler" not in liten["utelatt"]
 
 
-def test_profil_full_er_uendret():
+def test_profil_full_er_uendret_bortsett_fra_interne_felt():
+    """`profil=full` skal levere alt — men de interne arbeidsfeltene
+    (understrek) er ikke «alt». De finnes for at «opphav» skal slippe å
+    lete opp noe uttrekket allerede vet, og de er ikke i kontrakten."""
     profil = _profil()
-    assert api._profilform(profil, "full") == profil
+    levert = api._profilform(profil, "full")
+    assert "_posisjon" in profil["part"], "det interne feltet skal finnes"
+    assert "_posisjon" not in levert["part"], "men ALDRI i svaret"
+    # alt annet er identisk
+    uten = {k: v for k, v in profil["part"].items() if not k.startswith("_")}
+    assert levert["part"] == uten
+    for seksjon in profil:
+        if seksjon != "part":
+            assert levert[seksjon] == profil[seksjon]
+
+
+def test_ingen_interne_felt_lekker_ut():
+    """Et felt med understrek i svaret ville brutt R118: nøkkelsettet er
+    fast, og et arbeidsfelt hører ikke hjemme i det."""
+    import re as _re
+    levert = api._profilform(_profil(), "full")
+    lekk = _re.findall(r'"(_[a-z_]+)"', json.dumps(levert, ensure_ascii=False))
+    assert not lekk, f"interne felt i svaret: {sorted(set(lekk))}"
 
 
 def test_hver_dokumenttype_har_et_lesbart_navn():

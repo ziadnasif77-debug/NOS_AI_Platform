@@ -316,9 +316,16 @@ def finn_dokument_eier(tekst: str) -> dict:
                 "rolle": rolle,
                 "etikett": (etikett or "").strip() or None,
                 "navn": _navn_ved(tekst, etikett_slutt, start),
+                # Posisjonen der beviset FAKTISK står. Uten den måtte
+                # «opphav» lete opp nummeret på nytt — og fant da første
+                # forekomst, som gjerne er et umerket treff på en helt
+                # annen side enn etiketten begrunnelsen viser til.
+                # Målt på en ekte bunke: begrunnelsen sa «under
+                # Opplysninger om» (side 4), opphav sa side 1.
+                "posisjon": start,
             })
 
-    def svar(navn, fnr, sikkerhet, begrunnelse):
+    def svar(navn, fnr, sikkerhet, begrunnelse, posisjon=None):
         # Alt som IKKE er eierens nummer havner her — én oppføring per
         # unikt nummer, aldri sammenblandet med eierens.
         andre, sett = [], set()
@@ -328,7 +335,8 @@ def finn_dokument_eier(tekst: str) -> dict:
             sett.add(k["fnr"])
             andre.append(k)
         return {"navn": navn, "fnr": fnr, "sikkerhet": sikkerhet,
-                "begrunnelse": begrunnelse, "andre_fodselsnummer": andre}
+                "begrunnelse": begrunnelse, "andre_fodselsnummer": andre,
+                "posisjon": posisjon}
 
     if not kandidater:
         return svar(None, None, "ingen",
@@ -339,9 +347,18 @@ def finn_dokument_eier(tekst: str) -> dict:
     unike_eiere = {k["fnr"] for k in eiere}
     if len(unike_eiere) == 1:
         beste = eiere[0]
-        return svar(beste["navn"], beste["fnr"], "merket",
+        # Samme nummer kan være merket som eier FLERE steder, og bare
+        # noen av dem har et navn ved siden av. Målt på en ekte bunke:
+        # tre eier-treff på side 4, 5 og 6 — det første («Opplysninger
+        # om») hadde INTET navn, de to andre hadde «Ola Nordmann».
+        # Å ta navnet fra den første ga part.navn = null på et dokument
+        # der navnet står seks steder.
+        med_navn = next((k for k in eiere if k["navn"]), None)
+        navn = med_navn["navn"] if med_navn else None
+        return svar(navn, beste["fnr"], "merket",
                     f"Fødselsnummeret står under «{beste['etikett']}», som "
-                    f"peker på personen dokumentet gjelder.")
+                    f"peker på personen dokumentet gjelder.",
+                    beste["posisjon"])
     if len(unike_eiere) > 1:
         return svar(None, None, "flertydig",
                     "Flere ULIKE fødselsnummer står under eier-etiketter ("
@@ -463,8 +480,13 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
             "sider": g["sider"],
             "dato": til_iso(g["dato"]),
             # ingen arv fra filens type: et dokument vi ikke kjenner
-            # igjen, skal si «vet ikke» — ikke låne naboens etikett
-            "type": gjett_dokumenttype(g["tekst"]) or None,
+            # igjen, skal si «vet ikke» — ikke låne naboens etikett.
+            # SAMME form som «dokument.type»: feltet var en bar streng
+            # her og et {kode, term}-par der — samme begrep i to
+            # representasjoner, som R111 forbyr. En klient måtte da
+            # skrive to kodeveier for det samme.
+            "type": kodeverk(gjett_dokumenttype(g["tekst"]) or None,
+                             DOKUMENTTYPE_TERM),
             "tittel": forste[:100] or None,
             # UTTRUKKET av DETTE dokumentets tekst, ikke arvet fra
             # filens hovedpart. En skannet bunke kan inneholde
@@ -646,6 +668,11 @@ def _part(eier: dict) -> dict:
         "fastslatt": eier["fnr"] is not None,
         "grunnlag": _GRUNNLAG.get(eier["sikkerhet"], eier["sikkerhet"]),
         "begrunnelse": eier["begrunnelse"],
+        # Understrek = INTERN. Ikke en del av kontrakten; «opphav» leser
+        # den for å oppgi den siden beviset FAKTISK står på, og fjerner
+        # den fra svaret. Uten den lette opphav opp nummeret på nytt og
+        # fant første forekomst — en helt annen side enn etiketten.
+        "_posisjon": eier.get("posisjon"),
     }
 
 

@@ -1766,7 +1766,12 @@ def finn_adresser(tekst: str) -> list:
         nokkel = (gate, postnummer, poststed)
         if nokkel not in sett:
             sett.add(nokkel)
-            ut.append({"gate": gate, "postnummer": postnummer,
+            # Tom streng er IKKE «ingen gate» — den ser ut som en verdi.
+            # R118: tomt er null. Målt på en ekte bunke ga «Postboks 6600
+            # Etterstad, 0607 OSLO» adressen {"gate": "", …}, og en
+            # RPA-robot som skrev gata inn i et felt fikk en tom rubrikk
+            # i stedet for et hull den kunne oppdage.
+            ut.append({"gate": gate or None, "postnummer": postnummer,
                        "poststed": poststed})
     return ut
 
