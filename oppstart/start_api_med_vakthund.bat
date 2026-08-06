@@ -2,7 +2,7 @@
 REM ====================================================================
 REM  Starter vakthunden, som starter og OVERVAAKER dokument-APIet.
 REM  Doer serveren, startes den paa nytt - og EXITKODEN skrives til
-REM  data\loggerakthund.log. Uten den ga to doegn med krasj null
+REM  data\logger\vakthund.log. Uten den ga to doegn med krasj null
 REM  informasjon aa feilsoke paa.
 REM ====================================================================
 cd /d "%~dp0.."
@@ -19,5 +19,5 @@ if not exist "%PY%" (
     exit /b 1
 )
 
-echo Vakthunden holder APIet oppe. Logg: data\loggerakthund.log
-"%PY%" skriptakthund.py
+echo Vakthunden holder APIet oppe. Logg: data\logger\vakthund.log
+"%PY%" skript\vakthund.py
