@@ -22,6 +22,7 @@ profilen allerede har fylt — de regnes ikke ut på nytt. Ellers ville
 skal løse. De gamle feltene står urørt ved siden av; ingen klient
 brekker.
 """
+import re
 
 # Lukkede ordforråd. En verdi utenfor disse er en feil i kartet, ikke en
 # ny kategori — testene håndhever det.
@@ -55,6 +56,92 @@ _PARTKONFIDENS = {"etikett": "hoy", "flertydig": "lav",
                   "ingen": "ingen"}
 
 
+def _sidekart(tekst: str):
+    """(posisjon, sidetall) for hvert `[Side N av M]`-merke, sortert.
+
+    Bygges ÉN gang per dokument. Uten det ville hvert oppslag skannet
+    hele teksten på nytt — og på en bunke med hundre felter og hundre
+    sider blir det målbart."""
+    return [(m.start(), int(m.group(1)))
+            for m in re.finditer(r"\[Side (\d+) av \d+\]", tekst or "")]
+
+
+def _bare_tegn(tekst: str):
+    """(strippet tekst, indekskart tilbake til originalen).
+
+    Uttrukne verdier er NORMALISERTE: kontonummeret «1234.56.78903» blir
+    lagret uten punktumene, og beløpet «kr 1 234,00» blir tallet 1234.0. Et
+    tekstsøk finner dem derfor ikke, og siden ble stående null på nettopp
+    de feltene en saksbehandler oftest må kontrollere.
+
+    Her fjernes alt som ikke er bokstav eller siffer, og hver beholdt
+    posisjon husker hvor den kom fra — så treffet kan oversettes tilbake
+    til en posisjon i originalteksten."""
+    biter, kart = [], []
+    for i, tegn in enumerate(tekst or ""):
+        if tegn.isalnum():
+            biter.append(tegn.lower())
+            kart.append(i)
+    return "".join(biter), kart
+
+
+def side_for_verdi(tekst: str, verdi, sidekart=None, strippet=None):
+    """Hvilken SIDE en uttrukket verdi står på — eller None.
+
+    Klientene henter dokumenter fra flere systemer og trenger å vite
+    hvor i bunken et funn kom fra: et saksnummer på side 2 og et på side
+    40 er ikke det samme saksnummeret, og en saksbehandler som skal
+    kontrollere må vite hvor hen skal se.
+
+    Søker først ORDRETT, deretter på strippet form (se `_bare_tegn`), så
+    normaliserte identifikatorer og beløp også får en side. Et beløp
+    prøves både som `1234.0` og som «1234,00», siden dokumentet skriver
+    det siste.
+
+    FØRSTE forekomst vinner. Står samme verdi på flere sider, er det
+    den første som meldes — en bevisst forenkling; en liste ville brutt
+    formstabiliteten for et felt som er ett tall.
+
+    Returnerer None når verdien ikke finnes i teksten i det hele tatt.
+    Det er riktig for AVLEDEDE verdier: fødselsdatoen er regnet ut av
+    fødselsnummeret, og lovvalget av dokumentdatoen — de står ikke på
+    noen side."""
+    if verdi in (None, "", [], {}):
+        return None
+    naal = str(verdi)
+    if not naal.strip():
+        return None
+    i = (tekst or "").find(naal)
+    if i < 0:
+        # normalisert form: strippet for alt annet enn bokstav/siffer
+        flat, kart = _bare_tegn(tekst) if strippet is None else strippet
+        kandidater = [naal]
+        if isinstance(verdi, float):
+            # 1234.0 skrives «1 234,00» i dokumentet
+            kandidater.append(f"{verdi:.2f}")
+        for k in kandidater:
+            n, _ = _bare_tegn(k)
+            if not n:
+                continue
+            j = flat.find(n)
+            if j >= 0:
+                i = kart[j]
+                break
+        else:
+            return None
+    merker = _sidekart(tekst) if sidekart is None else sidekart
+    if not merker:
+        # ingen sidemerker = ett-sides dokument eller ren tekst
+        return 1
+    side = merker[0][1] if i >= merker[0][0] else None
+    for pos, nr in merker:
+        if i >= pos:
+            side = nr
+        else:
+            break
+    return side
+
+
 def _post(metode, konfidens, begrunnelse=None, side=None) -> dict:
     """Én oppføring. Feltene er alltid til stede, tomt er `null` — samme
     regel som resten av profilen."""
@@ -62,7 +149,8 @@ def _post(metode, konfidens, begrunnelse=None, side=None) -> dict:
             "begrunnelse": begrunnelse or None, "side": side}
 
 
-def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
+def bygg_opphav(profil: dict, nivaa: str = "viktige",
+                tekst: str = None) -> dict:
     """Proveniensen for feltene i profilen, som JSON Pointer → opphav.
 
     `nivaa`:
@@ -77,6 +165,16 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
     if nivaa == "ingen":
         return {}
 
+    # Sidemerkene leses ÉN gang; hvert felt slår opp mot den ferdige
+    # lista i stedet for å skanne teksten på nytt.
+    merker = _sidekart(tekst) if tekst else []
+    # Strippingen gjøres ÉN gang for hele dokumentet, ikke per felt.
+    strippet = _bare_tegn(tekst) if tekst else None
+
+    def side(verdi):
+        return (side_for_verdi(tekst, verdi, merker, strippet)
+                if tekst else None)
+
     kart = {}
     part = profil.get("part") or {}
     dokument = profil.get("dokument") or {}
@@ -86,7 +184,7 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
     kart["/dokumentprofil/part/fnr"] = _post(
         _PARTMETODE.get(grunnlag, "ingen"),
         _PARTKONFIDENS.get(grunnlag, "ingen"),
-        part.get("begrunnelse"))
+        part.get("begrunnelse"), side(part.get("fnr")))
 
     # --- dokumentets egen dato (R80) ----------------------------------
     kart["/dokumentprofil/dokument/dato"] = _post(
@@ -101,6 +199,13 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
     # «avledet» finnes nettopp for dette: verdien står ikke i dokumentet,
     # den følger av en annen verdi som gjør det. Uten skillet ser den ut
     # som et selvstendig funn.
+    if part.get("navn"):
+        kart["/dokumentprofil/part/navn"] = _post(
+            _PARTMETODE.get(grunnlag, "ingen"),
+            _PARTKONFIDENS.get(grunnlag, "ingen"),
+            "Navnet står ved siden av det beviste fødselsnummeret",
+            side(part.get("navn")))
+
     if part.get("fodselsdato"):
         kart["/dokumentprofil/part/fodselsdato"] = _post(
             "avledet", _PARTKONFIDENS.get(grunnlag, "ingen"),
@@ -108,11 +213,15 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
             "nødvendigvis skrevet i dokumentet")
 
     # --- hjemmelen følger dokumentDATOEN (R77) -------------------------
-    hjemmel = profil.get("hjemmel") or {}
+    # Feltet het «hjemmel» og ble døpt om til «gjeldende_lov» for å si at
+    # det er AVLEDET. Denne linja fulgte ikke med, så pekeren ble aldri
+    # laget — en stille mangel, for et kart uten en oppføring ser ikke
+    # galt ut.
+    hjemmel = profil.get("gjeldende_lov") or {}
     if hjemmel.get("lov"):
         # Arver datoens konfidens: er datoen usikker, er lovvalget det
         # også — det er den datoen valget hviler på.
-        kart["/dokumentprofil/hjemmel/lov"] = _post(
+        kart["/dokumentprofil/gjeldende_lov/lov"] = _post(
             "avledet", dokument.get("dato_sikkerhet") or "ingen",
             hjemmel.get("begrunnelse"))
 
@@ -120,16 +229,16 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
     # mod11/mod10 er matematisk bevis, ikke et mønstertreff: konfidensen
     # er «hoy» uten forbehold.
     okonomi = profil.get("okonomi") or {}
-    for i, _ in enumerate(okonomi.get("kontonummer") or []):
+    for i, v in enumerate(okonomi.get("kontonummer") or []):
         kart[f"/dokumentprofil/okonomi/kontonummer/{i}"] = _post(
-            "sjekksum", "hoy", "Elleve siffer som består mod11")
-    for i, _ in enumerate(okonomi.get("kid") or []):
+            "sjekksum", "hoy", "Elleve siffer som består mod11", side(v))
+    for i, v in enumerate(okonomi.get("kid") or []):
         kart[f"/dokumentprofil/okonomi/kid/{i}"] = _post(
-            "sjekksum", "hoy", "KID-nummer som består mod10/mod11")
+            "sjekksum", "hoy", "KID-nummer som består mod10/mod11", side(v))
     arbeid = profil.get("arbeid") or {}
-    for i, _ in enumerate(arbeid.get("organisasjonsnummer") or []):
+    for i, v in enumerate(arbeid.get("organisasjonsnummer") or []):
         kart[f"/dokumentprofil/arbeid/organisasjonsnummer/{i}"] = _post(
-            "sjekksum", "hoy", "Ni siffer som består mod11")
+            "sjekksum", "hoy", "Ni siffer som består mod11", side(v))
 
     # --- etikettbundne felter (R71) ------------------------------------
     # De hentes BARE når ordet står i dokumentet, så metoden er alltid
@@ -140,25 +249,47 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige") -> dict:
                           ("okonomi", "utbetalt_belop"),
                           ("arbeid", "arbeidsgiver"), ("arbeid", "stilling"),
                           ("arbeid", "stillingsprosent")):
-        if (profil.get(seksjon) or {}).get(felt) is not None:
+        verdi = (profil.get(seksjon) or {}).get(felt)
+        if verdi is not None:
             kart[f"/dokumentprofil/{seksjon}/{felt}"] = _post(
                 "etikett", "hoy",
-                "Hentet fordi etiketten står i dokumentet (R71)")
+                "Hentet fordi etiketten står i dokumentet (R71)",
+                side(verdi))
+
+    # --- kontakt: står ofte i et brevhode på FØRSTE side, men i en
+    # bunke kan hvert dokument ha sitt eget -------------------------------
+    kontakt = profil.get("kontakt") or {}
+    for navn in ("telefoner", "eposter"):
+        for i, v in enumerate(kontakt.get(navn) or []):
+            kart[f"/dokumentprofil/kontakt/{navn}/{i}"] = _post(
+                "regel", "hoy", "Formvalidert (lengde/mønster)", side(v))
+    for i, adr in enumerate(kontakt.get("adresser") or []):
+        if isinstance(adr, dict):
+            kart[f"/dokumentprofil/kontakt/adresser/{i}"] = _post(
+                "etikett", "middels",
+                "Gate + postnummer + poststed sto sammen",
+                side(adr.get("gate")))
 
     # --- koder lest av dekoderen ---------------------------------------
     koder = profil.get("koder") or {}
     for navn in ("qr", "strekkode"):
-        for i, _ in enumerate(koder.get(navn) or []):
+        for i, k in enumerate(koder.get(navn) or []):
+            # dekoderen oppgir siden selv — mer presist enn tekstsøk
             kart[f"/dokumentprofil/koder/{navn}/{i}"] = _post(
-                "strekkode", "hoy", "Dekodet av pyzbar, ikke lest som tekst")
+                "strekkode", "hoy", "Dekodet av pyzbar, ikke lest som tekst",
+                (k or {}).get("side") if isinstance(k, dict) else None)
 
     # --- ytelse og dokumenttype: mønsterregler --------------------------
-    if (profil.get("ytelse") or {}).get("navn"):
+    ytelse_kode = ((profil.get("ytelse") or {}).get("navn") or {}).get("kode")
+    if ytelse_kode:
         kart["/dokumentprofil/ytelse/navn"] = _post(
-            "regel", "middels", "Kjent ytelsesnavn funnet i teksten")
-    if dokument.get("type"):
+            "regel", "middels", "Kjent ytelsesnavn funnet i teksten",
+            side(ytelse_kode))
+    if (dokument.get("type") or {}).get("kode"):
+        # typen avgjøres av TITTELEN, som per definisjon står først
         kart["/dokumentprofil/dokument/type"] = _post(
-            "regel", "middels", "Klassifisert av tittel- og ordmønstre")
+            "regel", "middels", "Klassifisert av tittel- og ordmønstre",
+            1 if merker or tekst else None)
 
     return kart
 

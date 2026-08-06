@@ -4718,7 +4718,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "message": "Bruk " + "/".join(NIVAAER)}]})
         try:
             profil = _profilform(ktx.profil, profilform)
-            opphav = uten_utelatte(bygg_opphav(ktx.profil, opphavsnivaa),
+            opphav = uten_utelatte(bygg_opphav(ktx.profil, opphavsnivaa,
+                                                   ktx.tekst),
                                    profil)
         except Exception as exc:
             profil = {"ok": False,
@@ -5122,7 +5123,8 @@ class Handler(BaseHTTPRequestHandler):
         # Kartet er en PROJEKSJON av feltene profilen alt har fylt — ikke
         # en ny beregning. Ellers ville «opphav» blitt en sjette
         # uavhengig mening om det samme, altså problemet det løser.
-        opphav = trygt(lambda: bygg_opphav(ktx.profil, opphavsnivaa)) or {}
+        opphav = trygt(lambda: bygg_opphav(ktx.profil, opphavsnivaa,
+                                           ktx.tekst)) or {}
         # profil=sammendrag tok seksjoner bort; da skal ingen peker vise
         # dit. En peker til et fjernet felt lekker nettopp det bryteren
         # skulle skjule, og gir klienten et oppslag som ikke går noe sted.

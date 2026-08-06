@@ -207,3 +207,77 @@ def test_profilbryteren_finnes_i_BEGGE_kontraktene():
     for kjente in (api._KJENTE_FELT_DOKUMENT, api._KJENTE_FELT_OPERASJONER):
         assert "profil" in kjente
         assert "opphav" in kjente
+
+
+# ------------------------------------------------------------------ #
+#  6. Hvilken SIDE kom funnet fra (R120)                               #
+# ------------------------------------------------------------------ #
+
+BUNKE = f"""[Side 1 av 3]
+Vedtak om sykepenger
+Vedtaksdato: 28.05.2026
+Dokumentet gjelder:
+Ola Nordmann
+Fnr: {lag_fnr(0)}
+[Side 2 av 3]
+Saksnummer: 4417820
+Dagsats: kr 1 234,00
+Kontonummer: 1234.56.78903
+[Side 3 av 3]
+Arbeidsgiver: Rema 1000 AS
+Telefon: 41288903
+"""
+
+
+def _bunkekart():
+    ktx = api.DokumentKontekst(BUNKE, antall_sider=3)
+    return bygg_opphav(ktx.profil, "alle", ktx.tekst)
+
+
+def test_hvert_funn_vet_hvilken_side_det_kom_fra():
+    """Klientene henter dokumenter fra flere systemer og må kunne
+    kontrollere et funn: et saksnummer på side 2 og et på side 40 er
+    ikke det samme saksnummeret."""
+    kart = _bunkekart()
+    assert kart["/dokumentprofil/part/fnr"]["side"] == 1
+    assert kart["/dokumentprofil/sak/saksnummer"]["side"] == 2
+    assert kart["/dokumentprofil/arbeid/arbeidsgiver"]["side"] == 3
+    assert kart["/dokumentprofil/kontakt/telefoner/0"]["side"] == 3
+
+
+def test_normaliserte_verdier_faar_ogsaa_side():
+    """Den vanskelige halvparten. Kontonummeret lagres uten punktum,
+    men står «1234.56.78903» i dokumentet; dagsatsen er tallet 1234.0,
+    men står «kr 1 234,00». Et rent tekstsøk fant dem ikke, og siden ble
+    null på nettopp de feltene en saksbehandler oftest kontrollerer."""
+    kart = _bunkekart()
+    assert kart["/dokumentprofil/okonomi/kontonummer/0"]["side"] == 2
+    assert kart["/dokumentprofil/okonomi/dagsats"]["side"] == 2
+
+
+def test_avledede_verdier_har_INGEN_side():
+    """Fødselsdatoen er regnet ut av fødselsnummeret og lovvalget av
+    dokumentdatoen — de står ikke på noen side, og å oppgi en ville vært
+    en påstand om at de gjorde det."""
+    kart = _bunkekart()
+    assert kart["/dokumentprofil/part/fodselsdato"]["side"] is None
+    assert kart["/dokumentprofil/gjeldende_lov/lov"]["side"] is None
+
+
+def test_lovvalget_har_i_det_hele_tatt_en_peker():
+    """Feltet ble døpt om fra «hjemmel» til «gjeldende_lov», men denne
+    linja fulgte ikke med — så pekeren ble aldri laget. En stille mangel:
+    et kart uten en oppføring ser ikke galt ut."""
+    assert "/dokumentprofil/gjeldende_lov/lov" in _bunkekart()
+
+
+def test_uten_sidemerker_er_alt_side_1():
+    """Ren tekst eller ett-sides dokument: alt kom fra den ene siden."""
+    from delt.opphav import side_for_verdi
+    nr = lag_fnr(0)
+    assert side_for_verdi(f"Fnr: {nr} står her", nr) == 1
+
+
+def test_verdi_som_ikke_finnes_gir_ingen_side():
+    from delt.opphav import side_for_verdi
+    assert side_for_verdi("[Side 1 av 2]\nnoe", "finnes ikke") is None

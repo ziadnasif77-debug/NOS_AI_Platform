@@ -5,7 +5,7 @@ tar imot, hva det svarer med, og om modellen brukes.
 
 Alt her er **verifisert mot en kjørende server** (2026-08-03), ikke lest
 ut av koden alene. Brukerdokumentasjonen med arbeidsflyter ligger i
-[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R119 i
+[api_dokumentasjon.md](api_dokumentasjon.md); regelverket R1–R121 i
 [regler_lokal_api.md](regler_lokal_api.md).
 
 > Eksempelnumrene i denne fila er alle `12345678910` — et tall som med
@@ -175,6 +175,22 @@ To LUKKEDE ordforråd, aldri gjenbrukt til noe annet:
 
 `konfidens` er den samme skalaen som overalt ellers: `hoy`, `middels`,
 `lav`, `ingen`.
+
+**`side` sier hvor funnet kom fra (R120).** Klientene henter
+dokumenter fra flere systemer; et saksnummer på side 2 og et på side 40
+er ikke det samme saksnummeret. Med `opphav=alle` får part, saksnummer,
+beløp, kontonummer, arbeidsgiver, telefon, e-post, adresse og koder hver
+sitt sidetall.
+
+Sidetallet ligger i kartet — ikke som `fnr_side`-tvillinger ved siden av
+verdiene. Tvillinger var nettopp `dato_norsk`-feilen, og de flate
+verdiene skal forbli flate for en RPA-robot.
+
+Normaliserte verdier får også side (R121): kontonummeret lagres uten
+punktumene og dagsatsen som et tall, men begge finnes tilbake i teksten.
+**Avledede** verdier har `side: null` — fødselsdatoen er regnet ut av
+fødselsnummeret og lovvalget av dokumentdatoen; de står ikke på noen
+side.
 
 **Kartet erstatter ingenting.** `dato_kilde`, `dato_sikkerhet`,
 `part.grunnlag` og `kilde_per_felt` står urørt ved siden av — `opphav`
