@@ -41,12 +41,10 @@ def test_begge_ytelsene_kommer_med():
     """Kjernen: et AAP-vedtak viser nesten alltid til sykepengeperioden
     som tok slutt. Med ett felt forsvant den.
 
-    Dette dokumentet dekker samtidig BEGGE utfallene av temakodingen
-    (R127): sykepenger har en offisiell kode, arbeidsavklaringspenger
-    har den ikke ennå — og da står termen fylt med koden tom, så det er
-    synlig at ytelsen ble funnet men ikke kunne rutes."""
+    Begge står med NAVs offisielle temakode (R127) — det er den formen
+    en robot ruter på."""
     assert _profil()["ytelser"] == [
-        {"kode": None, "term": "Arbeidsavklaringspenger"},
+        {"kode": "AAP", "term": "Arbeidsavklaringspenger"},
         {"kode": "SYK", "term": "Sykepenger"},
     ]
 

@@ -2790,7 +2790,7 @@ def _skjemaer() -> dict:
                                      "LOV som gjaldt avgjøres likevel av "
                                      "dokumentdatoen, ikke av koden, så et "
                                      "1994-vedtak får fortsatt ftrl-1966. "
-                                     "Temakodelista er UFULLSTENDIG: "
+                                     "Temakodelista er levert stykkevis: "
                                      "«kode: null» MED fylt «term» betyr "
                                      "at ytelsen ble funnet, men at vi ikke "
                                      "har koden ennå — noe helt annet enn "

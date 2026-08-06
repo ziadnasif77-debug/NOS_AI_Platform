@@ -1001,9 +1001,11 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
                   "totalt": dekning_sider["totalt"]},
         # NB: «navn» er nå ALLTID et par (R118), så en sannhetstest på
         # selve objektet er alltid sann. Og det er ORDET, ikke temakoden,
-        # som avgjør om ytelsen ble funnet: arbeidsavklaringspenger har
-        # ingen temakode hos oss ennå, og «kode: null» der ville meldt
-        # «ikke_evaluert» om en ytelse vi tydelig leste i teksten.
+        # som avgjør om ytelsen ble funnet: NAVs temakodeliste er levert
+        # stykkevis, og en ytelse som venter på koden sin ville meldt
+        # «ikke_evaluert» — altså at vi aldri lette — om noe vi tydelig
+        # leste i teksten. Alle 25 har kode i dag; veien står åpen for
+        # den neste som ikke gjør det.
         "ytelse": ("delvis" if profil["ytelse"]["_ord"]
                    else "ikke_evaluert"),
         "sakstype": "ikke_evaluert",

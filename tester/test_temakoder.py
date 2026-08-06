@@ -37,18 +37,26 @@ def test_koden_er_temakoden_ikke_det_norske_ordet():
                                           "term": "Sykepenger"}
 
 
-def test_tre_utfall_betyr_tre_ulike_ting():
+def test_tre_utfall_betyr_tre_ulike_ting(monkeypatch):
     """Skillet er hele poenget med at termen fylles når koden mangler.
 
     `{kode: null, term: null}` = vi fant ingen ytelse.
     `{kode: null, term: fylt}` = vi fant den, men har ikke koden ennå.
 
     Slås de to sammen, ser et dokument vi FORSTO ut som et vi ikke
-    forsto — og ingen oppdager at temakodelista har et hull."""
+    forsto — og ingen oppdager at temakodelista har et hull.
+
+    Den midterste veien har ingen levende ytelse igjen: AAP var den
+    siste som manglet kode, og den kom inn 06.08.2026. Derfor SIMULERES
+    et hull her. Uten dette ville koden som håndterer den neste
+    manglende koden stått uprøvd til dagen den trengs."""
     assert ytelse_kodet(None) == {"kode": None, "term": None}
     assert ytelse_kodet("") == {"kode": None, "term": None}
-    assert ytelse_kodet("arbeidsavklaringspenger") == {
-        "kode": None, "term": "Arbeidsavklaringspenger"}
+
+    import delt.tekstuttrekk as tu
+    monkeypatch.setitem(tu.YTELSE_TEMA, "sykepenger", None)
+    assert ytelse_kodet("sykepenger") == {"kode": None,
+                                          "term": "Sykepenger"}
 
 
 def test_ukjent_navn_gir_likevel_et_par():
@@ -71,6 +79,25 @@ def test_alle_vaare_ytelser_er_vurdert_mot_temalista():
         f"Disse ytelsene er ikke vurdert mot NAVs temakoder: {mangler}. "
         f"Legg dem i YTELSE_TEMA — med kode hvis den finnes, ellers "
         f"None og en kommentar om at koden ikke er mottatt ennå.")
+
+
+def test_alle_ytelsene_har_faktisk_faatt_en_kode():
+    """Strengere enn testen over: ikke bare VURDERT, men KODET.
+
+    Alle 25 har en temakode nå. Blir dette rødt, er det enten fordi en
+    ny ytelse er lagt inn uten kode, eller fordi en kode ble fjernet.
+    Begge deler er lovlig — `{kode: null, term: fylt}` er en dokumentert
+    tilstand (R127) — men ingen av delene skal skje i forbifarten, for
+    en ytelse uten kode er en ytelse ingen robot kan rute.
+
+    Er det bevisst: flytt ytelsen inn i UTEN_KODE her, med en kommentar
+    om hvem vi venter på."""
+    UTEN_KODE = set()      # tom: alle har kode per 06.08.2026
+    faktisk = {y for y, k in YTELSE_TEMA.items() if not k}
+    assert faktisk == UTEN_KODE, (
+        f"Ytelser uten temakode: {sorted(faktisk)}. Har du fått koden, "
+        f"legg den i YTELSE_TEMA. Venter du fortsatt på den, før den opp "
+        f"i UTEN_KODE i denne testen så det er et VALG og ikke en glipp.")
 
 
 def test_ingen_oppdiktede_ytelser_i_kartet():
@@ -102,15 +129,29 @@ def test_profilen_leverer_temakoden():
     assert profil["ytelse"]["navn"] == {"kode": "SYK", "term": "Sykepenger"}
 
 
-def test_dekningen_ser_ytelsen_ogsaa_uten_temakode():
-    """Den farlige varianten: arbeidsavklaringspenger står tydelig i
-    teksten, men har ingen temakode hos oss. Målte vi dekningen på
-    KODEN, ville svaret sagt «ikke_evaluert» — altså at vi aldri lette —
-    om en ytelse vi leste rett ut av dokumentet."""
+def test_aap_har_egen_temakode():
+    """AAP var den siste ytelsen uten kode. Kapittel 11 følger med, som
+    bevis på at det norske ordet fortsatt driver lovoppslaget."""
     profil = _profil("Vedtak om arbeidsavklaringspenger\n"
                      "Dokumentdato: 01.03.2024")
-    assert profil["ytelse"]["navn"]["kode"] is None
-    assert profil["ytelse"]["navn"]["term"] == "Arbeidsavklaringspenger"
+    assert profil["ytelse"]["navn"] == {"kode": "AAP",
+                                        "term": "Arbeidsavklaringspenger"}
+    assert profil["gjeldende_lov"]["ytelse_kapittel"] == "11"
+    assert profil["dekning"]["ytelse"] == "delvis"
+
+
+def test_dekningen_maales_paa_ordet_ikke_paa_koden(monkeypatch):
+    """Den farlige varianten, simulert: en ytelse står tydelig i teksten,
+    men har ingen temakode. Målte vi dekningen på KODEN, ville svaret
+    sagt «ikke_evaluert» — altså at vi aldri lette — om en ytelse vi
+    leste rett ut av dokumentet.
+
+    Ingen ytelse mangler kode i dag, så hullet lages her. Den dagen en
+    ny ytelse kommer inn før koden gjør det, er dette veien den går."""
+    import delt.tekstuttrekk as tu
+    monkeypatch.setitem(tu.YTELSE_TEMA, "sykepenger", None)
+    profil = _profil("Vedtak om sykepenger\nDokumentdato: 01.03.2024")
+    assert profil["ytelse"]["navn"] == {"kode": None, "term": "Sykepenger"}
     assert profil["dekning"]["ytelse"] == "delvis"
 
 

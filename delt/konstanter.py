@@ -163,6 +163,7 @@ YTELSE_TERM = {
 # ligger her for at en term skal finnes den dagen koden kommer inn en
 # annen vei.
 NAV_TEMA = {
+    "AAP": "Arbeidsavklaringspenger",
     "AAR": "Aa-registeret",
     "AGR": "Ajourhold - grunnopplysninger",
     "AKT": "Aktivitetsplan med dialoger",
@@ -246,6 +247,11 @@ NAV_TEMA = {
 # koden ennå». Det er en helt annen tilstand enn «fant ingen ytelse», og
 # skillet er synlig i svaret: den første gir `{kode: null, term: fylt}`,
 # den andre `{kode: null, term: null}`.
+#
+# Per nå har ALLE ytelsene våre en kode — AAP kom inn 2026-08-06 og var
+# den siste som manglet. `None` er derfor en tom, men fullt levende vei:
+# den finnes for de temakodene som ennå ikke er levert, og en vakttest
+# holder den i live så den ikke råtner ubrukt.
 YTELSE_TEMA = {
     "dagpenger": "DAG",
     "grunnstonad": "GRU",
@@ -255,10 +261,7 @@ YTELSE_TEMA = {
     "omsorgspenger": "OMS",
     "pleiepenger": "OMS",
     "opplaeringspenger": "OMS",
-    # Arbeidsavklaringspenger står IKKE i lista vi har fått. Ytelsen
-    # finnes åpenbart (den er kapittel 11 og ligger i klagen på side 9 i
-    # testbunken) — koden mangler bare her ennå.
-    "arbeidsavklaringspenger": None,
+    "arbeidsavklaringspenger": "AAP",
     "tilleggsstonad": "TSO",
     "uforetrygd": "UFO",
     "yrkesskadeerstatning": "YRK",
