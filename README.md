@@ -215,6 +215,25 @@ omstart av serveren.
 
 ---
 
+## Drift: hold API-et oppe
+
+```bash
+oppstart\start_api_med_vakthund.bat
+```
+
+Starter API-et og passer på det. Dør eller henger det, startes det på
+nytt — og **exitkoden skrives til `data/logger/vakthund.log`**.
+
+Det siste er ikke pynt. Da API-et stoppet gjentatte ganger over to døgn,
+sluttet loggen midt i en rekke `/hjelp → 200`: ingen traceback, ingen
+oppføring i Windows' hendelseslogg. Uten exitkoden ga to døgn med krasj
+null informasjon. Med den vet man med én gang om det var et native
+krasj (`0xC0000005` — llama.cpp/CUDA, ingen Python-feil å lete etter)
+eller om noe drepte prosessen utenfra (`0xFFFFFFFF`).
+
+Vakthunden starter ikke en server til hvis en allerede svarer — den
+legger seg til å overvåke.
+
 ## Kjøring
 
 ```bash
