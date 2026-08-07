@@ -4313,30 +4313,63 @@ class Handler(BaseHTTPRequestHandler):
         filnavn, filbytes, tekstfelter = None, None, {}
         if "multipart/form-data" in ct:
             filnavn, filbytes, tekstfelter = _parse_multipart(body, ct)
+        # SAMME GRENSELESING OG LINJESKIFTREGEL SOM DEN EKTE PARSEREN.
+        #
+        # Denne delen hadde sin egen, naive utgave: `ct.split("boundary=")`
+        # uten å stoppe ved neste «;», og et hardkodet `\r\n\r\n`.
+        # Resultatet var at diagnoseverktøyet var BLINDT i nøyaktig sitt
+        # eget bruksområde. Målt mot serveren, .NET-formen (bare LF,
+        # usiterte feltnavn):
+        #
+        #     antall_deler              0        «jeg mottok ingenting»
+        #     parser_ser.tekstfelt_navn ['sporsmal']
+        #     /dokument på samme kropp  HTTP 200
+        #
+        # Én halvdel av svaret var ærlig og den andre blind — og en
+        # utvikler som åpnet /ekko for å finne ut hvorfor feltene
+        # forsvant, leste «null deler» og mistenkte sin egen klient.
         deler = []
-        if "boundary=" in ct:
-            boundary = ct.split("boundary=", 1)[1].strip().strip('"')
+        boundary = _cd_parameter(ct.encode("utf-8", "replace"), "boundary")
+        if boundary:
             skille = ("--" + boundary).encode()
             for d in body.split(skille):
-                if b"\r\n\r\n" not in d:
+                tomlinje = re.search(b"\r?\n\r?\n", d)
+                if not tomlinje:
                     continue
-                hoder, _, innhold = d.partition(b"\r\n\r\n")
-                innhold = innhold.rstrip(b"\r\n")
+                hoder = d[:tomlinje.start()]
+                innhold = d[tomlinje.end():].rstrip(b"\r\n")
                 deler.append({
                     "content_disposition":
                         hoder.decode("utf-8", "replace").strip()[:300],
                     "innhold_lengde": len(innhold),
                     "innhold_start": innhold[:80].decode("utf-8", "replace"),
+                    # Hva parseren FAKTISK trekker ut av denne delen —
+                    # så en utvikler ser koblingen mellom rå header og
+                    # tolket feltnavn uten å gjette.
+                    "tolket_feltnavn": _cd_parameter(hoder, "name"),
+                    "tolket_filnavn": _cd_filnavn(hoder),
                 })
         return self._svar(200, {
             "ok": True,
             "melding": "Ekko: dette er hva serveren MOTTOK fra deg.",
             "content_type": ct,
+            "boundary": boundary,
             "body_lengde": len(body),
             "antall_deler": len(deler),
+            # R63-variantene som faktisk ble oppdaget i kroppen. Uten
+            # dette måtte utvikleren sammenligne rå bytes selv for å se
+            # om klienten sender den formen som pleide å falle ut.
+            "diagnose": {
+                "bare_lf": bool(body) and b"\r\n" not in body,
+                "usiterte_feltnavn": bool(re.search(rb"name=[^\"\s;]", body)),
+                "filename_stjerne": b"filename*=" in body,
+                "tegnsett_per_del": b"charset=" in body,
+            },
             "parser_ser": {
                 "fil": filnavn,
-                "fil_bytes": len(filbytes) if filbytes else 0,
+                # null, ikke 0: uten fil er svaret «ingen fil», ikke «en
+                # fil på null bytes» (R128).
+                "fil_bytes": len(filbytes) if filbytes is not None else None,
                 "tekstfelt_navn": sorted(tekstfelter.keys()),
                 "tekstfelter": {k: v[:200] for k, v in tekstfelter.items()},
             },
