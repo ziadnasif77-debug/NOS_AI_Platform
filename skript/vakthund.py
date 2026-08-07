@@ -122,6 +122,33 @@ def _tyd(kode) -> str:
     return str(kode)
 
 
+MAKS_LOGG_MB = int(os.environ.get("VAKTHUND_MAKS_LOGG_MB", "10"))
+
+
+def _roter_om_stor(sti: str):
+    """Flytter loggen til «<navn>.1» når den er blitt stor.
+
+    Loggen legges til og aldri over (se `start_api`), så uten rotasjon
+    ville den vokst fritt. Ett arkiv er nok her: dette er en
+    oppstarts- og krasjlogg, ikke et revisjonsspor — det siste
+    krasjvinduet er det som betyr noe. Samme grense som `_skjult.vbs`,
+    som roterer den samme fila på sin side av starten."""
+    try:
+        if os.path.getsize(sti) <= MAKS_LOGG_MB * 1024 * 1024:
+            return
+    except OSError:
+        return                      # fila finnes ikke ennå
+    arkiv = sti + ".1"
+    try:
+        if os.path.exists(arkiv):
+            os.remove(arkiv)
+        os.replace(sti, arkiv)
+    except OSError as exc:
+        # En åpen filhåndtak på Windows kan hindre flyttingen. Da er det
+        # bedre å la loggen vokse enn å miste den.
+        _skriv(f"kunne ikke rotere {os.path.basename(sti)}: {exc}")
+
+
 def start_api() -> subprocess.Popen:
     """Starter serveren som EGEN prosess, med prosjektets egen Python."""
     py = os.path.join(ROT, ".pyruntime", "python.exe")
@@ -131,6 +158,10 @@ def start_api() -> subprocess.Popen:
     miljo.setdefault("BOREALIS_KONTEKST", "4096")
     logg_api = os.path.join(ROT, "data", "logger", "oppstart_api.log")
     os.makedirs(os.path.dirname(logg_api), exist_ok=True)
+    _roter_om_stor(logg_api)
+    # «a», ikke «w»: dette er fila vakthunden selv peker klienten til når
+    # den skriver «se oppstart_api.log for traceback». Skrev vi over,
+    # ville vi slettet nettopp det beviset vi ba noen lete etter.
     ut = open(logg_api, "a", encoding="utf-8", errors="replace")
     return subprocess.Popen(
         [py, os.path.join("skript", "dokument_api.py")],

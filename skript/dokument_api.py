@@ -5318,6 +5318,23 @@ class Handler(BaseHTTPRequestHandler):
             # tillat òg rå PDF-bytes i body (Content-Type: application/pdf)
             filnavn, data = "opplastet.pdf", body
 
+        # Omvendt feltnavn stoppes for ALLE ruter, ikke bare de fire som
+        # hadde vakten fra før. Sjekken står her fordi det er det ene
+        # stedet der både ruten og de parsede feltene er kjent — en ny
+        # rute er dermed dekket i det den legges i _FELTSETT_PER_RUTE, i
+        # stedet for å måtte huske et kall inne i hver håndterer.
+        #
+        # Rutene som allerede har sin egen sjekk beholder den: den bærer
+        # også den MILDE advarselen inn i sitt eget svar, og den kan ikke
+        # flyttes hit uten å kjenne svarformen. Her stoppes bare den
+        # klare feilen.
+        _kjente_felt = _FELTSETT_PER_RUTE.get(sti)
+        if _kjente_felt is not None:
+            _, _omvendte = _sjekk_feltnavn(tekstfelter, _kjente_felt)
+            if _omvendte:
+                return self._svar(400, _omvendt_felt_feil(_omvendte,
+                                                          _kjente_felt))
+
         # /spor kan bruke jobb_id i stedet for fil — eller stå helt uten
         # fil (rent spørsmål → generelt modellsvar)
         jobb_ref = tekstfelter.get("jobb_id", "").strip() if sti == "/spor" else ""
@@ -6465,19 +6482,15 @@ def _profilform(profil: dict, form: str) -> dict:
     profil = _uten_interne(profil)
     if form != "sammendrag":
         return profil
-    # «ytelser» og «hjemler» blir med: de sier hva dokumentet HANDLER om
-    # og hvilke bestemmelser det viser til — ingen persondata. Utelot vi
-    # dem, ville «utelatt» påstå at de ble fjernet av personvernhensyn,
-    # og en klient mistet nettopp den saksinformasjonen den ba om.
-    behold = ("skjemaversjon", "sammendrag", "fil", "dokument", "sak",
-              "ytelse", "ytelser", "hjemmel", "hjemler", "koder", "dekning")
-    liten = {k: v for k, v in profil.items() if k in behold}
+    # Hva som beholdes — og hvorfor — står ved _PROFIL_SAMMENDRAG_BEHOLD.
+    liten = {k: v for k, v in profil.items()
+             if k in _PROFIL_SAMMENDRAG_BEHOLD}
     # sammendraget bærer navn og fnr — også de ut når formålet er å
     # slippe å motta persondata
     if isinstance(liten.get("sammendrag"), dict):
         liten["sammendrag"] = {k: v for k, v in liten["sammendrag"].items()
                                if k not in ("navn", "fnr")}
-    liten["utelatt"] = sorted(set(profil) - set(behold))
+    liten["utelatt"] = sorted(set(profil) - set(_PROFIL_SAMMENDRAG_BEHOLD))
     return liten
 
 
@@ -6591,6 +6604,19 @@ def _ser_ut_som_verdi(navn: str) -> bool:
         return True
     if n.lower().endswith((".pdf", ".png", ".jpg", ".jpeg", ".txt", ".docx")):
         return True
+    # Fritekst brukt som feltnavn. Den vanligste omvendte delen er ikke en
+    # bryterverdi, men SPØRSMÅLET: «Hva er beløpet?» havner som navn, og
+    # ordlista over fanget den ikke. Målt på den kjørende serveren ga det
+    # 200 med hele dokumentteksten i stedet for svaret.
+    #
+    # Et ekte feltnavn i dette API-et er en kort identifikator — alle 16
+    # kjente består av små bokstaver og understrek. Mellomrom,
+    # spørsmålstegn eller mer enn 40 tegn er derfor aldri et feltnavn.
+    # Vakten kjører kun på navn som ALLEREDE er ukjente, så en feiltolkning
+    # her koster 400 i stedet for en mild advarsel — på et navn serveren
+    # uansett ikke ville brukt til noe.
+    if " " in n or "?" in n or len(n) > 40:
+        return True
     return False
 
 
@@ -6614,6 +6640,48 @@ _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder",
                             "profil", "opphav"}
 _KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}
 _KJENTE_FELT_SLADD = {"typer", "maks_sider"}
+_KJENTE_FELT_SPOR = {"sporsmal", "jobb_id", "korriger", "maks_sider",
+                     "strekkoder"}
+_KJENTE_FELT_JOBB = {"maks_sider", "sporsmal"}
+_KJENTE_FELT_INNSYN = {"maks_sider"}
+
+# Hvilket feltsett hver POST-rute kjenner. Fire ruter hadde vakten fra
+# før; tre hadde den ikke, og målt var det NETTOPP der den manglet mest:
+# på /spor gir et omvendt felt (UiPath sender verdi først, navn sist —
+# R63) et helt vanlig 200. Spørsmålet havner som feltnavn, «sporsmal»
+# blir tomt, R47 slår inn, og roboten får hele dokumentteksten tilbake
+# med `ok: true` og ingen advarsel. Et vellykket svar som ikke er svaret.
+#
+# /ekko står MED VILJE utenfor: den finnes for å vise klienten nøyaktig
+# hva serveren mottok. Avviste den en omvendt del med 400, ville den
+# skjult akkurat det feilsøkeren kom for å se.
+# Seksjonene «profil=sammendrag» BEHOLDER. Alt annet fjernes og
+# navngis i «utelatt».
+#
+# Lista er en modulkonstant og ikke en lokal variabel fordi den ER
+# kontrakt: en vakttest må kunne se den. Uten det sto «hjemmel» her i
+# månedsvis etter at R113 hadde døpt seksjonen om til «gjeldende_lov» —
+# det gamle navnet traff ingenting, det nye sto ikke i lista, og
+# personvernbryteren fjernet dermed en seksjon som er avledet av
+# dokumentDATOEN alene og ikke bærer én eneste personopplysning.
+#
+# «ytelser» og «hjemler» blir med av samme grunn: de sier hva dokumentet
+# HANDLER om og hvilke bestemmelser det viser til. Utelot vi dem, ville
+# «utelatt» påstå at de ble fjernet av personvernhensyn, og klienten
+# mistet nettopp den saksinformasjonen den ba om.
+_PROFIL_SAMMENDRAG_BEHOLD = (
+    "skjemaversjon", "sammendrag", "fil", "dokument", "sak",
+    "ytelse", "ytelser", "gjeldende_lov", "hjemler", "koder", "dekning")
+
+_FELTSETT_PER_RUTE = {
+    "/dokument": _KJENTE_FELT_DOKUMENT,
+    "/dokument/operasjoner": _KJENTE_FELT_OPERASJONER,
+    "/forhandssjekk": _KJENTE_FELT_FORHANDSSJEKK,
+    "/sladd": _KJENTE_FELT_SLADD,
+    "/spor": _KJENTE_FELT_SPOR,
+    "/jobb": _KJENTE_FELT_JOBB,
+    "/innsyn": _KJENTE_FELT_INNSYN,
+}
 
 
 def _ukjent_felt_advarsel(milde: list, kjente: set) -> list:

@@ -206,6 +206,28 @@ def test_sammendrag_beholder_saksinformasjon_uten_persondata():
     assert "hjemler" in liten
     assert "ytelser" not in liten["utelatt"]
     assert "hjemler" not in liten["utelatt"]
+    # Samme argument gjelder «gjeldende_lov»: den er AVLEDET av
+    # dokumentdatoen alene (R113) og bærer ingen persondata.
+    assert "gjeldende_lov" in liten
+    assert "gjeldende_lov" not in liten["utelatt"]
+
+
+def test_beholdlista_navngir_bare_seksjoner_som_finnes():
+    """Fanger feilen dette var: lista beholdt «hjemmel», et navn R113
+    hadde døpt om til «gjeldende_lov». Det gamle navnet traff ingenting,
+    og det nye sto ikke i lista — så personvernbryteren fjernet en
+    seksjon uten persondata, og «utelatt» meldte den som fjernet av
+    personvernhensyn.
+
+    Et navn i lista som ikke finnes i profilen er alltid en slik feil:
+    enten er seksjonen borte, eller så er den døpt om."""
+    profil = _profil()
+    ukjente = sorted(n for n in api._PROFIL_SAMMENDRAG_BEHOLD
+                     if n not in profil)
+    assert not ukjente, (
+        f"Disse står i behold-lista, men finnes ikke i profilen: "
+        f"{ukjente}. Er en seksjon døpt om, må lista følge med — ellers "
+        f"faller den ut av «profil=sammendrag» i stillhet.")
 
 
 def test_profil_full_er_uendret_bortsett_fra_interne_felt():
