@@ -5524,19 +5524,18 @@ class Handler(BaseHTTPRequestHandler):
             svar, avkortet = _borealis_generer(
                 prompter.hent("spor.uten_dokument", sporsmal=sporsmal),
                 MAKS_SVAR_TOKENS)
-            return self._svar(200, {
-                "ok": True, "sporsmal": sporsmal, "svar": svar,
-                "uten_dokument": True,
-                "melding": ("Ingen fil vedlagt — svaret er generell "
-                            "modellkunnskap, IKKE hentet fra noe dokument, "
-                            "og tallvakten gjelder derfor ikke"),
-                "svar_avkortet": avkortet,
-                "tid_sekunder": round(time.time() - t0, 1),
-                "kilde": "borealis_" + (_borealis["motor"] or "ukjent")
-                         + "_uten_dokument",
-                "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
-                            "modell": _borealis["modellfil"] or _borealis["motor"]},
-            })
+            return self._svar(200, _spor_svar(
+                modus="uten_dokument",
+                sporsmal=sporsmal, svar=svar,
+                uten_dokument=True,
+                melding=("Ingen fil vedlagt — svaret er generell "
+                         "modellkunnskap, IKKE hentet fra noe dokument, "
+                         "og tallvakten gjelder derfor ikke"),
+                svar_avkortet=avkortet,
+                tid_sekunder=round(time.time() - t0, 1),
+                kilde="borealis_" + (_borealis["motor"] or "ukjent")
+                      + "_uten_dokument",
+            ))
 
         t0 = time.time()
         ocr_brukt = False
@@ -5590,35 +5589,45 @@ class Handler(BaseHTTPRequestHandler):
         # fil sendt UTEN spørsmål (R47).
         if tom_foresporsel or re.search(
                 r"(?i)hele\s+(tekst|dokument|innhold)|all\s+tekst", sporsmal):
-            return self._svar(200, {
-                "ok": True, "filnavn": filnavn, "sporsmal": sporsmal,
-                "melding": ("Ingen spørsmål oppgitt — hele den utleste "
-                            "teksten returneres ordrett, uten tillegg "
-                            "eller utelatelser") if tom_foresporsel else None,
-                "svar": raa_tekst,
-                "trenger_ocr": False, "ocr_brukt": ocr_brukt,
-                "strekkoder": strekkoder, "ocr_motorer": ocr_motorer,
-                "handskrift": handskrift,
-                "korrigert_tekst": (korriger_borealis(raa_tekst)
-                                    if ocr_brukt and tekstfelter.get(
-                                        "korriger", "").strip().lower()
-                                    in ("ja", "1", "true") else None),
-                "tall_verifisert": True, "tolket_sporsmal": None,
-                "svar_avkortet": False, "advarsel": None,
-                "kilde": "deterministisk_fulltekst",
-                "versjon": {"api": API_VERSJON, "prompt": prompter.versjon()},
-            })
+            return self._svar(200, _spor_svar(
+                modus="fulltekst",
+                filnavn=filnavn, sporsmal=sporsmal,
+                melding=("Ingen spørsmål oppgitt — hele den utleste "
+                         "teksten returneres ordrett, uten tillegg "
+                         "eller utelatelser") if tom_foresporsel else None,
+                svar=raa_tekst,
+                ocr_brukt=ocr_brukt,
+                strekkoder=strekkoder, ocr_motorer=ocr_motorer,
+                handskrift=handskrift,
+                korrigert_tekst=(korriger_borealis(raa_tekst)
+                                 if ocr_brukt and tekstfelter.get(
+                                     "korriger", "").strip().lower()
+                                 in ("ja", "1", "true") else None),
+                tall_verifisert=True,
+                svar_avkortet=False,
+                fra_cache=fra_cache,
+                tid_sekunder=round(time.time() - t0, 1),
+                kilde="deterministisk_fulltekst",
+            ))
 
         kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
                                    handskrift, strekkoder, les_strekkoder)
         if kjerne["tom"]:
-            return self._svar(200, {
-                "ok": True, "filnavn": filnavn, "trenger_ocr": True,
-                "ocr_brukt": ocr_brukt, "svar": None, "strekkoder": [],
-                "ocr_motorer": ocr_motorer,
-                "melding": ("Fant ingen lesbar tekst i dokumentet — selv med OCR. "
-                            "(Rene bilder uten skrift gir ingen tekst.)"),
-            })
+            # Det TOMME dokumentet var verst: 8 nøkler, og uten
+            # «versjon» — stikk i strid med R39. En bunke med én blank
+            # side krasjet roboten på nettopp den siden.
+            return self._svar(200, _spor_svar(
+                modus="tomt_dokument",
+                filnavn=filnavn, sporsmal=sporsmal,
+                trenger_ocr=True,
+                ocr_brukt=ocr_brukt, svar=None, strekkoder=strekkoder,
+                ocr_motorer=ocr_motorer, handskrift=handskrift,
+                fra_cache=fra_cache,
+                tid_sekunder=round(time.time() - t0, 1),
+                kilde="deterministisk_tom",
+                melding=("Fant ingen lesbar tekst i dokumentet — selv med OCR. "
+                         "(Rene bilder uten skrift gir ingen tekst.)"),
+            ))
         advarsler.extend(kjerne["advarsler"])
         svar = kjerne["svar"]
         tall_verifisert = kjerne["tall_verifisert"]
@@ -5633,26 +5642,25 @@ class Handler(BaseHTTPRequestHandler):
                 tekstfelter.get("korriger", "").strip().lower() in ("ja", "1", "true")):
             korrigert = korriger_borealis(raa_tekst)
 
-        return self._svar(200, {
-            "ok": True, "filnavn": filnavn, "sporsmal": sporsmal,
-            "svar": svar, "trenger_ocr": False, "ocr_brukt": ocr_brukt,
-            "strekkoder": strekkoder, "ocr_motorer": ocr_motorer,
-            "handskrift": handskrift,
-            "korrigert_tekst": korrigert,
-            "tall_verifisert": tall_verifisert,
-            "tolket_sporsmal": tolket_sporsmal,
-            "svar_avkortet": svar_avkortet,
-            "advarsel": advarsel,
-            "fra_cache": fra_cache,
-            "tid_sekunder": round(time.time() - t0, 1),
+        return self._svar(200, _spor_svar(
+            modus="dokumentsporsmal",
+            filnavn=filnavn, sporsmal=sporsmal,
+            svar=svar, ocr_brukt=ocr_brukt,
+            strekkoder=strekkoder, ocr_motorer=ocr_motorer,
+            handskrift=handskrift,
+            korrigert_tekst=korrigert,
+            tall_verifisert=tall_verifisert,
+            tolket_sporsmal=tolket_sporsmal,
+            svar_avkortet=svar_avkortet,
+            advarsel=advarsel,
+            fra_cache=fra_cache,
+            tid_sekunder=round(time.time() - t0, 1),
             # Ærlig kilde: en ren sidelesing gikk aldri innom modellen
-            "kilde": (("deterministisk_sideutsnitt"
-                       if kjerne.get("modell_brukt") is False
-                       else "borealis_" + (_borealis["motor"] or "ukjent"))
-                      + ("+regionocr" if ocr_brukt else "")),
-            "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
-                        "modell": _borealis["modellfil"] or _borealis["motor"]},
-        })
+            kilde=(("deterministisk_sideutsnitt"
+                    if kjerne.get("modell_brukt") is False
+                    else "borealis_" + (_borealis["motor"] or "ukjent"))
+                   + ("+regionocr" if ocr_brukt else "")),
+        ))
 
     def log_request(self, code='-', size='-'):
         # Strukturert tilgangslogg + behold den ryddige stdout-linjen.
@@ -6557,6 +6565,57 @@ def _sammendragsform(svar: dict) -> dict:
     if isinstance(profil, dict) and fjernet:
         profil["utelatt"] = sorted(set(profil.get("utelatt") or []) | set(fjernet))
     return svar
+
+
+def _spor_svar(**felt) -> dict:
+    """Bygger ETT svar fra POST /spor, med samme nøkkelsett hver gang.
+
+    Ruten hadde fire 200-veier med hvert sitt sett. Bare `ok` og `svar`
+    var med i alle; 22 av 24 nøkler kom og gikk. Verst var det tomme
+    dokumentet: 8 nøkler, uten `versjon` — og R39 sier uttrykkelig at
+    HVERT /spor-svar bærer `versjon`.
+
+    En robot leser `svar["tall_verifisert"]` uten å sjekke om stien
+    finnes. Den virket på hvert dokument med lesbar tekst og krasjet på
+    den første blanke siden i bunken.
+
+    Skjelettet er fasit: alle nøkler, med null der noe ikke gjelder.
+    Kalleren overstyrer bare det den faktisk vet.
+
+    `modus` er ny og sier HVILKEN vei som svarte. Uten den måtte en
+    klient gjette ut fra hvilke felt som var fylt — altså gjøre den
+    formsniffingen kontrakten skal gjøre unødvendig."""
+    skjelett = {
+        "ok": True,
+        "modus": None,
+        "filnavn": None,
+        "sporsmal": None,
+        "svar": None,
+        "melding": None,
+        "uten_dokument": False,
+        "trenger_ocr": False,
+        "ocr_brukt": False,
+        "ocr_motorer": None,
+        "strekkoder": None,
+        "handskrift": None,
+        "korrigert_tekst": None,
+        "tall_verifisert": None,
+        "tolket_sporsmal": None,
+        "svar_avkortet": None,
+        "advarsel": None,
+        "fra_cache": False,
+        "tid_sekunder": None,
+        "kilde": None,
+        # ALLTID med, og alltid med samme undernøkler (R39). To av de
+        # gamle veiene bygget den uten «modell».
+        "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
+                    "modell": _borealis["modellfil"] or _borealis["motor"]},
+    }
+    ukjente = set(felt) - set(skjelett)
+    if ukjente:                      # fanges av vakttesten, ikke i drift
+        raise KeyError(f"_spor_svar fikk ukjente felt: {sorted(ukjente)}")
+    skjelett.update(felt)
+    return skjelett
 
 
 def _sammendragsform_operasjoner(svar: dict) -> dict:
