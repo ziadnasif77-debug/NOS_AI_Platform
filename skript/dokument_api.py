@@ -3243,6 +3243,75 @@ def _skjemaer() -> dict:
                 "tid_sekunder": {"type": "number"},
                 "kilde": s(example="deterministisk"),
                 "versjon": {"type": "object"}}},
+        # R131 gjorde jobbsvaret formstabilt: SAMME nøkler i kø, under
+        # arbeid og ferdig, med `null` der noe ikke er lest ennå — nettopp
+        # så en pollende robot kan lese samme sti hvert sekund uten å
+        # krasje. Den kontrakten sto ikke i spekken i det hele tatt, så
+        # den som genererte en klient måtte finne den ut selv.
+        "JobbOpprettet": {
+            "type": "object",
+            "description": ("Svaret på POST /jobb (202). Samme nøkkelsett "
+                            "også ved et Idempotency-Key-replay, som IKKE "
+                            "bærer dokumentteksten (R130)."),
+            "properties": {
+                "ok": b(),
+                "jobb_id": s(example="5040da9e205d"),
+                "status": s(example="ko", enum=["ko", "arbeider", "ferdig",
+                                                "feil", "avbrutt"]),
+                "fremdrift": s(nullable=True,
+                               description="Menneskelesbar fremdrift"),
+                "versjon": {"type": "integer",
+                            "description": "Løftes ved hver tilstandsendring "
+                                           "— brukes til optimistisk låsing "
+                                           "mot /avbryt"},
+                "sporsmal_senere": b(description="Kan du stille spørsmål om "
+                                                 "jobben når den er ferdig"),
+                "idempotent_gjenbruk": b(
+                    description="true = Idempotency-Key traff en jobb som "
+                                "allerede fantes; ingen ny ble opprettet")}},
+        "Jobb": {
+            "type": "object",
+            "description": (
+                "Jobbens tilstand. SAMME nøkler i alle tilstander (R131): "
+                "et felt som ikke er lest ennå er `null`, ikke `{}` eller "
+                "`[]` — «vi har ikke sett etter» og «vi så etter og fant "
+                "ingenting» er to ulike svar (R128). `dokumentdato` er "
+                "skjelettet fra første stund, så `dokumentdato.periode.fra` "
+                "kan leses ved hver poll uten å krasje."),
+            "properties": {
+                "ok": b(),
+                "jobb_id": s(example="5040da9e205d"),
+                "status": s(example="ferdig", enum=["ko", "arbeider",
+                                                    "ferdig", "feil",
+                                                    "avbrutt"]),
+                "filnavn": s(nullable=True),
+                "opprettet": s(example="2026-08-07 17:31:19"),
+                "versjon": {"type": "integer"},
+                "avbrutt": b(description="Står her HELE veien, ikke bare "
+                                         "når det skjer"),
+                "feil": s(nullable=True, description="Samme — alltid til "
+                                                     "stede"),
+                "sider_ferdig": {"type": "integer", "nullable": True},
+                "sider_totalt": {"type": "integer", "nullable": True},
+                "sekunder_brukt": {"type": "integer", "nullable": True},
+                "sekunder_igjen_estimat": {
+                    "type": "integer", "nullable": True,
+                    "description": "Nulles i ALLE sluttilstander — et "
+                                   "estimat på en avbrutt jobb er en løgn"},
+                "antall_tegn": {"type": "integer", "nullable": True},
+                "tekst_tilgjengelig": b(
+                    description="Teksten ligger IKKE i dette svaret; hent "
+                                "den med GET /jobb/{id}/tekst"),
+                "felter": {"type": "object", "nullable": True},
+                "datoer": {"type": "array", "nullable": True,
+                           "items": s(format="date")},
+                "dokumentdato": {**ref("Dokumentdato"), "nullable": True},
+                "strekkoder": {"type": "array", "nullable": True,
+                               "items": {"type": "object"}},
+                "handskrift": {"type": "array", "nullable": True},
+                "ocr_motorer": {"type": "object", "nullable": True,
+                                "description": "null når OCR aldri kjørte "
+                                               "— f.eks. på en tekstfil"}}},
         "EkkoSvar": {
             "type": "object",
             "description": "Diagnose: nøyaktig hva serveren mottok. "
@@ -3300,10 +3369,70 @@ def _skjemaer() -> dict:
     }
 
 
+# Rutene som er ÅPNE selv når API_NOKKEL er satt (R140). Her betyr det
+# `security: []` på operasjonen, som i OpenAPI er den eksplisitte måten
+# å si «denne krever ingenting» — å bare utelate den ville arvet
+# rotnivåets krav.
+_AAPNE_I_SPEKKEN = ("/hjelp",)
+
+
+def _gjor_spekken_aerlig(spec: dict) -> dict:
+    """Etterbehandling som gjør spekken til det den later som (R144).
+
+    Målt på spekken slik en klientgenerator leser den:
+
+      · `securitySchemes: ApiKeyAuth` var DEKLARERT, men aldri PÅFØRT —
+        ingen `security` på rotnivå og ingen på noen operasjon. En
+        generert klient sendte derfor ingen nøkkel og fikk 401 på
+        første kall. Ordningen sto der og gjorde ingenting.
+      · 27 av 27 objektskjemaer manglet `required`, så en generator
+        gjorde HVERT felt valgfritt. Det er stikk motsatt av R118, som
+        er selve løftet vårt: nøklene er ALLTID til stede. Spekken
+        underdrev vår egen garanti, og en klient måtte skrive
+        null-sjekker vi har lovet at den slipper.
+      · 13 av 13 operasjoner manglet `operationId`, så generatoren
+        fant på metodenavn ut fra stien — navn som skifter neste gang
+        en sti gjør det.
+
+    Gjøres her og ikke i literalen over: da er regelen ETT sted, og et
+    nytt endepunkt arver den i stedet for å måtte huske den."""
+    spec["security"] = [{"ApiKeyAuth": []}]
+
+    for sti, operasjoner in spec.get("paths", {}).items():
+        for metode, op in operasjoner.items():
+            if not isinstance(op, dict):
+                continue
+            if sti in _AAPNE_I_SPEKKEN:
+                op["security"] = []
+            if not op.get("operationId"):
+                op["operationId"] = _operasjonsnavn(metode, sti)
+
+    for navn, skjema in (spec.get("components") or {}).get("schemas", {}).items():
+        if skjema.get("type") != "object" or "required" in skjema:
+            continue
+        egenskaper = list(skjema.get("properties") or {})
+        if egenskaper:
+            # R118: alle nøklene er alltid til stede. `nullable` sier at
+            # VERDIEN kan være null — det er noe annet enn at nøkkelen
+            # kan mangle, og det er nettopp skillet spekken ikke fikk
+            # fram. test_openapi_er_aerlig.py måler dette mot ekte svar.
+            skjema["required"] = egenskaper
+    return spec
+
+
+def _operasjonsnavn(metode: str, sti: str) -> str:
+    """«post» + «/jobb/{id}/avbryt» → «postJobbIdAvbryt».
+
+    Stabilt og lesbart. Uten dette lager generatorene navn selv, og de
+    skifter så snart en sti gjør det."""
+    biter = [b for b in re.split(r"[^A-Za-z0-9]+", sti) if b]
+    return metode.lower() + "".join(b[:1].upper() + b[1:] for b in biter)
+
+
 def _openapi() -> dict:
     fil_felt = {"type": "string", "format": "binary",
                 "description": "Dokumentet: PDF, bilde (JPG/PNG/TIFF/BMP/WEBP), DOCX, XLSX/XLSM, CSV eller TXT"}
-    return {
+    return _gjor_spekken_aerlig({
         "openapi": "3.0.3",
         "info": {
             "title": "NAV dokument-API (generelt)",
@@ -3488,25 +3617,46 @@ def _openapi() -> dict:
                 "requestBody": {"content": {"multipart/form-data": {"schema": {
                     "type": "object", "required": ["fil"],
                     "properties": {"fil": fil_felt}}}}},
-                "responses": {"202": {"description": "jobb_id + versjon — følg med på GET /jobb/{id}"}}}},
+                "responses": {"202": {
+                    "description": "jobb_id + versjon — følg med på GET /jobb/{id}",
+                    "content": {"application/json": {
+                        "schema": {"$ref":
+                            "#/components/schemas/JobbOpprettet"}}}}}}},
             "/jobb/{id}": {"get": {"summary": "Jobbstatus og fremdrift",
                 "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "responses": {"200": {"description":
                     "status, versjon (for optimistisk låsing), sider_ferdig/sider_totalt, "
                     "tidsestimat, felter, datoer og dokumentdato (med «periode»: datospennet "
                     "fra–til og dato per side — særlig nyttig her, siden store skannede bunker "
-                    "går via bakgrunnsjobber)"}}}},
+                    "går via bakgrunnsjobber)",
+                    "content": {"application/json": {
+                        "schema": {"$ref":
+                            "#/components/schemas/Jobb"}}}}}}},
             "/jobb/{id}/tekst": {"get": {"summary": "Hele den utleste teksten fra en ferdig jobb",
                 "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
-                "responses": {"200": {"description": "tekst, antall_tegn"}}}},
+                "responses": {"200": {
+                    "description": "tekst, antall_tegn",
+                    "content": {"application/json": {"schema": {
+                        "type": "object",
+                        "properties": {
+                            "ok": {"type": "boolean"},
+                            "jobb_id": {"type": "string"},
+                            "tekst": {"type": "string"},
+                            "antall_tegn": {"type": "integer"}}}}}}}}},
             "/jobb/{id}/avbryt": {"post": {"summary": "Avbryt en kø/pågående jobb",
                 "parameters": [
                     {"name": "id", "in": "path", "required": True, "schema": {"type": "string"}},
                     {"name": "versjon", "in": "query", "required": False,
                      "schema": {"type": "integer"},
                      "description": "Optimistisk låsing: 409 hvis jobben er endret siden denne versjonen"}],
-                "responses": {"200": {"description": "status avbrytes + versjon"},
-                              "409": {"description": "Versjonskonflikt eller jobben er i en sluttilstand"}}}},
+                "responses": {"200": {
+                    "description": "status avbrytes + versjon",
+                    "content": {"application/json": {
+                        "schema": {"$ref":
+                            "#/components/schemas/Jobb"}}}},
+                              "409": {
+                                  "description": "Versjonskonflikt eller jobben er i en sluttilstand — de to skilles av problem.type (R132)",
+                                  "$ref": "#/components/responses/Feil"}}}},
             # /innsyn og /ekko manglet i spekken selv om de er fullverdige
             # ruter. For /ekko var det verst: det er DIAGNOSE-endepunktet
             # man trenger nettopp når noe ikke kommer fram — og det var
@@ -3617,7 +3767,7 @@ def _openapi() -> dict:
                     "content": {"application/json": {"schema": {
                         "$ref": "#/components/schemas/EkkoSvar"}}}}}}},
         },
-    }
+    })
 
 
 # Endepunktguiden som vises UNDER endepunktlista på /dokumentasjon.

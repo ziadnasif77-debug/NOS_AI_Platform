@@ -398,16 +398,27 @@ def test_ingenting_er_merket_deprecated():
 
 def test_ingen_brutte_referanser_i_openapi():
     """En $ref til et skjema som ikke finnes gjør at Swagger UI viser
-    tomt felt i stedet for å feile."""
+    tomt felt i stedet for å feile.
+
+    Denne så tidligere BARE i `components/schemas` og sammenlignet på
+    siste ledd i pekeren. Da ble en fullt gyldig
+    `#/components/responses/Feil` meldt som brutt (R144) — en falsk
+    positiv som ville tvunget den neste til å inline et skjema som
+    allerede fantes, bare for å få vakten grønn. Nå følges pekeren
+    faktisk, ledd for ledd, slik en generator gjør det.
+    """
     spek = api._openapi()
-    kjente = set(spek["components"]["schemas"])
     brutte = []
 
     def se(node):
         if isinstance(node, dict):
             pekt = node.get("$ref")
-            if pekt and pekt.split("/")[-1] not in kjente:
-                brutte.append(pekt)
+            if isinstance(pekt, str):
+                mål = spek
+                for ledd in pekt.lstrip("#/").split("/"):
+                    mål = mål.get(ledd) if isinstance(mål, dict) else None
+                if mål is None:
+                    brutte.append(pekt)
             for verdi in node.values():
                 se(verdi)
         elif isinstance(node, list):
