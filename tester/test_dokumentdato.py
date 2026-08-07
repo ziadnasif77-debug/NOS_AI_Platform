@@ -291,9 +291,35 @@ def test_bunke_varsles_men_uten_dobbel_advarsel():
     assert "like sterke kandidater" not in resultat["advarsel"]
 
 
-def test_ingen_dokumentdato_gir_ingen_periode():
+def test_ingen_dokumentdato_gir_tomt_periodeskjelett():
+    """Uten dokumentdato finnes ingen periode — men `periode` er et
+    OBJEKT, ikke null.
+
+    Testen krevde tidligere `periode is None`. Det var samme feil som
+    R118 forbyr: et nestet objekt som blir null tar med seg alle stiene
+    under seg, så en robot som leser `periode.fra` krasjer på det første
+    udaterte dokumentet. Nå står skjelettet med null-verdier."""
     resultat = finn_dokumentdato([_kandidat("05.07.2026", "frist")])
-    assert resultat["dato"] is None and resultat["periode"] is None
+    assert resultat["dato"] is None
+    assert resultat["periode"] == {"fra": None, "til": None, "antall": 0,
+                                   "per_side": [],
+                                   "flere_dokumenter": False}
+
+
+def test_dokumentdatoen_har_samme_nokler_med_og_uten_funn():
+    """Kjernen i R118, målt direkte på de to grenene.
+
+    Tom-grenen manglet «type_kodet» og «rolle_kodet» — ikke som null,
+    men BORTE. 12 nøkler ble 10, og en robot som leser
+    `felter.dokumentdato.type_kodet.kode` virket på hvert datert
+    dokument og krasjet på det første udaterte."""
+    med = finn_dokumentdato([_kandidat("05.07.2026", "dokumentdato")])
+    uten = finn_dokumentdato([_kandidat("05.07.2026", "frist")])
+    assert sorted(med) == sorted(uten), (
+        f"ulike nøkkelsett:\n  med funn: {sorted(med)}\n"
+        f"  uten funn: {sorted(uten)}")
+    assert uten["type_kodet"] == {"kode": None, "term": None}
+    assert uten["rolle_kodet"] == {"kode": None, "term": None}
 
 
 # ---------- alder (fortsatt tilgjengelig som hjelpefunksjon) ----------

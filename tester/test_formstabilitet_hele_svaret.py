@@ -217,23 +217,6 @@ KJENTE_BRUDD = {
     ("/dokument", "/felter/felter"):
         "Åpent kart: nøkkelsettet følger dataene. Egen post i planen — "
         "hvert faktum skal få et typet hjem i profilen i stedet.",
-    ("/dokument", "/felter/dokumentdato/type_kodet"):
-        "Mangler helt når ingen dato finnes (tekstuttrekk.py:633). "
-        "Rettes ved å emittere {kode: null, term: null} i tom-grenen.",
-    ("/dokument", "/felter/dokumentdato/rolle_kodet"):
-        "Samme brudd som type_kodet, samme sted.",
-    ("/dokument", "/felter/datoer_detaljert"):
-        "Elementet som utledes fra et fødselsnummer mangler "
-        "«aar_antatt», som alle andre oppføringer har "
-        "(tekstuttrekk.py:969). Det legges SIST, så den gamle vakten "
-        "kunne aldri se det. Rettes ved å sette aar_antatt: False også "
-        "i den grenen.",
-    ("/dokument", "/felter/dokumentdato/periode"):
-        "Nestet objekt som blir null i tom-grenen — tar med seg alle "
-        "stiene under seg.",
-    ("/dokument", "/struktur"):
-        "Hele blokka er null når struktur ikke er bedt om, og bruker «» "
-        "der profilen bruker null. Skal fjernes som parallellblokk.",
     ("/dokument/operasjoner", "/resultater"):
         "Elementformen varierer med operasjonstype og utfall (målt: 7 "
         "former). Skal bli én form med null der noe ikke gjelder.",
@@ -431,14 +414,46 @@ def test_gjeldslista_har_begrunnelse():
     assert not uten, f"Unntak uten begrunnelse: {uten}"
 
 
-def test_vakten_faktisk_fanger_et_innfort_brudd():
+def test_vakten_faktisk_fanger_et_innfort_brudd(monkeypatch):
     """Speilet. En vakt som aldri blir rød er en påstand.
 
-    Vi fjerner ett unntak vi VET dekker et ekte brudd, og krever at
-    minst én sjekk melder fra."""
-    nokkel = ("/dokument", "/felter/dokumentdato/type_kodet")
-    assert nokkel in KJENTE_BRUDD, "prøven peker på feil linje"
-    uten = {k: v for k, v in KJENTE_BRUDD.items() if k != nokkel}
-    assert any(sjekk("/dokument", uten) for sjekk in SJEKKER), (
-        "Vakten fanget ikke det manglende «type_kodet» — da vokter den "
-        "ingenting.")
+    Prøven LAGER et brudd i stedet for å peke på en linje i gjeldslista.
+    Første utgave pekte på «felter/dokumentdato/type_kodet» — og ble
+    ubrukelig i samme øyeblikk den feilen ble rettet. En prøve som
+    råtner når koden blir bedre, måler feil ting."""
+    ekte = RUTER["/dokument"]
+
+    def med_manglende_nokkel(tekst):
+        svar = ekte(tekst)
+        # Fjern en nøkkel bare på ETT av dokumentene — nøyaktig formen
+        # «nøkkelen forsvant fordi verdien manglet».
+        if "Vedtak om sykepenger" not in tekst:
+            svar.get("kvalitet", {}).pop("ocr_brukt", None)
+        return svar
+
+    monkeypatch.setitem(RUTER, "/dokument", med_manglende_nokkel)
+    problemer = _problem_nokkelsett("/dokument")
+    assert problemer, (
+        "Vakten så ikke at en nøkkel forsvant på ett av dokumentene — "
+        "da vokter den ingenting.")
+    assert any("ocr_brukt" in p for p in problemer), problemer
+
+
+def test_vakten_fanger_et_avvikende_listeelement(monkeypatch):
+    """Samme speil for lister — den blindsonen `node[0]` hadde."""
+    ekte = RUTER["/dokument"]
+
+    def med_avvikende_element(tekst):
+        svar = ekte(tekst)
+        datoer = (svar.get("felter") or {}).get("datoer_detaljert") or []
+        if len(datoer) > 1:
+            # SISTE element, ikke det første: det er der den ekte
+            # feilen satt, og der en node[0]-vakt er blind.
+            datoer[-1].pop("kontekst", None)
+        return svar
+
+    monkeypatch.setitem(RUTER, "/dokument", med_avvikende_element)
+    problemer = _problem_lister("/dokument")
+    assert problemer, (
+        "Vakten så ikke et avvikende SISTE listeelement — det er "
+        "nøyaktig blindsonen den ble skrevet for å lukke.")

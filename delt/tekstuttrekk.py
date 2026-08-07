@@ -539,7 +539,11 @@ def dokumentets_periode(datoer: list) -> dict:
         if parset:
             egne.append((parset, d))
     if not egne:
-        return None
+        # Fast skjelett, ikke None. Et nestet objekt som blir null tar
+        # med seg ALLE stiene under seg (R118): en robot som leser
+        # `periode.fra` krasjer på første dokument uten dokumentdato.
+        return {"fra": None, "til": None, "antall": 0,
+                "per_side": [], "flere_dokumenter": False}
 
     egne.sort(key=lambda p: p[0])
     fra, til = egne[0][1]["dato"], egne[-1][1]["dato"]
@@ -630,16 +634,24 @@ def finn_dokumentdato(datoer: list, ocr_brukt: bool = False) -> dict:
         kandidater.append((rang, 0 if (d.get("side") or 1) == 1 else 1, i,
                            kilde, d))
     if not kandidater:
+        # NØYAKTIG samme nøkler som funn-grenen under (R118). Grenen
+        # manglet «type_kodet» og «rolle_kodet» — ikke som null, men
+        # BORTE: 12 nøkler ble 10. En robot som leser
+        # `felter.dokumentdato.type_kodet.kode` virket på hvert datert
+        # dokument og krasjet på det første udaterte.
         return {
             "dato": None, "raatekst": None,
-            "type": None, "kilde": None, "konfidens": "ingen",
+            "type": None,
+            "type_kodet": kodeverk(None, _TYPE_TERM),
+            "rolle_kodet": kodeverk(None, _ROLLE_TERM),
+            "kilde": None, "konfidens": "ingen",
             "begrunnelse": ("Fant ingen dato som kan knyttes til dokumentet "
                             "selv — verken etikett (vedtaksdato/utstedt/"
                             "signert), dato øverst på side 1, dato ved en "
                             "signaturblokk nederst eller PDF-metadata. "
                             "Datoene i dokumentet hører til innholdet."),
             "side": None, "alternativer": [], "advarsel": None,
-            "periode": None,
+            "periode": dokumentets_periode([]),
         }
 
     kandidater.sort(key=lambda k: (k[0], k[1], k[2]))
@@ -977,6 +989,12 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
                 "side": None,
                 "kontekst": "fødselsnummer i dokumentet (maskert)",
                 "i_lopende_tekst": False,
+                # Samme nøkler som hver andre oppføring (R119). Denne
+                # manglet «aar_antatt» — og den legges SIST, så en vakt
+                # som bare inspiserte listas FØRSTE element kunne aldri
+                # se det. Århundret er utledet av fødselsnummerets egen
+                # regel, ikke antatt av oss, så verdien er False.
+                "aar_antatt": False,
             })
     return resultater
 
