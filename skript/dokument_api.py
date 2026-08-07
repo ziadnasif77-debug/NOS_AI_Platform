@@ -2287,6 +2287,12 @@ def _jobb_arbeider() -> None:
                     _jobb_lagre(jobb)
             doc.close()
 
+            if jobb.get("status") == "avbrutt":
+                # Estimatet ble bare nullet i den andre grenen. Målt sto
+                # «ca. 30 s igjen» på en AVBRUTT jobb, og GUI-en skrev
+                # det ut uendret: «status: avbrutt — side 2 av 10 — ca.
+                # 30 s igjen». Et estimat på noe som ikke skjer.
+                jobb["sekunder_igjen_estimat"] = None
             if jobb.get("status") != "avbrutt":
                 if len(tekster) > 1:
                     tekst = "\n".join(
@@ -5611,22 +5617,55 @@ class Handler(BaseHTTPRequestHandler):
             # Alle feltene arbeidstråden senere fyller, forhåndsdeklareres
             # her — da endrer den bare VERDIER (aldri dict-størrelse), så
             # en samtidig statuspoll aldri krasjer under iterasjon.
+            # FORHÅNDSDEKLARERT MED «VET IKKE», IKKE MED «FANT INGENTING».
+            #
+            # Feltene ble deklarert her for at arbeidstråden bare skal
+            # endre VERDIER (aldri dict-størrelse), så en samtidig
+            # statuspoll ikke krasjer under iterasjon. Det er riktig —
+            # men verdiene var {}/[]/0, altså «vi leste og fant
+            # ingenting» om et dokument som ligger i kø og ikke er rørt.
+            #
+            # Verst i avbrutt tilstand: målt sto `sider_ferdig: 2` av 10
+            # SAMTIDIG med `antall_tegn: 0` og `felter: {}` — arbeidet
+            # var gjort og kastet, og svaret påsto at det ikke fantes noe.
+            #
+            # `dokumentdato` var i tillegg null før ferdig og et
+            # 12-nøkkels objekt etterpå: en poller som leser
+            # `dokumentdato.periode.fra` krasjet på HVER poll før
+            # jobben var ferdig (R118).
             jobb = {"jobb_id": jobb_id, "filnavn": filnavn, "status": "kø",
                     "versjon": 1,
-                    "sider_ferdig": 0, "sider_totalt": None,
+                    # «avbrutt» og «feil» dukket opp FØRST i det de
+                    # skjedde — og det er nettopp de to nøklene en
+                    # poller trenger. Nå står de der hele veien.
+                    "avbrutt": False, "feil": None,
+                    "sider_ferdig": None, "sider_totalt": None,
                     "sekunder_brukt": 0, "sekunder_igjen_estimat": None,
-                    "tekst": "", "antall_tegn": 0, "felter": {}, "datoer": [],
-                    "dokumentdato": None,
-                    "strekkoder": [], "handskrift": [], "ocr_motorer": {},
+                    "tekst": None, "antall_tegn": None,
+                    "felter": None, "datoer": None,
+                    "dokumentdato": _tomt_dokumentdato(),
+                    "strekkoder": None, "handskrift": None,
+                    "ocr_motorer": None,
                     "opprettet": time.strftime("%Y-%m-%d %H:%M:%S")}
             if slag == "tekst":
                 t = innhold.strip()
-                jobb.update(status="ferdig", tekst=t, antall_tegn=len(t),
-                            felter=utvid_entiteter(t, {}),
-                            datoer=finn_alle_datoer(t),
-                            dokumentdato=dokumentdato_av(t),
-                            strekkoder=[],
-                            handskrift=[], ocr_motorer={})
+                # `_jobb_status`, ikke `jobb.update`: den løfter
+                # VERSJONEN. Denne veien gjorde det ikke, så en ferdig
+                # tekstjobb rapporterte fortsatt versjon 1 — samme tall
+                # den hadde i kø. Den optimistiske låsingen kunne dermed
+                # ikke oppdage overgangen kø→ferdig i det hele tatt.
+                _jobb_status(
+                    jobb, "ferdig", tekst=t, antall_tegn=len(t),
+                    felter=utvid_entiteter(t, {}),
+                    datoer=finn_alle_datoer(t),
+                    dokumentdato=dokumentdato_av(t),
+                    # Ren tekst har ingen sider å telle, men jobben ER
+                    # ferdig: 1 av 1. `null` her fikk GUI-en til å vise
+                    # ingen fremdrift i det hele tatt for en ferdig jobb.
+                    sider_ferdig=1, sider_totalt=1,
+                    # Dekoderen og OCR kjørte aldri på tekstveien —
+                    # «vet ikke», ikke «fant ingenting» (R128).
+                    strekkoder=None, handskrift=None, ocr_motorer=None)
                 _jobber[jobb_id] = jobb
                 _jobb_lagre(jobb)
             else:
@@ -6801,6 +6840,19 @@ def bryterverdi(raa, standard: bool):
     if v in BRYTER_NEI:
         return False, False
     return standard, True
+
+
+def _tomt_dokumentdato() -> dict:
+    """Dokumentdato-skjelettet med bare null-verdier.
+
+    En jobb i kø hadde `dokumentdato: null` og fikk et 12-nøkkels objekt
+    først når den ble ferdig. En poller som leser
+    `dokumentdato.periode.fra` krasjet dermed på HVER poll før jobben
+    var ferdig — og det er den vanlige tilstanden, ikke unntaket.
+
+    Gjenbruker den EKTE tom-grenen, så skjelettet aldri kan gli fra
+    formen `finn_dokumentdato` faktisk leverer."""
+    return finn_dokumentdato([])
 
 
 def _spor_svar(**felt) -> dict:
