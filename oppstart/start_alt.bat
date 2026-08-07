@@ -18,7 +18,11 @@ echo ================================================================
 echo   NAV - starter ALLE tjenester SKJULT i bakgrunnen ...
 echo ================================================================
 
-wscript //nologo "%~dp0_skjult.vbs" "%~dp0start_api.bat"          "%CD%\data\logger\oppstart_api.log"
+REM Vakthunden, ikke API-et direkte: den starter serveren, helsesjekker
+REM /hjelp og skriver EXITKODEN naar den doer. Ingen oppstartsvei skal
+REM lenger la serveren kjoere uovervaaket - to doegn med krasj ga null
+REM informasjon nettopp fordi ingen fanget avslutningen.
+wscript //nologo "%~dp0_skjult.vbs" "%~dp0start_api_med_vakthund.bat" "%CD%\data\logger\oppstart_api.log"
 wscript //nologo "%~dp0_skjult.vbs" "%~dp0start_prefect.bat"      "%CD%\data\logger\oppstart_prefect.log"
 wscript //nologo "%~dp0_skjult.vbs" "%~dp0start_label_studio.bat" "%CD%\data\logger\oppstart_label_studio.log"
 

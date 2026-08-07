@@ -931,8 +931,18 @@ KONTROLL_TJENESTER = [
         "key": "api", "navn": "Dokument-API", "farge": CYAN, "port": 8600,
         "sjekk_url": "http://127.0.0.1:8600/hjelp",
         "aapne_url": "http://127.0.0.1:8600/dokumentasjon",
-        "bat": "start_api.bat", "logg": "oppstart_api.log",
-        "beskrivelse": "OCR + Borealis  ·  :8600",
+        # VAKTHUNDEN, ikke API-et direkte. Kontrollpanelet er den ENESTE
+        # veien inn for brukeren, så alt som skal være oppe må startes
+        # herfra — ellers kjører serveren uovervåket akkurat når det
+        # betyr mest. Vakthunden starter API-et, helsesjekker /hjelp, og
+        # skriver EXITKODEN når det dør. Uten den ga to døgn med krasj
+        # null informasjon å feilsøke på.
+        "bat": "start_api_med_vakthund.bat", "logg": "oppstart_api.log",
+        # Prosessen som må dø FØRST når tjenesten stoppes: dreper vi bare
+        # porten, ser vakthunden en død server og starter den på nytt —
+        # og «Stopp» ser ut til å ikke virke.
+        "vokter": "vakthund.py",
+        "beskrivelse": "OCR + Borealis  ·  :8600  ·  overvåket",
         "starter_frist": 240,   # Borealis-lasting tar tid
     },
     {
@@ -1392,6 +1402,16 @@ class KontrollPanel:
         self._vis_kort(tjeneste["key"], "stopper", "")
 
         def arbeider():
+            # VOKTEREN FØRST. Vakthunden holder ingen port og har ingen
+            # vindustittel, så verken _pids_paa_port eller det gamle
+            # stopp_alt.bat traff den. Drepte vi bare API-et, ville
+            # vakthunden se en død server og starte den igjen — og
+            # brukeren konkluderte med at «Stopp» ikke virker, eller at
+            # API-et «starter av seg selv».
+            for pid in self._pids_for_python(tjeneste.get("vokter")):
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                               capture_output=True, creationflags=_UTEN_VINDU)
+
             pids = set()
             if tjeneste["port"]:
                 pids |= self._pids_paa_port(tjeneste["port"])
@@ -1475,6 +1495,31 @@ class KontrollPanel:
                 ["powershell", "-NoProfile", "-Command",
                  "Get-CimInstance Win32_Process -Filter "
                  f"\"Name='cmd.exe' AND CommandLine LIKE '%{bat_navn}%'\" "
+                 "| Select-Object -ExpandProperty ProcessId"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=_UTEN_VINDU,
+            )
+            return {int(del_) for del_ in resultat.stdout.split()
+                    if del_.strip().isdigit()}
+        except Exception:
+            return set()
+
+    @staticmethod
+    def _pids_for_python(skript: str | None) -> set[int]:
+        """Python-prosessene som kjører et bestemt skript.
+
+        Vakthunden er en `python.exe` uten lyttende port og uten
+        vindustittel — de to kjennetegnene alt annet stopp-maskineri
+        leter etter. Uten dette overlever den «Stopp alt» og starter
+        API-et igjen ~20 sekunder senere."""
+        if not skript:
+            return set()
+        try:
+            resultat = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process -Filter "
+                 "\"Name LIKE '%python%'\" | Where-Object "
+                 f"{{ $_.CommandLine -like '*{skript}*' }} "
                  "| Select-Object -ExpandProperty ProcessId"],
                 capture_output=True, text=True, timeout=15,
                 creationflags=_UTEN_VINDU,

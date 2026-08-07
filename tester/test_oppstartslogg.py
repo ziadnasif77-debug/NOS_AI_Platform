@@ -52,6 +52,56 @@ def test_vakthunden_apner_i_tilleggsmodus():
         "den sin egen forrige krasjlogg ved hver omstart.")
 
 
+def test_vakthunden_kaprer_ikke_fila_cmd_alt_eier():
+    """Den andre halvparten av «to skrivere, én fil».
+
+    Startes vakthunden av `_skjult.vbs`, omdirigerer cmd allerede hele
+    .bat-en til oppstart_api.log — og det håndtaket er EKSKLUSIVT på
+    Windows. Åpnet vakthunden samme fil selv, døde den med
+    PermissionError før den rakk å starte noe. Målt, ikke antatt: det
+    skjedde i det kontrollpanelet ble koblet til vakthunden.
+
+    Regelen: er vår egen stdout alt fanget, arver barnet den."""
+    kilde = _les(VAKTHUND)
+    assert "def _barnets_utgang" in kilde
+    assert "isatty" in kilde, (
+        "vakthunden må kunne skille et konsoll fra en fanget stdout — "
+        "ellers kaprer den fila cmd allerede holder")
+
+
+def test_barnets_utgang_arver_naar_stdout_er_fanget(monkeypatch, tmp_path):
+    """Kjører den ekte funksjonen i begge tilstander."""
+    import sys
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import vakthund
+
+    class FangetStdout:
+        def isatty(self):
+            return False
+
+    class Konsoll:
+        def isatty(self):
+            return True
+
+    # ROT peker på en midlertidig mappe: testen skal ALDRI ta i den
+    # levende oppstart_api.log. Gjorde den det, feilet den her med
+    # nøyaktig den PermissionError-en den er skrevet for å forhindre —
+    # fordi en kjørende vakthund holder fila. En test som konkurrerer
+    # med produksjon om et filhåndtak måler noe annet enn den tror.
+    monkeypatch.setattr(vakthund, "ROT", str(tmp_path))
+
+    monkeypatch.setattr(vakthund.sys, "stdout", FangetStdout())
+    assert vakthund._barnets_utgang() is None, (
+        "med fanget stdout skal barnet ARVE, ikke åpne fila på nytt")
+
+    monkeypatch.setattr(vakthund.sys, "stdout", Konsoll())
+    ut = vakthund._barnets_utgang()
+    assert ut is not None and hasattr(ut, "write"), (
+        "i et konsoll skal vakthunden åpne loggfila selv")
+    ut.close()
+    assert (tmp_path / "data" / "logger" / "oppstart_api.log").is_file()
+
+
 def test_begge_skriverne_peker_paa_samme_fil():
     """Er de blitt to ULIKE filer, er testene over uten mening — men
     da må det være et bevisst valg, ikke en glipp.

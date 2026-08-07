@@ -149,6 +149,37 @@ def _roter_om_stor(sti: str):
         _skriv(f"kunne ikke rotere {os.path.basename(sti)}: {exc}")
 
 
+def _barnets_utgang():
+    """Hvor API-ets stdout/stderr skal.
+
+    To skrivere på én fil er problemet vi nettopp fjernet ett sted og
+    var i ferd med å innføre et annet. Startes vakthunden av
+    `_skjult.vbs`, omdirigerer cmd allerede HELE .bat-en til
+    `oppstart_api.log` — og på Windows er det håndtaket EKSKLUSIVT.
+    Åpnet vakthunden samme fil selv, fikk den
+    `PermissionError: [Errno 13]` og døde før den rakk å starte noe.
+    Feilen ble fanget av nettopp den loggen som ikke lenger slettes.
+
+    Regelen er derfor: er vår egen stdout allerede fanget (ikke et
+    konsollvindu), lar vi barnet ARVE den. Én skriver, ett håndtak, og
+    alt havner i samme fil uansett. Kjører vi i et konsoll, åpner vi
+    loggfila selv — da er det ingen andre om beinet."""
+    try:
+        fanget = sys.stdout is not None and not sys.stdout.isatty()
+    except Exception:
+        fanget = False            # pythonw: ingen stdout i det hele tatt
+    if fanget:
+        return None               # arv vår egen — cmd eier fila
+
+    logg_api = os.path.join(ROT, "data", "logger", "oppstart_api.log")
+    os.makedirs(os.path.dirname(logg_api), exist_ok=True)
+    _roter_om_stor(logg_api)
+    # «a», ikke «w»: dette er fila vakthunden selv peker klienten til når
+    # den skriver «se oppstart_api.log for traceback». Skrev vi over,
+    # ville vi slettet nettopp det beviset vi ba noen lete etter.
+    return open(logg_api, "a", encoding="utf-8", errors="replace")
+
+
 def start_api() -> subprocess.Popen:
     """Starter serveren som EGEN prosess, med prosjektets egen Python."""
     py = os.path.join(ROT, ".pyruntime", "python.exe")
@@ -156,16 +187,10 @@ def start_api() -> subprocess.Popen:
         py = sys.executable
     miljo = {**os.environ, "PYTHONNOUSERSITE": "1", "PYTHONUTF8": "1"}
     miljo.setdefault("BOREALIS_KONTEKST", "4096")
-    logg_api = os.path.join(ROT, "data", "logger", "oppstart_api.log")
-    os.makedirs(os.path.dirname(logg_api), exist_ok=True)
-    _roter_om_stor(logg_api)
-    # «a», ikke «w»: dette er fila vakthunden selv peker klienten til når
-    # den skriver «se oppstart_api.log for traceback». Skrev vi over,
-    # ville vi slettet nettopp det beviset vi ba noen lete etter.
-    ut = open(logg_api, "a", encoding="utf-8", errors="replace")
     return subprocess.Popen(
         [py, os.path.join("skript", "dokument_api.py")],
-        cwd=ROT, env=miljo, stdout=ut, stderr=subprocess.STDOUT)
+        cwd=ROT, env=miljo, stdout=_barnets_utgang(),
+        stderr=subprocess.STDOUT)
 
 
 def vent_paa_oppstart(prosess, frist=OPPSTARTSFRIST_S) -> bool:

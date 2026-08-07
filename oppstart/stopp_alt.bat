@@ -6,6 +6,13 @@ REM  skjulte (start_alt.bat) og synlige (enkelt-start) tjenester.
 REM ====================================================================
 echo Stopper NAV-tjenester (8600 / 4200 / 8080 + cloudflared) ...
 
+REM VAKTHUNDEN FOERST. Den holder ingen port og har ingen vindustittel,
+REM saa verken port-loekka under eller tittelfiltrene nederst traff den.
+REM Foelgen var at "Stopp alt" meldte ferdig, og vakthunden startet
+REM API-et igjen ~20 sekunder senere - som ser ut som at serveren
+REM "starter av seg selv".
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name LIKE '%%python%%'\" | Where-Object { $_.CommandLine -like '*vakthund.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
+
 for %%P in (8600 4200 8080) do (
     for /f "tokens=5" %%q in ('netstat -ano ^| findstr ":%%P " ^| findstr LISTENING') do (
         taskkill /F /T /PID %%q >nul 2>&1
