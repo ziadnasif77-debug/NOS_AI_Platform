@@ -4585,6 +4585,10 @@ class Handler(BaseHTTPRequestHandler):
         Returnerer (ktx, advarsler, feil): feil er None ved suksess, ellers
         et (status, kropp)-par kalleren svarer med."""
         advarsler = []
+        # Sidegrensen ble kappet mot taket — sagt her, én gang, for
+        # begge svarveiene.
+        if getattr(self, "_kappet_advarsel", None):
+            advarsler.append(self._kappet_advarsel)
         ocr_brukt, ocr_motorer, fra_cache = False, None, False
         handskrift, strekkoder, sider_regioner = [], [], []
         antall_sider = None
@@ -4825,8 +4829,7 @@ class Handler(BaseHTTPRequestHandler):
         # avvises (400) i stedet for å bli tolket som «nei» — ellers ville
         # «felter=yes» stille slått AV en standard-PÅ-del, og klienten
         # fått 200 med tomt innhold uten et eneste feilsignal.
-        JA = ("ja", "1", "true", "on", "yes", "pa", "på")
-        NEI = ("nei", "0", "false", "av", "off", "no")
+        JA, NEI = BRYTER_JA, BRYTER_NEI
         ukjente = []
 
         def gitt(navn):
@@ -5395,19 +5398,57 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": False, "feil": "Ingen fil funnet (felt 'fil')"})
             return self._forhandssjekk(filnavn, slag, innhold, tekstfelter)
 
-        # Valgfri sidegrense for synkron OCR (felt maks_sider)
-        try:
-            _onsket_sider = int(tekstfelter.get("maks_sider", "0") or 0)
-        except ValueError:
-            _onsket_sider = 0
+        # Valgfri sidegrense for synkron OCR (felt maks_sider).
+        # En UGYLDIG verdi ble stille ignorert: «maks_sider=abc» ga
+        # ubegrenset lesing, uten 400 og uten advarsel. Klienten trodde
+        # den hadde satt en grense. Det er samme feilmodus som
+        # feltnavnvakten finnes for — et kjent felt som forsvinner i
+        # stillhet — og maks_sider var unntatt fra begge.
+        _raa_sider = (tekstfelter.get("maks_sider", "") or "").strip()
+        _onsket_sider = 0
+        if _raa_sider:
+            try:
+                _onsket_sider = int(_raa_sider)
+            except ValueError:
+                _onsket_sider = -1
+            if _onsket_sider < 1:
+                return self._svar(400, {
+                    "ok": False,
+                    "feil": (f"Ugyldig 'maks_sider': {_raa_sider!r}. "
+                             f"Bruk et helt tall større enn 0, eller la "
+                             f"feltet stå tomt for ingen grense."),
+                    "felter_feil": [{"pointer": "/maks_sider",
+                                     "message": "helt tall > 0"}]})
         maks_ocr = min(_onsket_sider, OCR_TAK_SIDER) if _onsket_sider > 0 else None
+        # Kapping er ikke en feil, men den skal SIES: ba klienten om 999
+        # sider og fikk 50, må den kunne se det. Advarselen legges på
+        # forespørselen og plukkes opp av _les_dokument, som begge
+        # svarveiene går gjennom.
+        self._kappet_advarsel = (
+            f"maks_sider={_onsket_sider} er kappet til taket "
+            f"{OCR_TAK_SIDER} — bare de første {OCR_TAK_SIDER} sidene "
+            f"ble lest"
+            if _onsket_sider > OCR_TAK_SIDER else None)
 
         # R55: strekkodeskanning kan slås av per forespørsel
         # (strekkoder=nei). Den koster ~0,2 s per side, og de fleste
         # NAV-dokumenter har ingen koder å finne. Standard er PÅ, så
         # ingen eksisterende klient mister noe uten å be om det.
-        les_strekkoder = tekstfelter.get(
-            "strekkoder", "ja").strip().lower() not in ("nei", "0", "false", "av")
+        les_strekkoder, _ukjent = bryterverdi(
+            tekstfelter.get("strekkoder"), True)
+        if _ukjent:
+            # Tidligere: alt utenom den egne, ufullstendige NEI-lista ble
+            # tolket som PÅ. «strekkoder=off» slo den derfor PÅ, mens
+            # «struktur=off» slo AV — samme forespørsel, motsatt svar.
+            # Og «strekkoder=tull» ga 200 der «struktur=tull» ga 400.
+            return self._svar(400, {
+                "ok": False,
+                "feil": (f"Ukjent bryterverdi: strekkoder="
+                         f"{tekstfelter.get('strekkoder', '')[:40]!r}. "
+                         f"Bruk {'/'.join(BRYTER_JA[:4])} eller "
+                         f"{'/'.join(BRYTER_NEI[:4])}."),
+                "felter_feil": [{"pointer": "/strekkoder",
+                                 "message": "ukjent bryterverdi"}]})
 
         # Sladding: leser dokumentet (med OCR ved behov) og sladder alt
         # som kan bevises. Rutes etter maks_ocr-parsingen fordi OCR kan
@@ -5599,6 +5640,23 @@ class Handler(BaseHTTPRequestHandler):
 
         raa_tekst = tekst   # ren OCR/dokumenttekst — før merking og vedlegg
 
+        # «korriger» godtok bare ("ja","1","true") her, mens den samme
+        # bryteren på /dokument godtar tolv verdier. «korriger=på» var
+        # altså SANN på én rute og USANN på en annen — samme ord, samme
+        # API. Nå leser begge det felles verdirommet, og en ukjent verdi
+        # avvises i stedet for å bli tolket som «nei».
+        vil_korrigere, _ukjent_korr = bryterverdi(
+            tekstfelter.get("korriger"), False)
+        if _ukjent_korr:
+            return self._svar(400, {
+                "ok": False,
+                "feil": (f"Ukjent bryterverdi: korriger="
+                         f"{tekstfelter.get('korriger', '')[:40]!r}. "
+                         f"Bruk {'/'.join(BRYTER_JA[:4])} eller "
+                         f"{'/'.join(BRYTER_NEI[:4])}."),
+                "felter_feil": [{"pointer": "/korriger",
+                                 "message": "ukjent bryterverdi"}]})
+
         # Verbatim-svar besvares av KODEN, ikke modellen: en språkmodell
         # som skriver av kan hoppe over linjer — koden kan ikke.
         # Gjelder både eksplisitte «hele teksten»-forespørsler (R43) og
@@ -5616,9 +5674,7 @@ class Handler(BaseHTTPRequestHandler):
                 strekkoder=strekkoder, ocr_motorer=ocr_motorer,
                 handskrift=handskrift,
                 korrigert_tekst=(korriger_borealis(raa_tekst)
-                                 if ocr_brukt and tekstfelter.get(
-                                     "korriger", "").strip().lower()
-                                 in ("ja", "1", "true") else None),
+                                 if ocr_brukt and vil_korrigere else None),
                 tall_verifisert=True,
                 svar_avkortet=False,
                 fra_cache=fra_cache,
@@ -5654,8 +5710,7 @@ class Handler(BaseHTTPRequestHandler):
         # Valgfri OCR-korrigering (multipart-felt korriger=ja) — egen
         # generering, koster ekstra tid, derfor kun på forespørsel
         korrigert = None
-        if (ocr_brukt and
-                tekstfelter.get("korriger", "").strip().lower() in ("ja", "1", "true")):
+        if ocr_brukt and vil_korrigere:
             korrigert = korriger_borealis(raa_tekst)
 
         return self._svar(200, _spor_svar(
@@ -6584,6 +6639,36 @@ def _sammendragsform(svar: dict) -> dict:
     if isinstance(profil, dict) and fjernet:
         profil["utelatt"] = sorted(set(profil.get("utelatt") or []) | set(fjernet))
     return svar
+
+
+# Verdirommet for ALLE ja/nei-brytere. Sto tidligere som lokale
+# variabler inne i _dokument_samlet, så to brytere utenfor den hadde
+# hver sin ufullstendige liste — og tolket samme forespørsel motsatt:
+#
+#     struktur=off   → AV      (gikk gjennom paa())
+#     strekkoder=off → PÅ      (egen liste uten «off»/«no»)
+#     strekkoder=tull → PÅ, uten 400 — mens struktur=tull ga 400
+#
+# Én liste, ett sted, og alle brytere leser den.
+BRYTER_JA = ("ja", "1", "true", "on", "yes", "pa", "på")
+BRYTER_NEI = ("nei", "0", "false", "av", "off", "no")
+
+
+def bryterverdi(raa, standard: bool):
+    """Tolker én bryterverdi. Returnerer (verdi, ukjent).
+
+    `ukjent` er True når klienten sendte noe vi ikke kjenner — da skal
+    kalleren svare 400 i stedet for å tolke det som «nei». En bryter
+    som stille faller tilbake til standarden er den feilmodusen R63 og
+    feltnavnvakten ellers vokter mot: klienten tror den ba om noe."""
+    v = (raa or "").strip().lower()
+    if not v:
+        return standard, False
+    if v in BRYTER_JA:
+        return True, False
+    if v in BRYTER_NEI:
+        return False, False
+    return standard, True
 
 
 def _spor_svar(**felt) -> dict:
