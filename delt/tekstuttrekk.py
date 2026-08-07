@@ -1965,21 +1965,31 @@ def strukturert_uttrekk(tekst: str) -> dict:
          if l.strip() and not re.match(r"\[Side \d+ av \d+\]", l.strip())),
         "")
 
+    # TOMT ER null, IKKE «». Blokka brukte tom streng der profilen
+    # bruker null — for NØYAKTIG samme faktum, i samme svar:
+    #
+    #     struktur.dokument.ytelse     ""
+    #     dokumentprofil.ytelse.navn.kode   null
+    #
+    # To konvensjoner for «finnes ikke» i én JSON-kropp. R126 sier det
+    # rett ut: en tom streng SER ut som en verdi. En klient som tester
+    # `if (ytelse)` får falsk for begge, men `!= null` i C#/.NET er sant
+    # for «» — og da tror roboten den fant en ytelse.
     return {
         "dokument": {
-            "tittel": forste_linje[:100],
-            "dokumenttype": gjett_dokumenttype(tekst),
-            "sprak": gjett_sprak(tekst),
-            "kontornavn": finn_kontornavn(tekst) or "",
-            "fylke": finn_fylke(tekst) or "",
-            "ytelse": finn_ytelse(tekst) or "",
+            "tittel": forste_linje[:100] or None,
+            "dokumenttype": gjett_dokumenttype(tekst) or None,
+            "sprak": gjett_sprak(tekst) or None,
+            "kontornavn": finn_kontornavn(tekst) or None,
+            "fylke": finn_fylke(tekst) or None,
+            "ytelse": finn_ytelse(tekst) or None,
         },
         "identifikatorer": {
             "fodselsnummer": finn_alle_fodselsnummer(tekst),
             "kontonummer": finn_alle_kontonummer(tekst),
             "organisasjonsnummer": finn_alle_organisasjonsnummer(tekst),
             "kid": finn_alle_kid(tekst),
-            "saksnummer": finn_saksnummer(tekst) or "",
+            "saksnummer": finn_saksnummer(tekst) or None,
         },
         "kontakt": {
             "telefoner": finn_alle_telefoner(tekst),

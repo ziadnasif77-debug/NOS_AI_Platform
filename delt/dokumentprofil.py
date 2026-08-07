@@ -61,11 +61,18 @@ def koder_med_sider(strekkoder, lest: bool = True) -> dict:
     hele poenget: et dokument uten skanning har ikke bevist at det
     mangler QR-kode."""
     if not lest:
-        return {"lest": False, "qr": [], "strekkode": [],
+        # null, IKKE []. Regelen er: `[]` betyr «vi så etter og fant
+        # ingenting», `null` betyr «vi så aldri etter». Med tom liste sa
+        # feltet «null strekkoder» om et dokument som aldri ble skannet
+        # — og forbeholdet lå bare i «merknad», som prosa ingen robot
+        # leser. Målt: hver .txt-, .docx- og .csv-opplasting fikk
+        # `lest: true` og to tomme lister, fordi dekoderen aldri kalles
+        # på tekstveien.
+        return {"lest": False, "qr": None, "strekkode": None,
                 "qr_kode_side": None, "strekkode_side": None,
-                "merknad": ("Strekkode-/QR-skanning var slått av for dette "
-                            "kallet — feltene sier ikke at koder mangler, "
-                            "bare at det ikke ble sett etter dem")}
+                "merknad": ("Strekkode-/QR-skanning ble ikke kjørt for "
+                            "dette kallet — feltene sier ikke at koder "
+                            "mangler, bare at det ikke ble sett etter dem")}
     qr, strek = [], []
     for kode in strekkoder or []:
         if not isinstance(kode, dict):
@@ -767,7 +774,8 @@ SKJEMAVERSJON = "1.0"
 
 def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
                 strekkoder_lest=True, datoer_detaljert=None,
-                dokumentdato=None, struktur=None, handskrift=None) -> dict:
+                dokumentdato=None, struktur=None, handskrift=None,
+                handskrift_lest=True) -> dict:
     """Setter sammen dokumentprofilen — den kanoniske formen (R79).
 
     Seksjonene er faste og alltid til stede. Alle argumenter er
@@ -923,7 +931,12 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             # krever bildeanalyse av signaturfelt; ikke bygget ennå, og
             # «[]» ville påstått at vi har sett etter
             "signatur_sider": None,
-            "handskrift_funnet": bool(handskrift),
+            # null når dokumentet aldri ble bildeanalysert. Håndskrift
+            # oppdages BARE på OCR-veien; et tekstlags-PDF eller en
+            # .txt-opplasting går aldri innom den. `false` der var en
+            # påstand om en måling som ikke ble gjort — samme løgn som
+            # tomme kodelister på et uskannet dokument.
+            "handskrift_funnet": bool(handskrift) if handskrift_lest else None,
         },
     }
 
@@ -1011,6 +1024,12 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         "sakstype": "ikke_evaluert",
         "signatur_sider": "ikke_evaluert",
         "uleselige_sider": "ikke_evaluert",
+        # De to under fulgte mønsteret som ALLEREDE var riktig for
+        # `signatur_sider` og `uleselige_sider`: null i feltet, og her
+        # står grunnen. Uten dem måtte en klient lese `koder.merknad`
+        # som prosa for å vite om skanningen faktisk kjørte.
+        "koder": "full" if strekkoder_lest else "ikke_evaluert",
+        "handskrift": "full" if handskrift_lest else "ikke_evaluert",
         "forklaring": ("«ikke_evaluert» betyr at systemet ikke leter "
                        "etter feltet ennå — det sier INGENTING om "
                        "dokumentet, og en klient skal ikke melde avvik. "

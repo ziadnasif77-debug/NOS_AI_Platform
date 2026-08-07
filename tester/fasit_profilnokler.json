@@ -13,6 +13,8 @@
   "/arbeid/stillingsprosent",
   "/dekning",
   "/dekning/forklaring",
+  "/dekning/handskrift",
+  "/dekning/koder",
   "/dekning/sakstype",
   "/dekning/sider",
   "/dekning/sider/lest",

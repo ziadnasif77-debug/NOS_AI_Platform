@@ -4185,7 +4185,7 @@ class Handler(BaseHTTPRequestHandler):
         grunn = {"ok": True, "filnavn": filnavn, "fra_cache": fra_cache,
                  "advarsler": list(ekstra_advarsler or []),
                  "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
-                             "modell": _borealis["modellfil"] or _borealis["motor"]}}
+                             "modell": _borealis["modellfil"] or _borealis["motor"] or None}}
 
         # --- deterministisk fletting (ingen modell) ---
         if skjema_motor == "felter":
@@ -4623,12 +4623,20 @@ class Handler(BaseHTTPRequestHandler):
                 advarsler.append(a["advarsel"])
             if a.get("melding"):
                 advarsler.append(a["melding"])
+        # «lest» betyr at dekoderen FAKTISK kjørte — ikke at klienten lot
+        # være å slå den av. På tekstveien (.txt/.docx/.csv/regneark)
+        # finnes det ingen bilder å skanne, og dekoderen kalles aldri.
+        # Likevel sto `lest: true` med to tomme lister, altså påstanden
+        # «vi skannet og fant ingen koder» om et dokument som aldri ble
+        # skannet. Feltet som finnes for å hindre nettopp den løgnen,
+        # fortalte den.
+        skanning_kjorte = bool(les_strekkoder) and slag != "tekst"
         ktx = DokumentKontekst(raa_tekst, ocr_brukt=ocr_brukt,
                                handskrift=handskrift, strekkoder=strekkoder,
                                ocr_motorer=ocr_motorer, fra_cache=fra_cache,
                                sider_regioner=sider_regioner,
                                antall_sider=antall_sider,
-                               strekkoder_lest=les_strekkoder,
+                               strekkoder_lest=skanning_kjorte,
                                filnavn=filnavn,
                                ferdig=ferdig)
         return ktx, advarsler, None
@@ -4753,7 +4761,12 @@ class Handler(BaseHTTPRequestHandler):
             "resultater": resultater,
             "antall_tegn": len(ktx.tekst),
             "antall_sider": ktx.antall_sider,
-            "strekkoder": ktx.strekkoder, "handskrift": ktx.handskrift,
+            # null når skanningen aldri kjørte — samme regel som
+            # `koder.qr`/`koder.strekkode` i profilen (R128). Sto de
+            # ulikt, ville to felt om samme faktum sagt hver sin ting i
+            # samme svar.
+            "strekkoder": ktx.strekkoder if ktx.strekkoder_lest else None,
+            "handskrift": ktx.handskrift if ktx.ocr_brukt else None,
             "varsler": _varsler(advarsler),
             "status": _samlet_status(
                 {r.get("type", f"op{i}"): r
@@ -4769,7 +4782,7 @@ class Handler(BaseHTTPRequestHandler):
             # den gjorde det. Nå følger begge veier samme regel.
             "kilde": ("motor+borealis" if modell_kjorte else "motor"),
             "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
-                        "modell": _borealis["modellfil"] or _borealis["motor"]},
+                        "modell": _borealis["modellfil"] or _borealis["motor"] or None},
         }
         # Samme personvernbryter som på bryterveien (R90: den skal virke
         # i BEGGE kontraktene). Her bærer «resultater» de samme feltene
@@ -5171,7 +5184,10 @@ class Handler(BaseHTTPRequestHandler):
             "korriger": deler.get("korriger"),
             "korrigert_tekst": korrigert,
             "koordinater": koordinater,
-            "strekkoder": strekkoder, "handskrift": handskrift,
+            # Se samme felt på operasjonsveien: null når målingen aldri
+            # ble gjort, ikke en tom liste som påstår at vi så etter.
+            "strekkoder": strekkoder if ktx.strekkoder_lest else None,
+            "handskrift": handskrift if ktx.ocr_brukt else None,
             # Strukturerte varsler ved siden av de frie strengene, så en
             # klient kan skille «ukjent felt» fra «modellen er nede» uten
             # tekstsøk. Strengene beholdes uendret.
@@ -5185,7 +5201,7 @@ class Handler(BaseHTTPRequestHandler):
             "kilde": ("borealis+deterministisk" if modell_kjorte
                       else "deterministisk"),
             "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
-                        "modell": _borealis["modellfil"] or _borealis["motor"]},
+                        "modell": _borealis["modellfil"] or _borealis["motor"] or None},
         }
         # Personvernbryteren gjelder HELE svaret. _profilform renset
         # dokumentprofilen; «tekst» og «felter» bygges utenom den, og
@@ -6412,7 +6428,10 @@ class DokumentKontekst:
                 datoer_detaljert=self.datoer_detaljert,
                 dokumentdato=self.dokumentdato,
                 struktur=self.struktur,
-                handskrift=self.handskrift)
+                handskrift=self.handskrift,
+                # Håndskrift oppdages BARE på OCR-veien. Uten OCR er
+                # svaret «vet ikke», ikke «ingen håndskrift».
+                handskrift_lest=self.ocr_brukt)
         return self._profil
 
     def er_tom(self):
@@ -6609,7 +6628,7 @@ def _spor_svar(**felt) -> dict:
         # ALLTID med, og alltid med samme undernøkler (R39). To av de
         # gamle veiene bygget den uten «modell».
         "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
-                    "modell": _borealis["modellfil"] or _borealis["motor"]},
+                    "modell": _borealis["modellfil"] or _borealis["motor"] or None},
     }
     ukjente = set(felt) - set(skjelett)
     if ukjente:                      # fanges av vakttesten, ikke i drift
