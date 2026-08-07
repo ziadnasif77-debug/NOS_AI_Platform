@@ -243,17 +243,46 @@ def _navn_under_etikett(bit: str):
     return None
 
 
-def _navn_ved(tekst: str, etikett_slutt: int, fnr_start: int):
-    """Navnet som hører til etiketten.
+# Et fødselsnummer avslutter blokken til personen det hører til. Brukes
+# som grense for navnesøket, så et navnesøk aldri kan vandre inn i
+# forrige persons opplysninger (R137).
+_ELLEVE_SIFRE = re.compile(r"(?<!\d)\d{11}(?!\d)")
+
+
+def _navn_ved(tekst: str, etikett_slutt: int, fnr_start: int,
+              merket: bool = False):
+    """Navnet som hører til DETTE nummeret — og ikke til naboen.
 
     Først etter en navne-etikett («Etternavn, fornavn»), som er den
     sikre veien og den eneste som fanger blokkbokstaver. Ellers det
-    første navnelignende ordparet, og til sist linja over nummeret."""
-    mellom_rom = tekst[etikett_slutt:fnr_start]
-    fra_etikett = _navn_under_etikett(mellom_rom)
-    if fra_etikett:
-        return fra_etikett
+    første navnelignende ordparet i samme vindu.
 
+    R137: den siste utveien — «linja over nummeret» — var IKKE avgrenset
+    av etiketten. Den gikk tre ikke-tomme linjer bakover fra nummeret,
+    altså rett forbi etiketten som styrer det og forbi forrige persons
+    fødselsnummer. Målt på fem varianter av «legen/saksbehandleren har
+    ingen navn i teksten» fikk FIRE av dem partens navn festet på en
+    annen persons nummer:
+
+        Opplysninger om: Ola Nordmann
+        Fodselsnummer: <A>
+        Lege: <B>
+          →  andre_fodselsnummer: {fnr: <B>, etikett: "Lege",
+                                   navn: "Ola Nordmann"}
+
+    En saksbehandler leser det som at legen heter Ola Nordmann — eller,
+    verre, at Ola Nordmann har to fødselsnummer. Hele grunnen til at
+    `andre_fodselsnummer` finnes er å holde de andre STRENGT atskilt
+    fra parten (R69); her lekket parten inn i dem.
+
+    Er nummeret MERKET, er etiketten grensen: står navnet ikke mellom
+    etiketten og nummeret, finnes det ikke noe navn for dette nummeret.
+    Å lete lenger bak er per definisjon å lete i en annen persons blokk,
+    for det er nettopp det etiketten avgrenser (`_rolle_for_forekomst`).
+
+    Er nummeret UMERKET, er den siste utveien fortsatt riktig — det er
+    da navnet står naken over nummeret — men den stopper ved forrige
+    fødselsnummer."""
     def foerste_navn(bit: str):
         for treff in _NAVN.finditer(bit):
             navn = treff.group(1).strip()
@@ -261,10 +290,26 @@ def _navn_ved(tekst: str, etikett_slutt: int, fnr_start: int):
                 return navn
         return None
 
-    navn = foerste_navn(tekst[etikett_slutt:fnr_start])
+    mellom_rom = tekst[etikett_slutt:fnr_start]
+    fra_etikett = _navn_under_etikett(mellom_rom)
+    if fra_etikett:
+        return fra_etikett
+
+    navn = foerste_navn(mellom_rom)
     if navn:
         return navn
-    linjer = [l.strip() for l in tekst[:fnr_start].splitlines() if l.strip()]
+
+    if merket:
+        return None
+
+    # Umerket: nærmeste linjer over nummeret, men aldri forbi et annet
+    # fødselsnummer — det tilhører en annen person, og alt foran det er
+    # den personens opplysninger.
+    grense = 0
+    for treff in _ELLEVE_SIFRE.finditer(tekst[:fnr_start]):
+        grense = treff.end()
+    linjer = [l.strip() for l in tekst[grense:fnr_start].splitlines()
+              if l.strip()]
     for linje in reversed(linjer[-3:]):
         navn = foerste_navn(linje)
         if navn:
@@ -318,7 +363,8 @@ def finn_dokument_eier(tekst: str) -> dict:
                 "fnr": fnr,
                 "rolle": rolle,
                 "etikett": (etikett or "").strip() or None,
-                "navn": _navn_ved(tekst, etikett_slutt, start),
+                "navn": _navn_ved(tekst, etikett_slutt, start,
+                                  merket=etikett is not None),
                 # Posisjonen der beviset FAKTISK står. Uten den måtte
                 # «opphav» lete opp nummeret på nytt — og fant da første
                 # forekomst, som gjerne er et umerket treff på en helt
