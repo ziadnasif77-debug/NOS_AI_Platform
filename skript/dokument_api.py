@@ -4837,10 +4837,10 @@ class Handler(BaseHTTPRequestHandler):
             opphav = {}
 
         # Samme ærlighetsregel som bryter-veien: en operasjon som feilet
-        # skal ikke telles som «modellen kjørte». Resultatene er en liste
-        # av {type, …}, så de mappes til samme form regelen forventer.
-        modell_kjorte = _modellen_kjorte(
-            {r.get("type"): r for r in resultater if isinstance(r, dict)})
+        # skal ikke telles som «modellen kjørte». LISTA sendes videre,
+        # ikke et dict: `{r["type"]: r}` KOLLAPSET to operasjoner av
+        # samme type, og da avgjorde rekkefølgen svaret.
+        modell_kjorte = _modellen_kjorte(resultater)
 
         svar = {
             "ok": True, "filnavn": filnavn,
@@ -4857,10 +4857,7 @@ class Handler(BaseHTTPRequestHandler):
             "strekkoder": ktx.strekkoder if ktx.strekkoder_lest else None,
             "handskrift": ktx.handskrift if ktx.ocr_brukt else None,
             "varsler": _varsler(advarsler),
-            "status": _samlet_status(
-                {r.get("type", f"op{i}"): r
-                 for i, r in enumerate(resultater) if isinstance(r, dict)},
-                advarsler),
+            "status": _samlet_status(resultater, advarsler),
             "kvalitet": {"ocr_brukt": ktx.ocr_brukt,
                          "ocr_motorer": ktx.ocr_motorer or {},
                          "advarsler": advarsler},
@@ -5159,7 +5156,7 @@ class Handler(BaseHTTPRequestHandler):
                     advarsler.extend(kjerne["advarsler"])
                     return {"ok": True, "sporsmal": sporsmal,
                             "svar": kjerne["svar"],
-                            "modell_brukt": kjerne.get("modell_brukt", True),
+                            "modell_brukt": kjerne.get("modell_brukt", False) is True,
                             "tall_verifisert": kjerne["tall_verifisert"],
                             "tolket_sporsmal": kjerne["tolket_sporsmal"],
                             "svar_avkortet": kjerne["svar_avkortet"]}
@@ -6941,13 +6938,35 @@ def _varsler(advarsler) -> list:
     return ut
 
 
-def _samlet_status(deler: dict, advarsler) -> str:
+def _deler_som_par(deler):
+    """(type, del)-par fra ENTEN bryterveiens dict ELLER
+    operasjonsveiens liste.
+
+    Operasjonsveien bygget `{r.get("type"): r for r in resultater}` før
+    den kalte hit — og da KOLLAPSET to operasjoner av samme type, siste
+    vant. Målt: samme to operasjoner med samme utfall, i motsatt
+    rekkefølge, ga ulikt `status` OG ulikt `modell_brukt`:
+
+        [skjema/modell FEILET, skjema/felter OK] → «ok»,   modell_brukt true
+        [skjema/felter OK, skjema/modell FEILET] → «feil», modell_brukt false
+
+    Riktig svar for begge er «delvis». Og `modell_brukt: true` i den
+    første er en ren løgn — modellen ble aldri spurt.
+
+    Med par beholdes hver oppføring, og rekkefølgen betyr ingenting."""
+    if isinstance(deler, dict):
+        return [(navn, d) for navn, d in deler.items() if isinstance(d, dict)]
+    return [(d.get("type"), d) for d in (deler or [])
+            if isinstance(d, dict)]
+
+
+def _samlet_status(deler, advarsler) -> str:
     """«ok» | «delvis» | «feil» for hele svaret.
 
     I dag er toppnivå-`ok` alltid true når forespørselen kom fram, selv
     om en del feilet — klienten må gå gjennom hele deltreet for å
     oppdage det. Dette svarer på spørsmålet direkte."""
-    deler_med_svar = [d for d in deler.values() if isinstance(d, dict)]
+    deler_med_svar = [d for _, d in _deler_som_par(deler)]
     feilet = [d for d in deler_med_svar if d.get("ok") is False]
     if not feilet:
         return "ok"
@@ -6970,10 +6989,22 @@ def _delen_brukte_modellen(del_) -> bool:
         return False
     if del_.get("ok") is False:
         return False            # delen feilet — ingen modell kjørte
-    return del_.get("modell_brukt", True) is not False
+    # STANDARDEN ER FALSE, IKKE TRUE.
+    #
+    # Feilen over ble rettet for FEILEDE deler, og overlevde for de som
+    # lykkes uten å si fra. Målt: `{"type":"skjema","motor":"felter"}` —
+    # en ren kodemotor som aldri spør modellen — meldte
+    # `modell_brukt: true`, fordi den ikke emitterer feltet og
+    # standarden var True. Samtidig melder `motor=auto` riktig, så to
+    # motorer av SAMME operasjon var uenige om modellen kjørte.
+    #
+    # «Sa ikke fra» kan ikke bety «ja» i et felt som er dokumentert som
+    # robotens raskeste ærlighetssjekk. Vakttesten under krever at hver
+    # modellkapable operasjon sier det uttrykkelig.
+    return del_.get("modell_brukt", False) is True
 
 
-def _modellen_kjorte(deler: dict) -> bool:
+def _modellen_kjorte(deler) -> bool:
     """Om språkmodellen faktisk bidro til svaret.
 
     Én regel, brukt av BEGGE /dokument-kontraktene og av
@@ -6982,8 +7013,9 @@ def _modellen_kjorte(deler: dict) -> bool:
     uansett — en robot som fulgte den dokumenterte regelen («inneholder
     borealis ⇒ modellen bidro») leste ethvert operasjonssvar som rent
     deterministisk og hoppet over menneskelig kontroll."""
-    return any(_delen_brukte_modellen(deler.get(navn))
-               for navn in ("svar", "skjema", "korriger"))
+    return any(_delen_brukte_modellen(d)
+               for navn, d in _deler_som_par(deler)
+               if navn in ("svar", "skjema", "korriger"))
 
 
 def _borealis_er_klar():
@@ -7207,7 +7239,7 @@ class SvarOperasjon(Operasjon):
             return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
         return {"type": "svar", "ok": True, "sporsmal": self.sporsmal,
                 "svar": kjerne["svar"],
-                "modell_brukt": kjerne.get("modell_brukt", True),
+                "modell_brukt": kjerne.get("modell_brukt", False) is True,
                 "tall_verifisert": kjerne["tall_verifisert"],
                 "tolket_sporsmal": kjerne["tolket_sporsmal"],
                 "svar_avkortet": kjerne["svar_avkortet"],
@@ -7232,8 +7264,13 @@ class SkjemaOperasjon(Operasjon):
     def utfor(self, ktx):
         if self.motor == "felter":
             utfylt, rapport = flett_mal(self.mal, ktx.tekst, ktx.ocr_brukt)
+            # SIER DET UTTRYKKELIG. Denne motoren er ren kode og spør
+            # aldri modellen — men den emitterte ikke feltet, og
+            # standarden var True. Målt: `motor=felter` meldte
+            # `modell_brukt: true`, mens `motor=auto` meldte riktig. To
+            # motorer av SAMME operasjon var altså uenige.
             return {"type": "skjema", "ok": True, "motor": "felter",
-                    "data": utfylt,
+                    "data": utfylt, "modell_brukt": False,
                     "ukjente_felter": rapport["ukjente_felter"],
                     "tilgjengelige_felter": rapport["tilgjengelige_felter"]}
         if self.motor == "auto":
@@ -7256,7 +7293,8 @@ class SkjemaOperasjon(Operasjon):
             return {"type": "skjema", "ok": False,
                     "feil": res.get("feil"), "raasvar": res.get("raasvar")}
         return {"type": "skjema", "ok": True, "motor": "modell",
-                "data": res["skjema"], "avvik": res.get("avvik", [])}
+                "data": res["skjema"], "modell_brukt": True,
+                "avvik": res.get("avvik", [])}
 
 
 class KorrigerOperasjon(Operasjon):
@@ -7274,7 +7312,7 @@ class KorrigerOperasjon(Operasjon):
                     "feil": "Dokumentet har tekstlag — ingen OCR-feil å korrigere"}
         if ktx.er_tom():
             return {"type": "korriger", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
-        return {"type": "korriger", "ok": True,
+        return {"type": "korriger", "ok": True, "modell_brukt": True,
                 "data": korriger_borealis(ktx.tekst)}
 
 
@@ -7318,6 +7356,59 @@ def bygg_operasjon(spec):
         "svar, skjema, korriger")
 
 
+# Nøklene ETHVERT operasjonsresultat har. Målt hadde `resultater[]` sju
+# ulike former, avhengig av type, motor og utfall — så en robot måtte
+# skrive én kodevei per kombinasjon, og `resultater[i].data` fantes
+# ikke i det hele tatt for `svar`.
+_OPERASJONSSKJELETT = {
+    "type": None,
+    "ok": None,
+    # ALLTID et objekt, aldri en bar streng: `tekst` returnerte teksten
+    # direkte, så `data` var `str` for én type og `dict` for de andre.
+    "data": None,
+    "feil": None,
+    "utelatt": False,
+    "motor": None,
+    "modell_brukt": None,
+    "avvik": None,
+    "ukjente_felter": None,
+    "tilgjengelige_felter": None,
+    "kilde_per_felt": None,
+    "raasvar": None,
+}
+
+# Feltene `svar`-operasjonen la på toppnivå. De hører til svaret, ikke
+# til konvolutten — flyttet inn i `data` er `resultater[i].data` én
+# pålitelig sti for alle typer.
+_SVAR_DATAFELT = ("sporsmal", "svar", "tall_verifisert", "tolket_sporsmal",
+                  "svar_avkortet", "advarsler")
+
+
+def normaliser_operasjonsresultat(res) -> dict:
+    """Ett resultat, alltid samme nøkkelsett.
+
+    Operasjonene får fortsatt returnere det som er naturlig for dem;
+    formen settes ETT sted. Ellers ville hver ny operasjon lagt til sin
+    egen variant, som er nøyaktig slik de sju oppsto."""
+    if not isinstance(res, dict):
+        return {**_OPERASJONSSKJELETT, "ok": False,
+                "feil": f"Operasjonen ga et uventet resultat: {type(res).__name__}"}
+    ut = dict(_OPERASJONSSKJELETT)
+    data = res.get("data")
+    if res.get("type") == "tekst" and isinstance(data, str):
+        data = {"tekst": data}
+    if res.get("type") == "korriger" and isinstance(data, str):
+        data = {"tekst": data}
+    if res.get("type") == "svar" and any(f in res for f in _SVAR_DATAFELT):
+        data = {f: res.get(f) for f in _SVAR_DATAFELT}
+    for nokkel in _OPERASJONSSKJELETT:
+        if nokkel in res:
+            ut[nokkel] = res[nokkel]
+    ut["data"] = data
+    ut["utelatt"] = bool(res.get("utelatt", False))
+    return ut
+
+
 class Operasjonsmotor:
     """Kjører en liste operasjoner mot én kontekst. Hver operasjon feiler
     UAVHENGIG: en som kaster, blir til et {ok: False, feil}-resultat i
@@ -7353,22 +7444,23 @@ class Operasjonsmotor:
                     f"Operasjon {nr + 1} ({getattr(op, 'type', '?')}) ble "
                     f"ikke kjørt: {grunn}. Del opp forespørselen, eller "
                     f"bruk POST /jobb for store bestillinger.")
-                resultater.append({"type": getattr(op, "type", "operasjon"),
-                                   "ok": False, "feil": melding,
-                                   "utelatt": True})
+                resultater.append(normaliser_operasjonsresultat(
+                    {"type": getattr(op, "type", "operasjon"),
+                     "ok": False, "feil": melding, "utelatt": True}))
                 if advarsler is not None and melding not in advarsler:
                     advarsler.append(melding)
                 continue
             try:
-                resultater.append(op.utfor(ktx))
+                resultater.append(
+                    normaliser_operasjonsresultat(op.utfor(ktx)))
                 if krever_modell:
                     modellkall += 1
             except Exception as exc:      # noqa: BLE001 — én del skal ikke
-                resultater.append({       # kunne velte de andre
+                resultater.append(normaliser_operasjonsresultat({
                     "type": getattr(op, "type", "operasjon"),
                     "ok": False,
                     "feil": f"Operasjonen feilet ({type(exc).__name__}): "
-                            f"{exc}"[:300]})
+                            f"{exc}"[:300]}))
         return resultater
 
 

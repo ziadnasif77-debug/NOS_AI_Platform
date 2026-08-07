@@ -3589,9 +3589,15 @@ class DokumentKlientApp:
                                         or {}).items():
                         linjer.append(f"    {navn}: {verdi}")
                 elif t == "svar":
-                    linjer.append(f"[svar] {r.get('svar')}")
+                    # Svarfeltene ligger naa i «data», ikke paa
+                    # toppnivaa: `resultater[i].data` er en paalitelig
+                    # sti for ALLE operasjonstyper.
+                    linjer.append(f"[svar] {(r.get('data') or {}).get('svar')}")
                 elif t in ("tekst", "korriger"):
-                    utdrag = str(r.get("data") or "")[:800]
+                    # «data» er alltid et objekt naa — teksten laa
+                    # tidligere direkte i feltet, saa den var `str` for
+                    # denne typen og `dict` for alle andre.
+                    utdrag = str((r.get("data") or {}).get("tekst") or "")[:800]
                     linjer.append(f"[{t}]")
                     linjer.append("    " + utdrag.replace("\n", "\n    "))
                 elif t == "struktur":

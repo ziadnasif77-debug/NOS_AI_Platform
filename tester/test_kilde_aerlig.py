@@ -49,10 +49,21 @@ def test_ekte_modellsvar_teller():
     assert _delen_brukte_modellen({"ok": True, "modell_brukt": True}) is True
 
 
-def test_del_uten_flagg_regnes_som_modellbruk():
-    """`korriger` setter ikke «modell_brukt», men kjører alltid modellen.
-    Standard er derfor True — men bare når delen IKKE feilet."""
-    assert _delen_brukte_modellen({"ok": True}) is True
+def test_del_uten_flagg_regnes_IKKE_som_modellbruk():
+    """Standarden er snudd: «sa ikke fra» kan ikke bety «ja».
+
+    Den gamle regelen antok True for en del uten flagg, fordi
+    `korriger` ikke satte det. Det ga en ekte loegn maalt paa serveren:
+    `{"type":"skjema","motor":"felter"}` — en ren kodemotor som aldri
+    spoer modellen — meldte `modell_brukt: true`, mens `motor=auto` av
+    SAMME operasjon meldte riktig.
+
+    Naa sier hver modellkapabel operasjon det uttrykkelig, og feltet som
+    er dokumentert som robotens raskeste aerlighetssjekk kan ikke lenger
+    gjette."""
+    assert _delen_brukte_modellen({"ok": True}) is False
+    assert _delen_brukte_modellen({"ok": True, "modell_brukt": True}) is True
+    assert _delen_brukte_modellen({"ok": True, "modell_brukt": False}) is False
 
 
 @pytest.mark.parametrize("ikke_en_del", [None, "tekst", 42, []])
@@ -88,10 +99,37 @@ def test_borealis_nede_gir_ikke_borealis_i_kilden():
 
 
 def test_en_kjorende_del_er_nok():
+    """En del som SIER at modellen kjoerte er nok, selv om en annen
+    feilet. Delen maa si det — den gamle utgaven stolte paa standarden."""
+    assert _modellen_kjorte({
+        "svar": {"ok": False, "feil": "nede"},
+        "korriger": {"ok": True, "modell_brukt": True},
+    }) is True
+
+
+def test_taus_del_gjor_ikke_svaret_til_modellbruk():
+    """Speilet av testen over."""
     assert _modellen_kjorte({
         "svar": {"ok": False, "feil": "nede"},
         "korriger": {"ok": True},
-    }) is True
+    }) is False
+
+
+def test_rekkefolgen_avgjor_ikke_svaret():
+    """To operasjoner av SAMME type kollapset i et dict, og siste vant.
+    Maalt: samme to operasjoner med samme utfall, i motsatt rekkefolge,
+    ga ulikt `modell_brukt`."""
+    a = [{"type": "skjema", "ok": False, "feil": "nede"},
+         {"type": "skjema", "ok": True, "modell_brukt": False}]
+    assert _modellen_kjorte(a) is _modellen_kjorte(list(reversed(a)))
+
+
+def test_begge_av_samme_type_telles():
+    """Kollapsen skjulte den ene av to. Naa ser regelen begge."""
+    liste = [{"type": "skjema", "ok": True, "modell_brukt": False},
+             {"type": "skjema", "ok": True, "modell_brukt": True}]
+    assert _modellen_kjorte(liste) is True
+    assert _modellen_kjorte(list(reversed(liste))) is True
 
 
 def test_ingen_deler_bedt_om():
