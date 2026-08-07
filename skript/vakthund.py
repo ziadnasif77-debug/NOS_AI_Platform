@@ -290,6 +290,21 @@ if __name__ == "__main__":
     # bygget for å RESTARTE, så to av dem kan restarte hverandres
     # servere i ring uten at loggen viser hvem som gjorde hva.
     _laas = enkeltinstans.ta("vakthund")
+    if _laas is None and "--vent" in sys.argv:
+        # R142: tjenesteveien VENTER i stedet for å avslutte.
+        #
+        # Oppgaveplanleggeren restarter bare en oppgave som avsluttet
+        # med FEIL. Avslutter vi pent med 0 fordi panelet tilfeldigvis
+        # rakk å starte sin vakthund først, regnes oppgaven som ferdig
+        # — og lukker brukeren så panelet, står serveren uten tilsyn
+        # til neste omstart. Da parkerer vi heller her og tar over i
+        # det den andre forsvinner.
+        _skriv("en vakthund kjører allerede — venter på tur "
+               "(tjenesteveien avslutter ikke, den tar over)")
+        while _laas is None:
+            time.sleep(10)
+            _laas = enkeltinstans.ta("vakthund")
+        _skriv("den andre vakthunden er borte — overtar tilsynet")
     if _laas is None:
         _skriv("en vakthund kjører allerede — denne avslutter "
                "(to vakthunder ville startet hver sin server)")

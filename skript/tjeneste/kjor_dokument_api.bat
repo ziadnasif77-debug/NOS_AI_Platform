@@ -41,10 +41,30 @@ if "%DOKUMENT_API_PORT%"=="" set DOKUMENT_API_PORT=8600
 
 >>"data\logger\dokument_api.ut.log" echo [%date% %time%] Starter dokument_api paa port %DOKUMENT_API_PORT% ...
 
-REM Kjor serveren i forgrunn. Naar prosessen avslutter, tar Scheduler over:
+REM Kjor VAKTHUNDEN, ikke serveren direkte (R142).
+REM
+REM Denne .bat-en startet tidligere dokument_api.py rett. Da hoppet hele
+REM oppstartsveien over vakthunden - og den finnes nettopp fordi to dogn
+REM med krasj ga NULL informasjon (R122): den skriver EXITKODEN, som pa
+REM Windows sier om det var et nativt krasj (0xC0000005) eller om noen
+REM drepte prosessen (0xFFFFFFFF).
+REM
+REM Viktigere: Scheduler restarter bare en prosess som HAR AVSLUTTET. En
+REM HENGT server lever videre, og da gjor Scheduler ingenting. Vakthunden
+REM helsesjekker /hjelp og restarter ogsa nar prosessen henger (R123) -
+REM "en hengt prosess er like ubrukelig som en dod".
+REM
+REM Starter panelet ogsa en vakthund, tar den forste lasen (R141) og den
+REM andre avslutter pent. De to veiene kolliderer altsa ikke.
+REM
+REM Nar vakthunden selv avslutter, tar Scheduler over:
 REM  - krasj (kode <> 0)  -> Scheduler restarter (RestartCount/RestartInterval)
 REM  - manuell stopp (/end) -> Scheduler restarter IKKE
-"%PY%" -u "skript\dokument_api.py" 1>>"data\logger\dokument_api.ut.log" 2>>"data\logger\dokument_api.feil.log"
+REM --vent: holder oppgaven i live om panelet tilfeldigvis rakk aa starte
+REM sin vakthund forst, og tar over nar den forsvinner. Uten den ville
+REM oppgaven avsluttet med 0, Scheduler regnet den som ferdig, og
+REM serveren statt uten tilsyn til neste omstart.
+"%PY%" -u "skript\vakthund.py" --vent 1>>"data\logger\dokument_api.ut.log" 2>>"data\logger\dokument_api.feil.log"
 set KODE=%errorlevel%
 
 >>"data\logger\dokument_api.feil.log" echo [%date% %time%] dokument_api avsluttet med kode %KODE%.

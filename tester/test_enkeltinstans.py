@@ -231,8 +231,13 @@ def test_panelet_sier_fra_i_et_VINDU():
 def test_vakthunden_avslutter_PENT_naar_en_annen_holder_laasen():
     """Exitkode 0, ikke en feil: at det allerede går en vakthund er
     normaltilstanden når panelet startes to ganger, ikke et problem
-    noen skal lete etter i loggen."""
+    noen skal lete etter i loggen.
+
+    Anker på selve MELDINGEN, ikke på avstanden fra låsen: `--vent`
+    (R142) ble senere lagt inn imellom, og et vindu på N tegn er en
+    vakt som brekker av at koden over den vokser."""
     kilde = open(os.path.join(ROT, "skript", "vakthund.py"),
                  encoding="utf-8").read()
-    etter = kilde[kilde.index('ta("vakthund")'):]
-    assert "sys.exit(0)" in etter[:600]
+    etter = kilde[kilde.index("denne avslutter"):]
+    assert "sys.exit(0)" in etter[:400], (
+        "grenen som avviser en ekstra vakthund avslutter ikke med 0")

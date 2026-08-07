@@ -1,9 +1,17 @@
 # Kjør dokument-API-et som en Windows-tjeneste
 
 Gjør at serveren **starter av seg selv ved oppstart** og **restarter
-automatisk hvis den krasjer** — uten Docker, uten ekstra nedlasting.
-Bruker den innebygde Oppgaveplanleggeren (Task Scheduler), så den virker
-også på en isolert server uten internett.
+automatisk hvis den krasjer ELLER HENGER** — uten Docker, uten ekstra
+nedlasting. Bruker den innebygde Oppgaveplanleggeren (Task Scheduler),
+så den virker også på en isolert server uten internett.
+
+Oppgaven starter **vakthunden**, ikke serveren direkte (R142). Det er
+ikke et detaljvalg: Oppgaveplanleggeren restarter bare en prosess som
+har AVSLUTTET, mens en hengt server lever videre og blir stående.
+Vakthunden helsesjekker `/hjelp` og restarter også da (R123), og den
+skriver EXITKODEN til `data\logger\vakthund.log` — på Windows sier det
+tallet om det var et nativt krasj (`0xC0000005`, typisk llama.cpp/CUDA,
+uten Python-traceback) eller om noen drepte prosessen (`0xFFFFFFFF`).
 
 ## Installer
 
@@ -55,14 +63,36 @@ Alle variabler er valgfrie (se [.env.example](../../.env.example)).
 
 ## Logg
 
+- `data\logger\vakthund.log` — **les denne først.** Start, omstart, og
+  EXITKODEN når serveren døde
 - `data\logger\dokument_api.ut.log` — normal utskrift
 - `data\logger\dokument_api.feil.log` — feil og avslutningskoder
 
-## Hva skjer ved krasj?
+## Hva skjer ved krasj — og ved heng?
 
-Oppgaveplanleggeren restarter serveren automatisk (opptil 999 ganger, ett
-minutt mellom hvert forsøk). Stopper du den selv med `/end`, restartes den
-**ikke** — det regnes som en villet stopp.
+To lag, med hvert sitt ansvar:
+
+| Situasjon | Hvem fanger den |
+|---|---|
+| Serveren krasjer | Vakthunden — innen sekunder, med exitkoden i loggen |
+| Serveren HENGER (svarer ikke) | Vakthunden — tre bom på `/hjelp` på rad |
+| Vakthunden selv dør | Oppgaveplanleggeren (999 ganger, ett minutt mellom) |
+
+Stopper du oppgaven selv med `/end`, restartes den **ikke** — det regnes
+som en villet stopp.
+
+## Startes den ikke to ganger?
+
+Nei (R141). Åpner du kontrollpanelet mens oppgaven kjører, ser panelets
+vakthund at en allerede har låsen og avslutter — serveren startes ikke
+på nytt, og de to veiene kolliderer ikke.
+
+Motsatt vei er også dekket: rekker panelet å starte sin vakthund før
+oppgaven, **venter** oppgavens vakthund (`--vent`) i stedet for å
+avslutte, og tar over i det panelets forsvinner. Uten det ville
+oppgaven avsluttet med kode 0, Scheduler regnet den som ferdig, og
+serveren stått uten tilsyn til neste omstart så snart du lukket
+panelet.
 
 ## Ukentlig trening (valgfritt)
 

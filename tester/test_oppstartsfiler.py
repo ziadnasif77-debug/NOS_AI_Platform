@@ -105,3 +105,68 @@ def test_alle_python_kall_i_bat_peker_paa_en_fil_som_finnes():
                                f"«{rel}» — finnes ikke")
     assert not mangler, ("Oppstartsfiler peker på Python-filer som ikke "
                          "finnes:\n  " + "\n  ".join(mangler))
+
+
+# ------------------------------------------------------------------ #
+#  Oppstart ved maskinstart går gjennom VAKTHUNDEN (R142)             #
+# ------------------------------------------------------------------ #
+
+TJENESTEBAT = os.path.join(ROT, "skript", "tjeneste",
+                           "kjor_dokument_api.bat")
+
+
+def _tjenesteteksten():
+    with open(TJENESTEBAT, encoding="utf-8") as f:
+        return f.read()
+
+
+def test_tjenesten_starter_VAKTHUNDEN_ikke_serveren_direkte():
+    """Målt: ingenting fra prosjektet startet ved maskinoppstart — ingen
+    tjeneste, ingen planlagt oppgave, ingen oppstartsmappe, ingen
+    Run-nøkkel. Og da mekanismen fantes, startet den `dokument_api.py`
+    RETT, altså utenom vakthunden.
+
+    Det er ikke et detaljvalg. Oppgaveplanleggeren restarter bare en
+    prosess som HAR AVSLUTTET; en HENGT server lever videre og blir
+    stående. Vakthunden helsesjekker `/hjelp` og restarter også da
+    (R123) — «en hengt prosess er like ubrukelig som en død» — og den
+    skriver EXITKODEN, som er det som manglet i to døgn (R122)."""
+    tekst = _tjenesteteksten()
+    kode = "\n".join(l for l in tekst.splitlines()
+                     if not l.strip().upper().startswith("REM"))
+    assert "vakthund.py" in kode, (
+        "tjenesteveien starter ikke vakthunden — da er oppstart ved "
+        "maskinstart uten helsesjekk og uten exitkode i loggen")
+    assert "dokument_api.py" not in kode, (
+        "tjenesteveien starter serveren direkte, utenom vakthunden")
+
+
+def test_tjenesteveien_VENTER_paa_laasen_i_stedet_for_aa_avslutte():
+    """R141 ga vakthunden en enkeltinstanslås. Rakk panelet å starte sin
+    vakthund først, ville tjenestens avsluttet med 0 — og
+    Oppgaveplanleggeren regnet oppgaven som FERDIG. Lukket brukeren så
+    panelet, sto serveren uten tilsyn til neste omstart."""
+    kode = "\n".join(l for l in _tjenesteteksten().splitlines()
+                     if not l.strip().upper().startswith("REM"))
+    assert "--vent" in kode
+
+
+def test_vakthunden_forstaar_vent():
+    kilde = open(os.path.join(ROT, "skript", "vakthund.py"),
+                 encoding="utf-8").read()
+    kode = "\n".join(l.split("#")[0] for l in kilde.splitlines())
+    assert '"--vent" in sys.argv' in kode
+    # og den skal VENTE, ikke avslutte
+    etter = kode[kode.index('"--vent" in sys.argv'):]
+    assert "while _laas is None" in etter[:900]
+
+
+def test_tjenestebaten_holder_alt_i_nav_mappa():
+    """CLAUDE.md §1: oppgaven kjøres som SYSTEM, som ikke arver
+    brukerens miljø. Da må .bat-en peke cache og modeller inn i nav
+    selv, ellers havner de i SYSTEM-kontoens profil på C."""
+    tekst = _tjenesteteksten()
+    for navn in ("EASYOCR_MODULE_PATH", "HF_HOME", "PIP_CACHE_DIR",
+                 "PYTHONNOUSERSITE"):
+        assert navn in tekst, f"{navn} settes ikke i tjeneste-baten"
+    assert "%CD%" in tekst, "stiene er ikke avledet fra prosjektroten"
