@@ -4629,15 +4629,19 @@ class Handler(BaseHTTPRequestHandler):
                                        "raske forblir raskt. ALTERNATIVT: felt 'operasjoner' "
                                        "(JSON-liste av {type,…}) → {ok, resultater:[…]} via "
                                        "operasjonsmotoren (uniform, utvidbar form)"),
-                    "POST /analyser": "multipart/form-data, felt 'fil' → deterministiske felter + trenger_ocr",
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
                                    "fil UTEN 'sporsmal' → hele den utleste teksten ordrett (deterministisk); "
                                    "valgfritt korriger=ja → LLM-korrigert OCR-tekst"),
-                    "POST /uttrekk": ("felt 'fil' → KOMPLETT strukturert JSON: alle identifikatorer "
-                                      "(sjekksumvalidert), kontakt, adresser, datoer, perioder, beløp, "
-                                      "strekkoder, håndskrift, kvalitet — alle nøkler alltid til stede"),
-                    "POST /fyll_skjema": ("felter 'fil' + 'skjema' (din egen JSON-mal) → malen utfylt "
-                                          "fra dokumentet, kodevalidert felt for felt (avvik rapporteres)"),
+                    "POST /sladd": ("felt 'fil' (+ valgfritt 'typer') → teksten med "
+                                    "beviste identifikatorer erstattet av [SLADDET type]; "
+                                    "«sladding_fullstendig» og «mistenkt_usladdet» sier "
+                                    "hva som IKKE kunne bevises"),
+                    "POST /forhandssjekk": ("felt 'fil' → lesbarhet og sidetall UTEN å "
+                                            "kjøre full OCR — svarer om dokumentet er verdt "
+                                            "å sende"),
+                    "POST /ekko": ("speiler tilbake det serveren FAKTISK mottok i "
+                                   "multipart-kroppen — for å feilsøke en klient som tror "
+                                   "den sender noe annet enn den gjør"),
                     "POST /jobb": "felt 'fil' → jobb_id med en gang; OCR av HELE dokumentet kjører i bakgrunnen",
                     "POST /innsyn": ("felt 'fil' → innsyn_id; direktevisning av lesingen — "
                                      "poll GET /innsyn/<id>?fra=N for hendelsesstrømmen"),
