@@ -4745,7 +4745,7 @@ class Handler(BaseHTTPRequestHandler):
         modell_kjorte = _modellen_kjorte(
             {r.get("type"): r for r in resultater if isinstance(r, dict)})
 
-        return self._svar(200, {
+        svar = {
             "ok": True, "filnavn": filnavn,
             "dokumentprofil": profil,
             "opphav": opphav,
@@ -4770,7 +4770,13 @@ class Handler(BaseHTTPRequestHandler):
             "kilde": ("motor+borealis" if modell_kjorte else "motor"),
             "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
                         "modell": _borealis["modellfil"] or _borealis["motor"]},
-        })
+        }
+        # Samme personvernbryter som på bryterveien (R90: den skal virke
+        # i BEGGE kontraktene). Her bærer «resultater» de samme feltene
+        # bryterveien har i «felter».
+        if profilform == "sammendrag":
+            svar = _sammendragsform(_sammendragsform_operasjoner(svar))
+        return self._svar(200, svar)
 
     def _dokument_samlet(self, filnavn, slag, innhold, maks_ocr,
                          tekstfelter, les_strekkoder):
@@ -5146,7 +5152,7 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(skjemadel, dict) and skjemadel.get("kilde_per_felt"):
             opphav.update(opphav_for_skjema(skjemadel["kilde_per_felt"]))
 
-        return self._svar(200, {
+        svar = {
             "ok": True, "filnavn": filnavn,
             "valg": valg,
             "dokumentprofil": profil,
@@ -5180,7 +5186,14 @@ class Handler(BaseHTTPRequestHandler):
                       else "deterministisk"),
             "versjon": {"api": API_VERSJON, "prompt": prompter.versjon(),
                         "modell": _borealis["modellfil"] or _borealis["motor"]},
-        })
+        }
+        # Personvernbryteren gjelder HELE svaret. _profilform renset
+        # dokumentprofilen; «tekst» og «felter» bygges utenom den, og
+        # begge er PÅ som standard — så fødselsnummeret nådde fram
+        # likevel. Se _sammendragsform.
+        if profilform == "sammendrag":
+            svar = _sammendragsform(svar)
+        return self._svar(200, svar)
 
     def do_POST(self):
         self._t0_req = time.time()
@@ -6445,12 +6458,128 @@ def _uenighet_med_modellen(profil, deler) -> list:
         if not bevist or not modellens or kilde.get(felt) != "modell":
             continue
         if str(modellens).strip() != str(bevist).strip():
+            # VERDIENE SITERES IKKE. Advarselen havner i «varsler» og i
+            # «kvalitet.advarsler», og ingen av dem berøres av
+            # personvernbryteren — så et fødselsnummer sitert her ville
+            # nådd fram i et svar klienten uttrykkelig ba om UTEN
+            # persondata. Klienten har begge verdiene i svaret alt
+            # (`part.{felt}` og `skjema.skjema.{felt}`); den trenger å
+            # vite AT de er uenige, ikke å få dem gjentatt.
             ut.append(
-                f"Modellen og uttrekket er uenige om «{felt}»: modellen "
-                f"skrev {modellens!r}, mens det deterministiske uttrekket "
-                f"fant {bevist!r}. Uttrekket er bevist (etikett/mod11); "
-                f"modellens verdi er ikke.")
+                f"Modellen og uttrekket er uenige om «{felt}». Sammenlign "
+                f"dokumentprofil.part.{felt} mot skjema.skjema.{felt}. "
+                f"Uttrekket er bevist (etikett/mod11); modellens verdi er "
+                f"ikke, så uttrekket gjelder.")
     return ut
+
+
+# Feltene i «felter.felter» som ER persondata. Under profil=sammendrag
+# settes de til null — nøkkelen blir stående, så formen er uendret
+# (R118), men verdien når ikke fram.
+_PERSONFELT_I_FELTER = (
+    "fodselsnummer", "navn", "telefon", "epost", "kontonummer", "kid",
+    "organisasjonsnummer", "postnummer", "poststed", "adresse",
+    "arbeidsgiver",
+)
+
+
+def _sammendragsform(svar: dict) -> dict:
+    """Personvernbryteren for HELE svaret, ikke bare dokumentprofilen.
+
+    `_profilform` renset `dokumentprofil` — og bare den. Målt på det
+    ekte svaret nådde fødselsnummeret likevel fram to andre veier, begge
+    PÅ som standard:
+
+        /felter/felter/fodselsnummer   verdien, i klartekst
+        /tekst                          hele dokumentet
+
+    En klient som fulgte dokumentasjonen trodde den ikke mottok
+    persondata, og gjorde det. Bryteren dekket en tredjedel av svaret.
+
+    RÅTEKST FJERNES, DEN SLADDES IKKE. `sladd_tekst` dekker bare det den
+    kan BEVISE — fødselsnummer, konto, KID, telefon, e-post — og sier
+    selv at navn og adresser ikke dekkes. Å levere «sladdet» tekst som
+    fortsatt bærer navn og adresse ville byttet ett falskt løfte mot et
+    svakere. Feltene settes derfor til null, og navngis i «utelatt».
+
+    Formen står stille: ingen nøkkel fjernes, bare verdier nulles."""
+    if not isinstance(svar, dict):
+        return svar
+    fjernet = []
+
+    if svar.get("tekst") is not None:
+        svar["tekst"] = None
+        fjernet.append("tekst")
+
+    # «struktur» er en PARALLELL utvinning av de samme identifikatorene
+    # — kontakt.telefoner, identifikatorer.fodselsnummer, adresser. Den
+    # ble oppdaget som lekkasjekanal av testen som bygger hele svaret,
+    # ikke av lesing: den er AV som standard, så den var lett å overse.
+    # Hele blokka fjernes; den bærer ingenting profilen ikke har.
+    if svar.get("struktur") is not None:
+        svar["struktur"] = None
+        fjernet.append("struktur")
+
+    felter = svar.get("felter")
+    if isinstance(felter, dict):
+        flate = felter.get("felter")
+        if isinstance(flate, dict):
+            for navn in _PERSONFELT_I_FELTER:
+                if flate.get(navn) is not None:
+                    flate[navn] = None
+                    fjernet.append(f"felter.felter.{navn}")
+
+        datoer = felter.get("datoer_detaljert")
+        if isinstance(datoer, list):
+            # «kontekst» er et råtekstvindu rundt hver dato — målt til 84
+            # tegn, og et fødselsnummer får plass i det. Det overlever
+            # selv «tekst=nei», fordi det ligger i en annen blokk.
+            for d in datoer:
+                if isinstance(d, dict) and d.get("kontekst") is not None:
+                    d["kontekst"] = None
+                    if "felter.datoer_detaljert[].kontekst" not in fjernet:
+                        fjernet.append("felter.datoer_detaljert[].kontekst")
+            # Fødselsdatoen utledet av fødselsnummeret er persondata, og
+            # oppføringen bekrefter i tillegg at et mod11-GYLDIG nummer
+            # står i dokumentet. Samme klasse som opphav-pekerne R89
+            # fjernet: den lekker eksistensen bryteren skulle skjule.
+            for_e = len(datoer)
+            felter["datoer_detaljert"] = [
+                d for d in datoer
+                if not (isinstance(d, dict)
+                        and d.get("type") == "fodselsdato_fra_fnr")]
+            if len(felter["datoer_detaljert"]) != for_e:
+                fjernet.append("felter.datoer_detaljert[fodselsdato_fra_fnr]")
+
+    # «utelatt» er løftet om at ingenting forsvinner i stillhet (R65).
+    # Den bor i profilen, der _profilform alt har fylt seksjonsnavnene.
+    profil = svar.get("dokumentprofil")
+    if isinstance(profil, dict) and fjernet:
+        profil["utelatt"] = sorted(set(profil.get("utelatt") or []) | set(fjernet))
+    return svar
+
+
+def _sammendragsform_operasjoner(svar: dict) -> dict:
+    """Samme rensing for operasjonsveien, der nyttelasten ligger i
+    `resultater[].data` i stedet for i `felter`.
+
+    R90 slo fast at personvernbryteren må virke i BEGGE kontraktene.
+    Uten dette ville en klient som byttet fra brytere til «operasjoner»
+    mistet vernet uten å bli fortalt det — og operasjonen `felter`
+    leverer nøyaktig de samme identifikatorene."""
+    if not isinstance(svar, dict):
+        return svar
+    for res in svar.get("resultater") or []:
+        if not isinstance(res, dict):
+            continue
+        data = res.get("data")
+        if res.get("type") == "tekst" and data:
+            res["data"] = None
+        elif isinstance(data, dict):
+            # Operasjonen «felter» har samme form som blokka «felter» på
+            # bryterveien, så den gjenbruker rensingen der.
+            _sammendragsform({"felter": data})
+    return svar
 
 
 def _profilform(profil: dict, form: str) -> dict:

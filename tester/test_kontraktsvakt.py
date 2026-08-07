@@ -466,7 +466,18 @@ def test_uenighet_mellom_modell_og_uttrekk_meldes():
     varsel = api._uenighet_med_modellen(profil, deler)
     assert len(varsel) == 1
     assert "uenige om «navn»" in varsel[0]
-    assert "Ola Nordmann" in varsel[0]
+    # VERDIENE SITERES IKKE. Testen krevde tidligere at «Ola Nordmann»
+    # sto i varselet — men varselet havner i `varsler` OG i
+    # `kvalitet.advarsler`, og ingen av dem berøres av
+    # personvernbryteren. Et navn eller fødselsnummer sitert der nådde
+    # fram i et svar som uttrykkelig ba om ingen persondata.
+    # Klienten har begge verdiene i svaret alt; den trenger å vite AT de
+    # er uenige, og hvor den skal se.
+    assert "Ola Nordmann" not in varsel[0]
+    assert fnr not in varsel[0]
+    assert "NOR-ETTERNAVN, OLA" not in varsel[0]
+    assert "dokumentprofil.part.navn" in varsel[0]
+    assert "skjema.skjema.navn" in varsel[0]
 
 
 def test_enighet_gir_ingen_stoy():
