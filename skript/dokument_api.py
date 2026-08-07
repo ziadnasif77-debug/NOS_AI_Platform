@@ -142,8 +142,13 @@ MAKS_LLM_TEGN = int(os.environ.get("MAKS_LLM_TEGN", "12000"))
 # Kuttes det, sier svaret det ALLTID eksplisitt i 'advarsel'.
 OCR_MAKS_SIDER = int(os.environ.get("OCR_MAKS_SIDER", "10"))
 OCR_TAK_SIDER = int(os.environ.get("OCR_TAK_SIDER", "50"))
-# Sikkerhet: settes API_NOKKEL, kreves headeren X-API-Key på alle
-# endepunkter unntatt GET /hjelp. Tom = åpen (kun for lokal testing).
+# Sikkerhet: settes API_NOKKEL, kreves headeren X-API-Key på alt som
+# bærer dokumentdata. ÅPNE er GET /hjelp (helsesjekk — vakthunden
+# spør den), GET /openapi.json og GET /dokumentasjon med /statisk/*.
+# De tre siste MÅ være åpne: Swagger UI kjører i en nettleser og kan
+# ikke sende headeren, så et nøkkelkrav der ville gjort
+# dokumentasjonen ubrukelig. Ingen av dem returnerer dokumentinnhold.
+# Tom nøkkel = alt åpent (kun for lokal testing på et lukket nett).
 API_NOKKEL = os.environ.get("API_NOKKEL", "").strip()
 # NAVNGITTE nøkler: «navn:nøkkel,navn:nøkkel». Uten klientidentitet er
 # hver forespørsel anonym, og spørsmålet «bruker noen fortsatt dette?»
