@@ -4280,6 +4280,35 @@ class DokumentKlientApp:
 
 
 if __name__ == "__main__":
-    rot = tk.Tk()
-    app = DokumentKlientApp(rot)
-    rot.mainloop()
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from delt import enkeltinstans
+
+    # R141: panelet er den ENESTE inngangen, så et dobbelt klikk på
+    # snarveien er den mest sannsynlige måten alt startes to ganger på.
+    # Hvert panel har sine egne start/stopp-knapper, så to av dem
+    # betyr to vakthunder, to servere som deler det samme 8 GB-kortet,
+    # og en stoppknapp som dreper den andres prosesser.
+    #
+    # Meldingen må i et VINDU: panelet kjøres med pythonw, uten konsoll,
+    # så en print til stderr forsvinner sporløst — og brukeren ville
+    # bare sett at ingenting skjedde.
+    _laas = enkeltinstans.ta("kontrollpanel")
+    if _laas is None:
+        _skjult = tk.Tk()
+        _skjult.withdraw()
+        messagebox.showinfo(
+            "Kontrollpanelet kjører allerede",
+            "Kontrollpanelet er allerede åpent — se etter vinduet, eller "
+            "i oppgavelinja.\n\n"
+            "To paneler startes ikke, fordi hvert av dem har sine egne "
+            "start- og stoppknapper: to vakthunder ville startet hver "
+            "sin server på det samme GPU-kortet, og en stoppknapp ville "
+            "drept den andres prosesser.")
+        _skjult.destroy()
+        sys.exit(0)
+    try:
+        rot = tk.Tk()
+        app = DokumentKlientApp(rot)
+        rot.mainloop()
+    finally:
+        _laas.frigi()

@@ -278,7 +278,25 @@ def hovedlokke(en_gang: bool = False) -> int:
 
 
 if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from delt import enkeltinstans
+
+    # R141: `svarer()`-sjekken over er «sjekk, så handle» — ikke en lås.
+    # Starter to vakthunder mens API-et er nede, ser BEGGE en død server
+    # og starter hver sin. Og selv om de starter forskjøvet: dør API-et
+    # senere, vil begge oppdage det og begge starte det på nytt.
+    #
+    # Vakthunden er dessuten det verste stedet å ha to av: den er
+    # bygget for å RESTARTE, så to av dem kan restarte hverandres
+    # servere i ring uten at loggen viser hvem som gjorde hva.
+    _laas = enkeltinstans.ta("vakthund")
+    if _laas is None:
+        _skriv("en vakthund kjører allerede — denne avslutter "
+               "(to vakthunder ville startet hver sin server)")
+        sys.exit(0)
     try:
         sys.exit(hovedlokke("--en-gang" in sys.argv))
     except KeyboardInterrupt:
         _skriv("vakthunden stoppet med Ctrl+C")
+    finally:
+        _laas.frigi()

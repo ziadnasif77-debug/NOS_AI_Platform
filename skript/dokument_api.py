@@ -7816,12 +7816,39 @@ def _varm_opp_ocr():
         _oppvarming["pagaar"] = False
 
 
+class EnServer(ThreadingHTTPServer):
+    """Serveren som NEKTER å være nummer to på porten (R141).
+
+    Pythons `HTTPServer` setter `allow_reuse_address = 1`. På Unix er
+    det riktig — det omgår TIME_WAIT ved omstart. På Windows betyr
+    SO_REUSEADDR noe annet: den TILLATER en ny socket å binde en port
+    som allerede er i bruk. Målt: to servere bandt samme port, begge
+    sto oppe, og alle forespørslene gikk til den ene uten at noe sa
+    hvilken.
+
+    Verre enn forvirringen: server nummer to laster Borealis (~5,7 GB)
+    på det samme 8 GB-kortet, og da har ingen av dem plass til OCR.
+
+    Målt at det ikke koster oss noe: rebind etter ren avslutning OG
+    etter en DREPT prosess — som er det vakthunden faktisk møter —
+    lykkes på første forsøk."""
+    allow_reuse_address = 0
+
+
 def main():
     try:
-        server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+        server = EnServer(("0.0.0.0", PORT), Handler)
     except OSError as exc:
-        print(f"\n!!! Port {PORT} opptatt: {exc}")
-        print("    Bruk en annen: set DOKUMENT_API_PORT=8601 && python skript/dokument_api.py\n")
+        # WinError 10048 / EADDRINUSE: som regel er det VÅR egen server
+        # som allerede kjører, ikke et fremmed program.
+        print(f"\n!!! Port {PORT} er opptatt: {exc}")
+        print(f"    Kjører API-et allerede? Sjekk med:")
+        print(f"      curl http://127.0.0.1:{PORT}/hjelp")
+        print(f"    To servere på samme port er verre enn én: de deler "
+              f"GPU-en,")
+        print(f"    og forespørslene går til en vilkårlig av dem.")
+        print(f"    Vil du kjøre en TIL med vilje, gi den en egen port:")
+        print(f"      set DOKUMENT_API_PORT=8601 && python skript/dokument_api.py\n")
         return
     # Borealis lastes i bakgrunnen — /analyser virker med en gang,
     # /spor blir klar når modellen er lastet (~1-2 min).
