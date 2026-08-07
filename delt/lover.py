@@ -34,6 +34,10 @@ _PARAGRAF = re.compile(r"^####\s+(§\s*[\w\- ]+?)\.?\s*(?:\.|$|\s{2,})(.*)$")
 
 _bufret = {"mtime": None, "lover": {}}
 _tekstbuffer = {}
+# Kapitlene parset ut av lovteksten. Samme levetid som `_tekstbuffer`:
+# så lenge teksten leses én gang per prosess, kan ikke kapitlene i den
+# endre seg heller.
+_kapittelbuffer = {}
 
 
 def _les_register() -> dict:
@@ -97,14 +101,28 @@ def _lovtekst(lov_id: str) -> str:
 def kapitler(lov_id: str) -> dict:
     """Kapittelnummer → kapitteltittel. Det er kapitlene som navngir
     ytelsene: i 1997-loven er kapittel 8 sykepenger og kapittel 12
-    uføretrygd."""
-    ut = {}
-    for linje in _lovtekst(lov_id).splitlines():
-        treff = _KAPITTEL.match(linje)
-        if treff:
-            nummer = " ".join(treff.group(1).split())
-            ut[nummer] = treff.group(2).strip().rstrip(".")
-    return ut
+    uføretrygd.
+
+    Parset én gang per prosess, som teksten selv. `_lovtekst` bufret
+    allerede LESINGEN, men hvert kall gikk likevel gjennom alle de
+    ti tusen linjene på nytt med en regex — målt 1,38 ms per kall, helt
+    uendret over fire kall, altså rent gjentatt arbeid på en tekst som
+    ikke kan ha endret seg. Prisen betales én gang per dokument i det
+    enkle tilfellet, men `_hjemmel` kalles én gang PER DOKUMENT i en
+    bunke: en tidokumentersbunke parset loven ti ganger.
+
+    Resultatet leveres som en KOPI. Uten den kunne en kaller som endrer
+    kartet sitt forgifte bufferet for hele prosessen — 28 oppføringer å
+    kopiere mot ti tusen linjer å lese om igjen."""
+    if lov_id not in _kapittelbuffer:
+        ut = {}
+        for linje in _lovtekst(lov_id).splitlines():
+            treff = _KAPITTEL.match(linje)
+            if treff:
+                nummer = " ".join(treff.group(1).split())
+                ut[nummer] = treff.group(2).strip().rstrip(".")
+        _kapittelbuffer[lov_id] = ut
+    return dict(_kapittelbuffer[lov_id])
 
 
 def sok_ytelse(navn: str, lov_id: str = None) -> list:

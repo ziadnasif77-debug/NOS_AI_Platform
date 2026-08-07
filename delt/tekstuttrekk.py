@@ -2084,11 +2084,20 @@ def gjett_sprak(tekst: str) -> str:
     return ""
 
 
-def strukturert_uttrekk(tekst: str) -> dict:
+def strukturert_uttrekk(tekst: str, datoer=None) -> dict:
     """Komplett strukturert uttrekk av ALT som kan finnes i tekst fra
-    NAV-dokumenter. Alle nøkler er alltid til stede — tomt er "" / []."""
+    NAV-dokumenter. Alle nøkler er alltid til stede — tomt er "" / [].
+
+    `datoer` lar en kaller som ALLEREDE har klassifisert datoene levere
+    dem inn. Målt gikk `klassifiser_datoer` tre ganger over samme tekst
+    i én forespørsel: her, i `dokumentdato_av`, og i konteksten som
+    eier begge. På en 200-siders bunke er hver runde ~38 ms.
+
+    Argumentet er valgfritt med uendret oppførsel når det utelates —
+    de andre kallstedene (sjekk_miljo, testene) skal ikke trenge å vite
+    om denne optimaliseringen."""
     tekst = tekst or ""
-    datoer = klassifiser_datoer(tekst)
+    datoer = klassifiser_datoer(tekst) if datoer is None else datoer
 
     perioder = []
     venter = None

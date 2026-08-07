@@ -1253,11 +1253,17 @@ def analyser_med_cache(filnavn: str, data: bytes, ocr_maks_sider=None,
     return {**resultat, "fra_cache": False}
 
 
-def dokumentdato_av(tekst: str, ocr_brukt: bool = False) -> dict:
+def dokumentdato_av(tekst: str, ocr_brukt: bool = False, datoer=None) -> dict:
     """Dokumentets egen dato utledet fra ren tekst (uten PDF-metadata).
-    Brukes der vi bare har teksten: DOCX/TXT og /dokument-stien."""
-    return finn_dokumentdato(
-        sett_dato_roller(klassifiser_datoer(tekst or "")), ocr_brukt=ocr_brukt)
+    Brukes der vi bare har teksten: DOCX/TXT og /dokument-stien.
+
+    `datoer` skal være ROLLEMERKEDE datoer. Den lar konteksten levere
+    inn lista si i stedet for at denne klassifiserer teksten på nytt —
+    målt var dette ett av tre kall til `klassifiser_datoer` på samme
+    tekst i én forespørsel."""
+    if datoer is None:
+        datoer = sett_dato_roller(klassifiser_datoer(tekst or ""))
+    return finn_dokumentdato(datoer, ocr_brukt=ocr_brukt)
 
 
 def _pdf_metadata_datoer(meta: dict) -> list:
@@ -6729,6 +6735,10 @@ class DokumentKontekst:
         self.sider_regioner = sider_regioner or []
         self._struktur = None
         self._profil = None
+        # Navnemangling (dobbel understrek) med vilje: den urørte
+        # datolista skal bare nås gjennom `_raa_datoer`, som er stedet
+        # kontrakten om «ikke muter denne» er skrevet ned.
+        self.__raa_datoer = None
         # Deler analysen alt har regnet ut. De ER dovent-cachen, bare
         # fylt på forhånd — og de er BEDRE enn det konteksten selv kan
         # regne ut, fordi analysen så PDF-metadata og håndskriftmerking
@@ -6753,22 +6763,47 @@ class DokumentKontekst:
         return self._datoer
 
     @property
+    def _raa_datoer(self):
+        """Datoene klassifisert ÉN gang, urørt.
+
+        Målt gikk `klassifiser_datoer` TRE ganger over samme tekst i én
+        forespørsel: herfra via `datoer_detaljert`, en gang til inne i
+        `dokumentdato_av`, og en tredje gang inne i
+        `strukturert_uttrekk`. På en 200-siders bunke er hver runde
+        ~38 ms.
+
+        Denne lista deles ALDRI ut direkte. `sett_dato_roller` muterer
+        på stedet og legger til `rolle`, `type_kodet` og `rolle_kodet`;
+        og `strukturert_uttrekk` legger datoene RETT inn i svaret sitt
+        («struktur.datoer»). Delte de samme dict-ene, ville
+        `struktur.datoer` stilltiende fått tre nye nøkler — en
+        kontraktsendring smuglet inn i en ytelsesfiks. Derfor kopier
+        ut: ~15 små dict-er mot en ny regexrunde over hele teksten."""
+        if self.__raa_datoer is None:
+            self.__raa_datoer = klassifiser_datoer(self.tekst)
+        return self.__raa_datoer
+
+    def _datokopi(self):
+        return [dict(d) for d in self._raa_datoer]
+
+    @property
     def datoer_detaljert(self):
         if self._datoer_detaljert is None:
-            self._datoer_detaljert = sett_dato_roller(
-                klassifiser_datoer(self.tekst))
+            self._datoer_detaljert = sett_dato_roller(self._datokopi())
         return self._datoer_detaljert
 
     @property
     def dokumentdato(self):
         if self._dokumentdato is None:
-            self._dokumentdato = dokumentdato_av(self.tekst, self.ocr_brukt)
+            self._dokumentdato = dokumentdato_av(
+                self.tekst, self.ocr_brukt, datoer=self.datoer_detaljert)
         return self._dokumentdato
 
     @property
     def struktur(self):
         if self._struktur is None:
-            self._struktur = strukturert_uttrekk(self.tekst)
+            self._struktur = strukturert_uttrekk(self.tekst,
+                                                 datoer=self._datokopi())
         return self._struktur
 
     @property
