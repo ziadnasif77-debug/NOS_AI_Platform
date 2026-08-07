@@ -48,7 +48,8 @@ def lag_fnr(nummer: int = 0) -> str:
     raise AssertionError(f"fant ikke gyldig test-fnr nr. {nummer}")
 
 
-def lag_fnr_fodt(dag: int, maaned: int, aar: int, nummer: int = 0) -> str:
+def lag_fnr_fodt(dag: int, maaned: int, aar: int, nummer: int = 0,
+                 intervall: str = "lav") -> str:
     """Et gyldig fødselsnummer med en BESTEMT fødselsdato.
 
     `lag_fnr` hardkoder 01.01.1990, så alle numrene derfra har SAMME
@@ -59,14 +60,24 @@ def lag_fnr_fodt(dag: int, maaned: int, aar: int, nummer: int = 0) -> str:
     Århundret velges av INDIVIDSIFRENE, ikke av årstallet. Regelen
     speiles her — ikke importeres fra koden som testes — av samme grunn
     som sjekksummene regnes ut i denne fila: ellers kunne en feil i
-    implementasjonen bekrefte seg selv gjennom testdataene."""
+    implementasjonen bekrefte seg selv gjennom testdataene.
+
+    `intervall` velger HVILKET individnummerintervall som brukes når
+    flere er lovlige for samme år. 1940-1999 dekkes av BÅDE 000-499 og
+    900-999, og det siste ble aldri generert her — så den verste feilen
+    i århundreregelen var strukturelt umulig å skrive en test for:
+    generatoren kunne ikke lage nummeret som utløste den (R154)."""
     if 2000 <= aar <= 2039:
         omraade = range(500, 1000)
+    elif 1940 <= aar <= 1999 and intervall == "hoy":
+        omraade = range(900, 1000)      # også lovlig for disse årene
     elif 1900 <= aar <= 1999:
         omraade = range(100, 500)
+    elif 1854 <= aar <= 1899:
+        omraade = range(500, 750)
     else:
         raise AssertionError(
-            f"året {aar} dekkes ikke av den forenklede århundreregelen")
+            f"året {aar} dekkes ikke av århundreregelen (1854-2039)")
     aa = aar % 100
     funnet = []
     for individ in omraade:

@@ -1844,6 +1844,37 @@ def dato_tokens(kilde: str) -> set:
         return set()
 
 
+# Mellomrommene et tall kan grupperes med: vanlig, hardt (NBSP) og
+# smalt hardt (U+202F). Det siste manglet i den gamle rensingen mens
+# `_tall()` lenger nede kjente det — to funksjoner i samme fil var
+# uenige om hva et mellomrom er, og en korrekt lest verdi ble meldt som
+# uverifisert (R156).
+_GRUPPETEGN = "   "
+# Et tall med valgfri gruppering og valgfri desimalhale.
+_TALLMONSTER = re.compile(
+    r"\d[\d" + _GRUPPETEGN + r".]*\d(?:[.,]\d+)?|\d(?:[.,]\d+)?")
+# Desimaltegnet er det SISTE punktum/komma fulgt av nøyaktig ett eller
+# to siffer — den norske ørekonvensjonen. Alt annet er gruppering:
+# kontonummeret «2000.00.00001», datoen «12.06.2026» og tusenskillet
+# «1.234» beholder dermed alle sifrene sine.
+_DESIMALHALE = re.compile(r"[.,](\d{1,2})$")
+
+
+def _tallverdi(raa: str) -> tuple:
+    """(heltallsdel, øre) — MAGNITUDEN BEVARES.
+
+    Å strippe komma sammen med mellomrom gjorde «268,00» og «26800»
+    identiske. Her skilles de to delene i stedet, og etterfølgende
+    nuller i ørene fjernes: «23,00» = «23» (R56), mens «23,50» ≠ «23»."""
+    t = raa.strip()
+    for tegn in _GRUPPETEGN:
+        t = t.replace(tegn, "")
+    m = _DESIMALHALE.search(t)
+    ore = m.group(1).rstrip("0") if m else ""
+    heltall = re.sub(r"\D", "", t[:m.start()] if m else t)
+    return (heltall.lstrip("0") or "0", ore)
+
+
 def uverifiserte_tall(svar: str, kilde: str, ekstra_tokens: set = None) -> list:
     """Tallvakt: finner tall i svaret som IKKE står ordrett i kilden.
 
@@ -1852,32 +1883,36 @@ def uverifiserte_tall(svar: str, kilde: str, ekstra_tokens: set = None) -> list:
     3+ sifre i svaret må finnes igjen i kildeteksten (sammenlignet uten
     mellomrom/punktum, så «41 28 89 03» matcher «41288903»). Returnerer
     listen av tall som mangler — tom liste = alt verifisert."""
-    # VIKTIG token-vakt: (1) eksakt token-match, ikke delstreng - ellers
-    # ville "1777" passert som delstreng av "11777"; (2) monsteret tar
-    # med komma-desimaler sa "268,00" ikke splittes til "268"+"00" og
-    # slipper endrede orebelop gjennom. Gruppering ("41 28 89 03") og
-    # NBSP fjernes symmetrisk i bade svar og kilde.
-    monster = r"\d[\d . ]*\d(?:,\d+)?|\d(?:,\d+)?"
-    rens = lambda t: re.sub(r"[ ., ]", "", t)
-    kilde_tokens = {rens(t) for t in re.findall(monster, kilde)}
+    # Verdisammenligning, ikke strengsammenligning (R156). Den gamle
+    # vakten strøk BÅDE mellomrom, punktum og KOMMA før den sammenlignet
+    # — og komma er det norske desimaltegnet. «268,00» og «26800» ble
+    # dermed samme token, og en modell som normaliserer et beløp (noe
+    # språkmodeller gjør hele tiden) slapp gjennom med en faktor 100 i
+    # feil, merket `tall_verifisert: true`.
+    #
+    # Målt før rettingen — alle fire slapp gjennom:
+    #     svar «26800»   mot kilden «Sum 268,00 kroner»
+    #     svar «26 800»  mot kilden «Sum 268,00 kroner»
+    #     svar «268,00»  mot kilden «Sum 26800 kroner»
+    #     svar «12345»   mot kilden «Belop 123.45 USD»
+    #
+    # Vakttesten så det ikke fordi den målte FALSK BLOKKERING — at
+    # riktige verdier ikke stoppes. Retningen som lekker var umålt.
+    kilde_verdier = {_tallverdi(t) for t in _TALLMONSTER.findall(kilde)}
     if ekstra_tokens:
-        kilde_tokens |= ekstra_tokens
+        # Datotokenene kommer som rene sifferstrenger (se dato_tokens).
+        kilde_verdier |= {(t.lstrip("0") or "0", "") for t in ekstra_tokens}
     mangler = []
-    for tall in re.findall(monster, svar):
+    for tall in _TALLMONSTER.findall(svar):
         raa = tall.strip()
-        kompakt = rens(raa)
-        if len(kompakt) < 3 or kompakt in kilde_tokens:
+        if len(re.sub(r"\D", "", raa)) < 3:
             continue
-        # R56: «23,00» og «23» er nøyaktig samme beløp. På matriseskrift
-        # mister OCR ofte ørene — «+FORHÅND NOK 23,00» ble lest «#FORHAND
-        # NOK 23 Q» — og da falt en korrekt lest verdi på at kilden bare
-        # inneholdt heltallet. Vakten var dessuten inkonsekvent: «23»
-        # alene slipper uansett gjennom (under tresifergrensen), mens
-        # «23,00» ble avvist.
-        # Gjelder KUN når ørene er null. «23,50» må fortsatt stå ordrett
-        # i kilden — ellers ville et endret ørebeløp sluppet forbi.
-        uten_ore = re.sub(r"[,.](?:00|-)$", "", raa)
-        if uten_ore != raa and rens(uten_ore) in kilde_tokens:
+        # R56 ligger nå INNE i _tallverdi: «23,00» og «23» gir samme
+        # verdi, mens «23,50» ikke gjør det. På matriseskrift mister OCR
+        # ofte ørene — «+FORHÅND NOK 23,00» ble lest «#FORHAND NOK 23 Q»
+        # — og da falt en korrekt lest verdi på at kilden bare hadde
+        # heltallet.
+        if _tallverdi(raa) in kilde_verdier:
             continue
         mangler.append(raa)
     return mangler

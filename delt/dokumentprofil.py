@@ -185,13 +185,27 @@ _EIERETIKETT = re.compile(
 
 # Etiketter som peker på ALLE ANDRE. Et fødselsnummer under en av disse
 # er aldri dokumentets fødselsnummer.
+#
+# GENITIVSFORMENE MÅ MED. «Legens navn» er den vanligste måten et norsk
+# skjema spør om dette på, og `\blege\b` traff den ikke — ordet er
+# «legens». Nummeret under falt dermed på `\bnavn\b` i eierlista, og
+# LEGEN ble dokumentets part. Målt: 15 av 15 rolleetiketter snudde
+# (R155). `(?:ns|n|s|en|ene)?` dekker bestemt form og eieform for alle
+# rollene i lista.
+_G = r"(?:ns|n|s|en|ene|es)?"
 _ANNENETIKETT = re.compile(
-    r"(?i)(saksbehandler|behandlende\s+lege|\blege\b|tannlege|psykolog|"
-    r"fysioterapeut|\bbehandler\b|kontaktperson|arbeidsgiver|"
-    r"n[æa]rmeste\s+leder|\bkopi\b|kopimottaker|\bmottaker\b|\bavsender\b|"
-    r"utsteder|utstedt\s+av|signert\s+av|underskrevet\s+av|attestert\s+av|"
-    r"\bveileder\b|konsulent|\bvitne\b|\bverge\b|fullmektig|p[åa]r[øo]rende|"
-    r"ektefelle|samboer|\bforelder\b|\bvergem[åa]l\b|revisor|regnskapsf[øo]rer)")
+    r"(?i)(saksbehandler" + _G + r"|behandlende\s+lege" + _G +
+    r"|\bfastlege" + _G + r"\b|\blege" + _G + r"\b|tannlege" + _G +
+    r"|psykolog" + _G + r"|fysioterapeut" + _G + r"|\bbehandler" + _G +
+    r"\b|kontaktperson" + _G + r"|arbeidsgiver" + _G + r"|"
+    r"n[æa]rmeste\s+leder|\bkopi\b|kopimottaker|\bmottaker" + _G +
+    r"\b|\bavsender" + _G + r"\b|"
+    r"utsteder" + _G + r"|utstedt\s+av|signert\s+av|underskrevet\s+av|"
+    r"attestert\s+av|"
+    r"\bveileder" + _G + r"\b|konsulent" + _G + r"|\bvitne" + _G +
+    r"\b|\bverge" + _G + r"\b|fullmektig" + _G + r"|p[åa]r[øo]rende|"
+    r"ektefelle" + _G + r"|samboer" + _G + r"|\bforelder\b|"
+    r"\bvergem[åa]l\b|revisor" + _G + r"|regnskapsf[øo]rer" + _G + r")")
 
 # Et navn: to eller flere ord med stor forbokstav PÅ SAMME LINJE.
 # «\s+» ville sluppet linjeskift gjennom, og da ble «Ola Nordmann» til
@@ -328,6 +342,23 @@ def _rolle_for_forekomst(tekst: str, start: int) -> tuple:
     annen = list(_ANNENETIKETT.finditer(vindu))
     siste_eier = eier[-1] if eier else None
     siste_annen = annen[-1] if annen else None
+    if siste_eier and siste_annen:
+        # «SIST VINNER» gjelder MELLOM linjer, ikke INNE i én (R155).
+        # I «Legens navn» står rolleordet FØRST og styrer substantivet
+        # etter — det er en eieform, ikke to konkurrerende etiketter.
+        # Med sist-vinner-regelen slo `navn` alltid `lege`, fordi
+        # eieformen setter dem i den rekkefølgen hver eneste gang.
+        # Målt: 15 av 15 rolleetiketter gjorde rolleinnehaveren til
+        # dokumentets part — med `konfidens: "hoy"` og tomt `varsler`.
+        linje = vindu.rfind("\n", 0, max(siste_eier.start(),
+                                         siste_annen.start()))
+        if min(siste_eier.start(), siste_annen.start()) > linje:
+            # samme linje: den FØRSTE styrer
+            if siste_annen.start() < siste_eier.start():
+                return ("annen", vindu_start + siste_annen.end(),
+                        siste_annen.group(0))
+            return ("eier", vindu_start + siste_eier.end(),
+                    siste_eier.group(0))
     if siste_eier and (not siste_annen or siste_eier.start() > siste_annen.start()):
         return "eier", vindu_start + siste_eier.end(), siste_eier.group(0)
     if siste_annen:

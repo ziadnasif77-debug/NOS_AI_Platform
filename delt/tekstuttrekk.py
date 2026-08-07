@@ -556,25 +556,56 @@ def fodselsdato_av_fnr(fnr: str):
     presentert som et faktum. Én regel, ett sted.
 
     Månedstillegg håndteres også: +80 er syntetiske testnumre (Tenor),
-    og dag +40 er D-nummer."""
+    +40 er H-nummer (hjelpenummer), og dag +40 er D-nummer."""
     if not fnr or len(fnr) != 11 or not fnr.isdigit():
         return None
     dag, maaned, aa = int(fnr[0:2]), int(fnr[2:4]), int(fnr[4:6])
     individ = int(fnr[6:9])
     if maaned > 80:
-        maaned -= 80            # syntetisk testnummer
+        maaned -= 80            # syntetisk testnummer (Tenor)
+    elif maaned > 40:
+        maaned -= 40            # H-nummer, tildelt av helsevesenet
     if dag > 40:
         dag -= 40               # D-nummer
     if not (1 <= dag <= 31 and 1 <= maaned <= 12):
         return None
-    # Individsifrene bestemmer århundret (forenklet, men langt riktigere
-    # enn å anta 1900 for alle)
+    # ÅRHUNDRET LIGGER I INDIVIDSIFRENE, og Skatteetatens regel har FIRE
+    # intervaller, ikke tre. Det fjerde manglet:
+    #
+    #   000-499              1900-1999
+    #   500-749  år 54-99    1854-1899
+    #   500-999  år 00-39    2000-2039
+    #   900-999  år 40-99    1940-1999   ← manglet
+    #
+    # Uten det siste falt 900-999 ned i 1800-grenen. Målt mot
+    # spesifikasjonen: 3802 kombinasjoner ga feil århundre, alle med
+    # nøyaktig 100 år. En født i 1975 med individnummer 950 — et
+    # intervall som er i bruk fordi 000-499 er oppbrukt — kom ut av
+    # dokumentprofilen som født 1875, altså 151 år gammel.
+    #
+    # Verre enn tallet: `klassifiser_datoer` har en nedre grense på 1900
+    # og forkastet datoen i STILLHET, mens profilen leverte den. Samme
+    # svar bar altså to ulike fødselsdatoer for samme person, og den ene
+    # var merket «ikke antatt» — fordi århundret er UTLEDET av regelen,
+    # ikke gjettet av oss. Utledet, ja. Og feil (R154).
+    #
+    # Rekkefølgen er hele poenget: 900-999 må avgjøres FØR 500-749.
     if individ >= 500 and aa <= 39:
         aar = 2000 + aa
+    elif individ >= 900:
+        aar = 1900 + aa
     elif individ >= 500 and aa >= 54:
         aar = 1800 + aa
     else:
         aar = 1900 + aa
+    # 29. februar i et ikke-skuddår er ikke en dato. Uten denne
+    # kontrollen bygget dokumentprofilen strengen «1901-02-29», og
+    # `date.fromisoformat` hos klienten kastet ValueError på et felt
+    # serveren nettopp hadde levert som gyldig (R154).
+    try:
+        date(aar, maaned, dag)
+    except ValueError:
+        return None
     return dag, maaned, aar
 
 
@@ -1102,8 +1133,17 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
     return resultater
 
 
+# Nedre grense for en dato vi tror på. 1854 fordi det er der
+# fødselsnummerets egen århundreregel begynner (individnummer 500-749,
+# år 54-99). Sto den på 1900, forkastet `klassifiser_datoer` i STILLHET
+# en fødselsdato dokumentprofilen samtidig leverte — samme svar, to
+# ulike svar (R154). En dato som ligger utenfor det regelen kan
+# produsere, er fortsatt ugyldig.
+ELDSTE_TROVERDIGE_AAR = 1854
+
+
 def _gyldig_dato(d: int, m: int, y: int) -> bool:
-    if not (1900 <= y <= datetime.utcnow().year + 1):
+    if not (ELDSTE_TROVERDIGE_AAR <= y <= datetime.utcnow().year + 1):
         return False
     try:
         datetime(y, m, d)

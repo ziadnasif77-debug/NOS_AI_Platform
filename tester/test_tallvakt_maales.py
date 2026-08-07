@@ -161,3 +161,59 @@ def test_openapi_beskriver_de_nye_feltene():
     assert "uverifiserte_tall" in svar
     assert "tallvakt_forsok" in svar
     assert svar["tallvakt_forsok"]["enum"] == [1, 2]
+
+
+# ------------------------------------------------------------------ #
+#  Retningen som LEKKER — den forrige målingen så bare den andre       #
+# ------------------------------------------------------------------ #
+#
+# Vakten over måler FALSK BLOKKERING: at riktige verdier ikke stoppes.
+# Det er halve bildet. Den andre halvdelen — at gale verdier faktisk
+# STOPPES — var umålt, og der lå feilen: `rens` strøk komma sammen med
+# mellomrom og punktum, og komma er det norske desimaltegnet.
+#
+# «268,00» og «26800» ble dermed samme token. En modell som
+# normaliserer et beløp (noe språkmodeller gjør hele tiden) slapp
+# gjennom med en faktor 100 i feil, merket `tall_verifisert: true`
+# og `uverifiserte_tall: []` — en POSITIV påstand om at vakten hadde
+# sett etter og ikke funnet noe (R156).
+
+MAGNITUDE = [
+    ("26800", "Sum 268,00 kroner", "øre-komma strøket: faktor 100"),
+    ("26 800", "Sum 268,00 kroner", "samme, med gruppering"),
+    ("268,00", "Sum 26800 kroner", "motsatt vei"),
+    ("12345", "Belop 123.45 USD", "punktum som desimaltegn"),
+    ("1234567", "Belop 12345,67 kr", "faktor 100 på et større tall"),
+]
+
+
+@pytest.mark.parametrize("svar,kilde,hvorfor", MAGNITUDE)
+def test_endret_magnitude_stoppes(svar, kilde, hvorfor):
+    assert api.uverifiserte_tall(svar, kilde) == [svar], hvorfor
+
+
+def _lovlige():
+    """Kontonummeret bygges på KJØRETID — elleve siffer skrevet ut
+    i fila utløser portabilitetsvakten, og den har rett."""
+    konto = lag_kontonummer()
+    return [
+        ("268,00", "Sum 268,00 kroner", "ordrett"),
+        ("23", "Belop 23,00 kroner", "R56: null øre er samme beløp"),
+        ("23,00", "Belop 23 kroner", "R56 motsatt vei"),
+        ("41288903", "Telefon 41 28 89 03", "gruppering med mellomrom"),
+        (f"{konto[:4]}.{konto[4:6]}.{konto[6:]}", f"Konto {konto}",
+         "kontonummerformat"),
+        ("1 234,56", "Sum 1 234,56 kroner", "smalt hardt mellomrom"),
+    ]
+
+
+@pytest.mark.parametrize("svar,kilde,hvorfor", _lovlige())
+def test_lovlige_verdier_slipper_fortsatt(svar, kilde, hvorfor):
+    """Speilet. En vakt som stopper alt er like ubrukelig som en som
+    stopper ingenting — den bare feiler i den andre retningen."""
+    assert api.uverifiserte_tall(svar, kilde) == [], hvorfor
+
+
+def test_endret_orebelop_stoppes_fortsatt():
+    """R56 gjelder KUN når ørene er null. «23,50» er et annet beløp."""
+    assert api.uverifiserte_tall("23,50", "Belop 23 kroner") == ["23,50"]
