@@ -42,9 +42,18 @@ VALIDERING_STI = os.environ.get("VALIDERING_STI", "./data/validering/norhand.jso
 LIVE = Path(MODELLER_STI) / "norhand"
 KANDIDAT = Path(MODELLER_STI) / "norhand-kandidat"
 FORRIGE = Path(MODELLER_STI) / "norhand-forrige"
-# Hvor mye DÅRLIGERE kandidaten kan være og fremdeles godtas.
-# 0.0 = må være minst like god. En liten margin tåler støy i små sett.
-CER_MARGIN = float(os.environ.get("CER_MARGIN", "0.0"))
+# Her sto `CER_MARGIN` — «hvor mye dårligere kandidaten kan være og
+# fremdeles godtas», standard 0.0. Den er fjernet (R148), ikke satt til
+# en annen verdi: en fast margin på et lite sett flytter bare terskelen
+# for hvilken STØY som slipper gjennom. Forskjellen mellom CER 0.041 og
+# 0.043 på tredve dokumenter er ikke en forbedring, og ingen margin kan
+# gjøre den til en.
+#
+# Dommen faller nå på konfidensintervaller (`bootstrap_ki`): overlapper
+# de, kan modellene ikke skilles på dette settet, og da promoteres
+# ingenting. En bryter som ser ut som en innstilling og ikke lenger
+# styrer noe, er verre enn ingen (R140) — derfor er den også ute av
+# .env.example.
 # Sist KJENTE avtrykk av live-vektene. Avviker live fra dette, er modellen
 # byttet ut UTENFRA (ny utgave fra Nasjonalbiblioteket) — og treningsløpet
 # retrener automatisk hele korreksjonsarkivet på det nye grunnlaget.
@@ -125,9 +134,23 @@ def les_valideringssett(sti: str = VALIDERING_STI) -> list:
             if d.get("tekst") and os.path.isfile(d.get("fil_sti", ""))]
 
 
-def cer_for_modell(modell_sti, sett: list):
-    """Gjennomsnittlig tegnfeilrate (CER) for modellen på settet.
-    Returnerer None hvis settet er tomt."""
+def cer_for_modell(modell_sti, sett: list, per_dokument: bool = False):
+    """Tegnfeilrate (CER) for modellen på settet, eller None ved tomt sett.
+
+    `per_dokument=True` gir i tillegg tallene PER DOKUMENT (R148). Uten
+    dem er et konfidensintervall umulig å regne ut: funksjonen summerte
+    feil og tegn og kastet fordelingen, og da finnes det ikke noe å
+    resample.
+
+    To snitt, og de svarer på ulike spørsmål:
+
+        micro = sum(feil) / sum(tegn)   domineres av det LANGE dokumentet
+        macro = snitt av CER per dok    domineres av det KORTE
+
+    Et dokument på ti tegn som leses helt feil gir CER 1.0 og drar
+    macro voldsomt opp, mens det knapt rører micro. Står de to langt fra
+    hverandre, er ytelsen ujevn over dokumentlengder — og det er en
+    opplysning i seg selv, ikke støy å velge bort."""
     if not sett:
         return None
     import torch
@@ -141,8 +164,7 @@ def cer_for_modell(modell_sti, sett: list):
     if paa_gpu:
         modell.to("cuda")
 
-    feil = 0
-    tegn = 0
+    feil_per_dok, tegn_per_dok = [], []
     for d in sett:
         bilde = Image.open(d["fil_sti"]).convert("RGB")
         piksel = prosessor(images=bilde, return_tensors="pt").pixel_values
@@ -152,14 +174,65 @@ def cer_for_modell(modell_sti, sett: list):
             ids = modell.generate(piksel, max_new_tokens=128)
         pred = prosessor.batch_decode(ids, skip_special_tokens=True)[0]
         fasit = d["tekst"]
-        feil += _lev(pred, fasit)
-        tegn += max(1, len(fasit))
+        feil_per_dok.append(_lev(pred, fasit))
+        tegn_per_dok.append(max(1, len(fasit)))
 
-    resultat = round(feil / tegn, 4)
+    resultat = round(sum(feil_per_dok) / sum(tegn_per_dok), 4)
     del modell
     if paa_gpu:
         torch.cuda.empty_cache()
+    if per_dokument:
+        return resultat, feil_per_dok, tegn_per_dok
     return resultat
+
+
+def macro_cer(feil_per_dok, tegn_per_dok) -> float:
+    """Snittet av CER PER DOKUMENT — ikke av alle tegn under ett.
+
+    Et dokument på ti tegn som leses helt feil gir CER 1.0 her, men
+    knapt et utslag i micro. Sprik mellom de to betyr at ytelsen er
+    ujevn over dokumentlengder."""
+    if not tegn_per_dok:
+        return 0.0
+    return round(sum(f / t for f, t in zip(feil_per_dok, tegn_per_dok))
+                 / len(tegn_per_dok), 4)
+
+
+def bootstrap_ki(feil_per_dok, tegn_per_dok, runder: int = 2000,
+                 froe: int = 20260807):
+    """95 % konfidensintervall for micro-CER, ved resampling (R148).
+
+    Dokumentene trekkes MED tilbakelegging `runder` ganger, og CER
+    regnes på nytt for hvert utvalg. Bredden på intervallet forteller
+    hvor mye av tallet som er sett — og hvor mye som er tilfeldighet.
+
+    `froe` er fast MED VILJE. En kvalitetsport som gir ulik dom på
+    samme inndata fra kjøring til kjøring er verre enn en fast margin:
+    den er ikke bare upresis, den er uetterrettelig. Med fast frø kan
+    en avvist kandidat undersøkes på nytt og gi samme svar."""
+    import random
+    if not tegn_per_dok:
+        return (0.0, 0.0)
+    tilfeldig = random.Random(froe)
+    n = len(tegn_per_dok)
+    verdier = []
+    for _ in range(runder):
+        valgt = [tilfeldig.randrange(n) for _ in range(n)]
+        f = sum(feil_per_dok[i] for i in valgt)
+        t = sum(tegn_per_dok[i] for i in valgt)
+        verdier.append(f / t if t else 0.0)
+    verdier.sort()
+    lav = verdier[int(0.025 * runder)]
+    hoy = verdier[min(runder - 1, int(0.975 * runder))]
+    return (round(lav, 4), round(hoy, 4))
+
+
+def intervallene_overlapper(a, b) -> bool:
+    """Overlapper de to konfidensintervallene?
+
+    Er svaret ja, kan vi ikke skille modellene på dette settet — og da
+    er «kandidaten er bedre» en påstand tallene ikke bærer."""
+    return a[0] <= b[1] and b[0] <= a[1]
 
 
 def _flytt(kilde: Path, maal: Path) -> None:
@@ -213,12 +286,52 @@ def vurder() -> dict:
     if not KANDIDAT.exists():
         return {"godkjent": False, "grunn": "mangler_kandidat",
                 "cer_live": None, "cer_kandidat": None, "antall": len(sett)}
-    cer_live = cer_for_modell(LIVE, sett) if LIVE.exists() else 1.0
-    cer_kand = cer_for_modell(KANDIDAT, sett)
-    godkjent = cer_kand <= cer_live + CER_MARGIN
-    return {"godkjent": godkjent,
-            "grunn": "bedre_eller_lik" if godkjent else "daarligere",
-            "cer_live": cer_live, "cer_kandidat": cer_kand, "antall": len(sett)}
+    if LIVE.exists():
+        cer_live, feil_live, tegn_live = cer_for_modell(LIVE, sett,
+                                                        per_dokument=True)
+    else:
+        # Ingen live-modell: alt er bedre enn ingenting, og da finnes
+        # det ikke noe intervall å sammenligne med.
+        cer_live, feil_live, tegn_live = 1.0, [], []
+    cer_kand, feil_kand, tegn_kand = cer_for_modell(KANDIDAT, sett,
+                                                    per_dokument=True)
+
+    ki_live = bootstrap_ki(feil_live, tegn_live) if tegn_live else None
+    ki_kand = bootstrap_ki(feil_kand, tegn_kand)
+
+    # R148: dommen faller på INTERVALLER, ikke på to punkttall.
+    #
+    # `CER_MARGIN` var 0.0 — «kandidaten må være minst like god». På et
+    # lite sett er forskjellen mellom 0.041 og 0.043 ren støy, og porten
+    # promoterte eller avviste altså på tilfeldighet. En fast margin
+    # gjør det ikke bedre: den flytter bare terskelen for hvilken støy
+    # som slipper gjennom.
+    #
+    # Overlapper intervallene, kan vi ikke SKILLE modellene på dette
+    # settet — og «kandidaten er bedre» er da en påstand tallene ikke
+    # bærer. Vi promoterer ikke på et likt resultat; live blir stående,
+    # for det er det trygge valget.
+    if ki_live is None:
+        godkjent = True
+        grunn = "ingen_live_modell"
+    elif intervallene_overlapper(ki_kand, ki_live):
+        godkjent = False
+        grunn = "ikke_skillbar"
+    elif ki_kand[1] < ki_live[0]:
+        godkjent = True
+        grunn = "bedre"
+    else:
+        godkjent = False
+        grunn = "daarligere"
+
+    return {"godkjent": godkjent, "grunn": grunn,
+            "cer_live": cer_live, "cer_kandidat": cer_kand,
+            # micro er tallet over; macro sier om ytelsen er JEVN
+            "macro_cer_live": macro_cer(feil_live, tegn_live) if tegn_live
+                              else None,
+            "macro_cer_kandidat": macro_cer(feil_kand, tegn_kand),
+            "ki_live": ki_live, "ki_kandidat": ki_kand,
+            "antall": len(sett)}
 
 
 if __name__ == "__main__":
