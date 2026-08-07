@@ -112,7 +112,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import prompter
+from delt import kalibrering, prompter
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -493,6 +493,15 @@ def _skriv_tilgang(handler, code) -> None:
             # logges). `null` betyr at vakten ikke var innom denne
             # forespørselen i det hele tatt.
             "tallvakt": getattr(handler, "_tallvakt", None),
+            # R149: OCR-konfidensen og hva den FØRTE TIL. Terskelen 0.85
+            # styrer hvilke dokumenter et menneske får se, men ingen har
+            # kunnet svare på om tallet betyr noe — og en terskel ingen
+            # har målt er en gjetning som har fått status som regel.
+            #
+            # Her ligger fordelingen. Fasiten kommer fra Label Studio,
+            # og de to kobles på `fil_id`. Ingen dokumentinnhold logges.
+            "ocr_konfidens": getattr(handler, "_ocr_konfidens", None),
+            "gjennomgang": getattr(handler, "_gjennomgang_grunn", None),
         }, ensure_ascii=False)
         _tilgangslogger().info(rad)
     except Exception:
@@ -507,6 +516,20 @@ def _skriv_tilgang(handler, code) -> None:
 LABEL_STUDIO_URL = os.environ.get("LABEL_STUDIO_URL", "").strip()
 LABEL_STUDIO_API_KEY = os.environ.get("LABEL_STUDIO_API_KEY", "").strip()
 LS_KONFIDENS_TERSKEL = float(os.environ.get("LS_KONFIDENS_TERSKEL", "0.85"))
+# R149: andelen GODT LESTE dokumenter som likevel sendes til gjennomgang,
+# for å kunne måle om terskelen over betyr noe.
+#
+# Uten dette er kalibrering ikke vanskelig — den er UMULIG. Bare
+# dokumenter UNDER terskelen får en menneskelig fasit, så de øverste
+# bøttene i kalibreringstabellen kan aldri fylles, og målingen ville
+# bekreftet seg selv: vi måler bare der vi allerede visste det var
+# dårlig. Treningsløkken lærer da av feilene systemet visste om, aldri
+# av dem det gjorde med selvtillit.
+#
+# AV som standard (0.0): dette koster menneskelig gjennomgangstid, og
+# det skal være et valg. 0.02 (to prosent) er nok til å fylle tabellen
+# over noen uker uten å belaste noen merkbart.
+KALIBRERING_ANDEL = float(os.environ.get("KALIBRERING_ANDEL", "0.0"))
 AUTO_GJENNOMGANG = bool(LABEL_STUDIO_URL and LABEL_STUDIO_API_KEY)
 # Versjonsstempling — følger med hvert /spor-svar så resultater kan
 # spores tilbake til nøyaktig API- og prompt-versjon (R39)
@@ -1077,10 +1100,22 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
     raa_tekst = ocr_res.get("tekst", "")
     tomt = len(raa_tekst.strip()) < 20        # OCR fant nesten ingen tekst
     lav_konfidens = konfidens < LS_KONFIDENS_TERSKEL
+    # R149: en liten andel av de GODT LESTE tas med som kalibreringsprøve.
+    # Uten dem får ingen dokumenter over terskelen en fasit, og
+    # spørsmålet «betyr konfidensen noe?» kan ikke besvares i det hele
+    # tatt. Avgjøres av en hash av innholdet, ikke en tilfeldighet per
+    # kall — samme dokument skal gi samme svar hver gang.
+    proeve = False
     if not (tomt or lav_konfidens or handskrift):
-        return None                      # lest godt nok — ingen grunn
+        proeve = kalibrering.skal_kalibreringsproeve(
+            hashlib.sha256(innhold).hexdigest()[:16], KALIBRERING_ANDEL)
+        if not proeve:
+            return None                  # lest godt nok — ingen grunn
+    # Rekkefølgen er en RANGERING: prøven er den svakeste grunnen, og
+    # skal aldri skygge for at dokumentet faktisk ble lest dårlig.
     grunn = ("tomt_resultat" if tomt else
-             "lav_ocr_konfidens" if lav_konfidens else "handskrift")
+             "lav_ocr_konfidens" if lav_konfidens else
+             "handskrift" if handskrift else "kalibreringsproeve")
 
     def arbeider():
         png_sti = None
@@ -4277,6 +4312,32 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _noter_kalibrering(self, analyse: dict) -> None:
+        """OCR-konfidensen og hva den FØRTE TIL, til tilgangsloggen
+        (R149).
+
+        Terskelen 0.85 styrer hvilke dokumenter et menneske får se, men
+        ingen har kunnet svare på om tallet betyr noe — og en terskel
+        ingen har målt er en gjetning som har fått status som regel.
+
+        Bare TALLET og BESLUTNINGEN logges, aldri innhold. Fasiten
+        kommer fra Label Studio, og de to kobles på dokumentets id."""
+        if not isinstance(analyse, dict):
+            return
+        konf = analyse.get("ocr_konfidens")
+        if konf is None:
+            ocr = analyse.get("ocr_motorer") or {}
+            konf = ocr.get("konfidens") if isinstance(ocr, dict) else None
+        if konf is not None:
+            try:
+                self._ocr_konfidens = round(float(konf), 4)
+            except (TypeError, ValueError):
+                pass
+        sendt = analyse.get("sendt_til_gjennomgang")
+        # «null» = ikke sendt. Det er ikke det samme som at vi ikke vet:
+        # her VET vi at dokumentet ble lest godt nok (R128).
+        self._gjennomgang_grunn = (sendt or {}).get("grunn") if sendt else None
+
     def _statisk(self, filnavn: str):
         """Serverer Swagger UI fra nav-mappa (R136).
 
@@ -4592,6 +4653,10 @@ class Handler(BaseHTTPRequestHandler):
             dok = innhold
         else:
             a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
+            # R149: konfidensen og hva den FØRTE TIL, til
+            # tilgangsloggen. Ett sted, rett etter analysen, så
+            # ingen av de tre veiene kan glemme det.
+            self._noter_kalibrering(a)
             if not a.get("ok"):
                 return self._svar(400, a)
             dok = a.get("tekst", "")
@@ -5090,6 +5155,10 @@ class Handler(BaseHTTPRequestHandler):
             antall_sider = max(int(m) for m in markorer) if markorer else None
         else:
             a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
+            # R149: konfidensen og hva den FØRTE TIL, til
+            # tilgangsloggen. Ett sted, rett etter analysen, så
+            # ingen av de tre veiene kan glemme det.
+            self._noter_kalibrering(a)
             if not a.get("ok"):
                 return None, advarsler, (400, a)
             raa_tekst = a.get("tekst", "")
@@ -6194,6 +6263,10 @@ class Handler(BaseHTTPRequestHandler):
             # samme fil OCR-es aldri to ganger, og /spor deler nøyaktig
             # samme ekstraksjonslogikk som /analyser og /uttrekk
             a = analyser_med_cache(filnavn, innhold, maks_ocr, les_strekkoder)
+            # R149: konfidensen og hva den FØRTE TIL, til
+            # tilgangsloggen. Ett sted, rett etter analysen, så
+            # ingen av de tre veiene kan glemme det.
+            self._noter_kalibrering(a)
             if not a.get("ok"):
                 return self._svar(400, a)
             tekst = a.get("tekst", "")
