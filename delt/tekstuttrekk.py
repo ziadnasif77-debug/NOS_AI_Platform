@@ -83,31 +83,38 @@ def er_gyldig_kontonummer(konto: str) -> bool:
 # ------------------------------------------------------------------ #
 
 def finn_fodselsnummer(tekst: str):
-    """11 sifre (ev. med mellomrom etter posisjon 6) som består mod11.
+    """Første 11-sifrede tall som ETIKETTEN gjør til et fødselsnummer.
 
     ETIKETTEN foran avgjør når tallet består BEGGE sjekksummene — samme
     regel som flertallsvarianten bruker. Uten den rapporterte denne
     funksjonen refusjonskontoen som fødselsnummer, mens
     `struktur.identifikatorer` sa kontonummer om nøyaktig samme tall i
     samme svar. Verdien gikk dessuten videre inn i skjemautfyllingen via
-    `felter_flatt`, der `{fodselsnummer}` da ble fylt med et kontonummer."""
-    for treff in re.finditer(r"\b(\d{6})[ ]?(\d{5})\b", tekst):
-        kandidat = treff.group(1) + treff.group(2)
-        if _ellevesiffer_type(tekst, treff.start(), kandidat) == "fodselsnummer":
-            return kandidat
+    `felter_flatt`, der `{fodselsnummer}` da ble fylt med et kontonummer.
+
+    SAMME SKANNER SOM FLERTALLSVARIANTEN (R151). Her sto det tidligere et
+    eget, smalere mønster — `\\b(\\d{6})[ ]?(\\d{5})\\b` — som bare kjente
+    to skrivemåter. Flertallsvarianten kjente sju. Målt: av sju norske
+    skrivemåter var fem uenige, blant dem bindestreken (010190-…), som er
+    den vanligste av alle. Da svarte SAMME forespørsel med nummeret i
+    `struktur.identifikatorer` og `null` i `felter.fodselsnummer` — og det
+    er `felter` som fyller `{fodselsnummer}` i en skjemamal."""
+    for k, start, _ in _tallkandidater_med_posisjon(tekst, 11):
+        if _ellevesiffer_type(tekst, start, k) == "fodselsnummer":
+            return k
     return None
 
 
 def finn_kontonummer(tekst: str):
-    """11 sifre, ev. formatert dddd.dd.ddddd, som består konto-mod11.
+    """Første 11-sifrede tall som ETIKETTEN gjør til et kontonummer.
 
     Samme etikettregel som over: et dobbeltgyldig tall under
     «Kontonummer:» ER et kontonummer. Før dette hoppet funksjonen over
-    ALLE fnr-gyldige tall, så en merket refusjonskonto forsvant helt."""
-    for treff in re.finditer(r"\b(\d{4})[. ]?(\d{2})[. ]?(\d{5})\b", tekst):
-        kandidat = "".join(treff.groups())
-        if _ellevesiffer_type(tekst, treff.start(), kandidat) == "kontonummer":
-            return kandidat
+    ALLE fnr-gyldige tall, så en merket refusjonskonto forsvant helt.
+    Samme skanner som flertallsvarianten, av samme grunn (R151)."""
+    for k, start, _ in _tallkandidater_med_posisjon(tekst, 11):
+        if _ellevesiffer_type(tekst, start, k) == "kontonummer":
+            return k
     return None
 
 
@@ -1664,6 +1671,13 @@ _TALLKANDIDAT = re.compile(
     r"(?<!\d)\d(?:(?:" + _SKILLETEGN + r"|\r?\n[ \t]*)?\d)+(?!\d)")
 # Det samme settet, til å strippe kandidaten ned til rene siffer.
 _SKILLETEGN_VEKK = re.compile(_SKILLETEGN + r"|\s")
+# Sifferbolkene inne i én kandidat. Å ta linjeskift inn i skilletegnene
+# (R145) gjorde at et NABOTALL ble limt på: en dato med et fødselsnummer
+# på linja under er ETT treff på 19 siffer, og en kandidat med feil
+# lengde ble forkastet HELT. Nummeret falt dermed ut av sladdingen — og
+# ut av finn_mistenkt_usladdet, som bare ser merkede numre. Svaret ble
+# «sladding_fullstendig: true» over et nummer som sto der (R150).
+_SIFFERBOLK = re.compile(r"\d+")
 
 
 def _tallkandidater_med_posisjon(tekst: str, lengde: int):
@@ -1680,16 +1694,41 @@ def _tallkandidater_med_posisjon(tekst: str, lengde: int):
     # det maksimale sluttpunktet så langt) rekker forbi kandidatens
     # start. Samme svar, O(log n) per kandidat.
     starter, maks_slutt = _opptattindeks(tekst)
+
+    def er_opptatt(start: int, slutt: int) -> bool:
+        i = bisect.bisect_left(starter, slutt)
+        return bool(i) and maks_slutt[i - 1] > start
+
     for treff in re.finditer(_TALLKANDIDAT, tekst):
-        i = bisect.bisect_left(starter, treff.end())
-        if i and maks_slutt[i - 1] > treff.start():
-            continue
-        # Samme sett som mønsteret godtok — ellers ville en bindestrek
-        # blitt stående i «kompakt», lengden blitt feil, og nummeret
-        # falt ut igjen rett etter at vi nettopp fant det.
-        kompakt = _SKILLETEGN_VEKK.sub("", treff.group(0))
-        if len(kompakt) == lengde:
-            yield kompakt, treff.start(), treff.end()
+        # Bolkene, ikke hele løpet. Et treff kan bære FLERE tall fordi
+        # skilletegnene ikke skiller mellom «sifre i samme tall» og «to
+        # nabotall» — og da er det bare grupperingen som kan si hvor det
+        # ene slutter. Vi prøver hver sammenhengende rekke av bolker som
+        # summerer til riktig antall siffer:
+        #
+        #   fnr med bindestrek          [6,5]      → 6+5 = 11  ✔
+        #   dato + fnr på neste linje   [2,2,4,11] → bare den siste ✔
+        #
+        # Dato-/beløpsvakten (R53) spørres for HVER rekke, ikke for hele
+        # treffet: ellers ville nabotallet dratt med seg nummeret ved
+        # siden av i fallet. Sjekksummen er fortsatt porten hos den som
+        # kaller — vi utvider hva som LESES som ett tall, ikke hva som
+        # regnes som bevist.
+        av = treff.start()
+        bolker = [(m.start() + av, m.end() + av, m.end() - m.start())
+                  for m in _SIFFERBOLK.finditer(treff.group(0))]
+        for i in range(len(bolker)):
+            sifre = 0
+            for j in range(i, len(bolker)):
+                sifre += bolker[j][2]
+                if sifre > lengde:
+                    break
+                if sifre == lengde:
+                    start, slutt = bolker[i][0], bolker[j][1]
+                    if not er_opptatt(start, slutt):
+                        yield (_SKILLETEGN_VEKK.sub("", tekst[start:slutt]),
+                               start, slutt)
+                    break
 
 
 # Etiketter som avgjør hva et 11-sifret tall ER når BEGGE sjekksummene

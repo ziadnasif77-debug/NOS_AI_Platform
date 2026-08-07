@@ -98,11 +98,12 @@ def _svar(profil="full", **ekstra):
     return f.svar[1]
 
 
-def _operasjonssvar(profil="full"):
+def _operasjonssvar(profil="full", operasjoner=None):
     f = _fake()
-    f._dokument_operasjoner("prove.txt", "tekst", DOK, None, True,
-                            '[{"type":"felter"},{"type":"tekst"}]',
-                            {"profil": profil})
+    f._dokument_operasjoner(
+        "prove.txt", "tekst", DOK, None, True,
+        operasjoner or '[{"type":"felter"},{"type":"tekst"}]',
+        {"profil": profil})
     return f.svar[1]
 
 
@@ -239,3 +240,121 @@ def test_operasjonsveien_har_samme_vern(merke):
     assert not funn, (
         f"{merke} nådde fram gjennom /dokument/operasjoner:\n  "
         + "\n  ".join(funn))
+
+
+# ------------------------------------------------------------------ #
+#  6. Blokkene bryteren IKKE så på (R152)                              #
+# ------------------------------------------------------------------ #
+#
+# Punkt 5 over ba bare om operasjonene «felter» og «tekst» — og det var
+# nettopp derfor «struktur» slapp unna: den falt gjennom en
+# `isinstance(data, dict)`-gren inn i en rensing som leter etter
+# nøklene `felter` og `datoer_detaljert`. «struktur» har ingen av dem.
+#
+# Målt før rettingen, med profil=sammendrag:
+#     resultater[struktur].data.identifikatorer.fodselsnummer  → verdien
+#     korrigert_tekst                                          → HELE dokumentet
+#     utelatt                                                  → []   (!)
+#
+# Den siste linja er den verste: svaret avga en erklæring om seg selv
+# som ikke stemte.
+
+ALLE_OPERASJONER = ('[{"type":"felter"},{"type":"tekst"},'
+                    '{"type":"struktur"}]')
+
+
+@pytest.mark.parametrize("merke", sorted(HEMMELIGHETER))
+def test_operasjonen_struktur_har_ogsaa_vern(merke):
+    """«struktur» er den PARALLELLE utvinningen av de samme
+    identifikatorene — samme begrunnelse som på bryterveien."""
+    funn = _stier_med(_operasjonssvar("sammendrag", ALLE_OPERASJONER),
+                      HEMMELIGHETER[merke])
+    assert not funn, (
+        f"{merke} nådde fram gjennom operasjonen «struktur»:\n  "
+        + "\n  ".join(funn))
+
+
+def test_operasjonsveien_sier_hva_den_tok_bort():
+    """R65: ingenting forsvinner i stillhet — heller ikke her. Uten
+    dette rensa operasjonsveien i det stille, og klienten hadde ingen
+    måte å se at noe var fjernet."""
+    svar = _operasjonssvar("sammendrag", ALLE_OPERASJONER)
+    assert svar.get("utelatt"), "operasjonsveien meldte ingenting"
+    assert "resultater[struktur].data" in svar["utelatt"]
+
+
+def _fullt_svar():
+    """Svarkroppen slik den ser ut når ALLE delene faktisk ble fylt.
+
+    Bygges her fordi Borealis er nede i testmiljøet: `korriger` og
+    `skjema` er da alltid `None`, og en vakt som bare kjører den ekte
+    veien ville aldri sett disse blokkene."""
+    return {
+        "tekst": DOK,
+        "korrigert_tekst": DOK,
+        "korriger": {"tekst": DOK, "endringer": 3},
+        "struktur": {"identifikatorer": {"fodselsnummer": [FNR]}},
+        "felter": {"felter": {"fodselsnummer": FNR, "navn": NAVN}},
+        "skjema": {"skjema": {"soker_fodselsnummer": FNR,
+                              "soker_navn": NAVN,
+                              "saksnummer": "4417820"}},
+        "koordinater": {"sider": [{"side": 1, "funn": [
+            {"boks": [0, 0, 10, 10], "tekst": f"Fodselsnummer: {FNR}"}]}]},
+        "opphav": {"/skjema/skjema/soker_fodselsnummer":
+                   {"metode": "regel", "konfidens": "hoy",
+                    "begrunnelse": "Bevist deterministisk av uttrekket"},
+                   "/felter/felter/navn":
+                   {"metode": "regel", "konfidens": "hoy",
+                    "begrunnelse": "Merket i dokumentet"}},
+        "dokumentprofil": {"utelatt": []},
+    }
+
+
+@pytest.mark.parametrize("merke", sorted(HEMMELIGHETER))
+def test_alle_blokkene_i_et_fullt_svar(merke):
+    """Den brede prøven: hver blokk som KAN bære dokumentet, fylt."""
+    svar = api._sammendragsform(_fullt_svar())
+    funn = _stier_med(svar, HEMMELIGHETER[merke])
+    assert not funn, (
+        f"{merke} sto igjen i:\n  " + "\n  ".join(funn))
+
+
+def test_pekerne_folger_med_naar_feltet_nulles():
+    """En peker til et nullet felt lekker det bryteren skulle skjule:
+    at nummeret STÅR i dokumentet, og at vi beviste det. Samme klasse
+    som pekerne R89 fjernet fra /part/fnr."""
+    svar = api._sammendragsform(_fullt_svar())
+    assert "/skjema/skjema/soker_fodselsnummer" not in svar["opphav"]
+    assert "/felter/felter/navn" not in svar["opphav"]
+
+
+def test_alt_som_ble_nullet_staar_i_utelatt():
+    """R65 for de nye blokkene også. Uten dette meldte svaret at
+    «tekst» var fjernet mens det lå ordrett i `korrigert_tekst`."""
+    svar = api._sammendragsform(_fullt_svar())
+    meldt = set(svar["dokumentprofil"]["utelatt"])
+    for ventet in ("tekst", "korrigert_tekst", "korriger.tekst", "struktur",
+                   "skjema.skjema.soker_fodselsnummer",
+                   "koordinater.sider[].funn[].tekst"):
+        assert ventet in meldt, f"«{ventet}» ble nullet uten å bli meldt"
+
+
+def test_skjemafelt_uten_persondata_staar_igjen():
+    """Motprøven. Bryteren skal ta persondata, ikke tømme skjemaet."""
+    svar = api._sammendragsform(_fullt_svar())
+    assert svar["skjema"]["skjema"]["saksnummer"] == "4417820"
+
+
+@pytest.mark.parametrize("type_", ["tekst", "korriger", "struktur"])
+def test_hver_raatekstbaerende_operasjonstype_renses(type_):
+    """Prøver funksjonen direkte. Operasjonen «korriger» krever
+    Borealis, som er nede i testmiljøet — så den ekte veien produserer
+    den aldri, og en vakt som bare kjører den ekte veien ville vært
+    grønn uansett hva koden gjorde med typen."""
+    svar = api._sammendragsform_operasjoner(
+        {"resultater": [{"type": type_, "ok": True,
+                         "data": DOK if type_ != "struktur"
+                         else {"identifikatorer": {"fodselsnummer": [FNR]}}}]})
+    assert svar["resultater"][0]["data"] is None, (
+        f"operasjonen «{type_}» leverte dokumentet under sammendrag")
+    assert f"resultater[{type_}].data" in (svar.get("utelatt") or [])

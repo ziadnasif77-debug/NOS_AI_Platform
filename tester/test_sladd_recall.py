@@ -102,6 +102,59 @@ def test_flere_personer_i_samme_dokument():
     assert not lekket, f"lekket {len(lekket)} av 2 personer"
 
 
+# ------------------------------------------------------------------ #
+#  1b. NABOEN — det målingen over ikke kunne se                        #
+# ------------------------------------------------------------------ #
+#
+# Malen over har ALLTID en bokstav på hver side av nummeret
+# («Fodselsnummer: … \nSlutt.»). Da kan den ikke oppdage det R145 selv
+# innførte: skilletegnene rommer nå linjeskift, så et NABOTALL limes
+# på. En dato over nummeret gir ett treff på nitten siffer, feil lengde
+# — og kandidaten ble forkastet HELT.
+#
+# Målt før R150: tre av tre nabosammenhenger lekket, og svaret sa
+# `sladding_fullstendig: true` med `mistenkt_usladdet: []`. Verre:
+# kontonummeret ved siden av BLE sladdet, så utdataen så mer
+# tillitvekkende ut enn en der ingenting var fjernet.
+
+NABOER = {
+    "dato over": "Vedtaksdato: 15.03.2024\n{nr}\n",
+    "dato foran": "Vedtaksdato: 15.03.2024 {nr}\n",
+    "belop under": "{nr}\n12345,50 kroner\n",
+    "belop foran": "Utbetalt 4 500 kr {nr}\n",
+    "saksnr over": "Saksnummer 4711/2026\n{nr}\n",
+    "nummer paa hver side": "Ref 2026-04\n{nr}\n900 kroner\n",
+}
+
+
+@pytest.mark.parametrize("sammenheng", sorted(NABOER))
+def test_et_nabotall_skjuler_ikke_nummeret(sammenheng):
+    """Navngitt per sammenheng, så en rød test sier HVILKEN nabo som
+    spiste nummeret."""
+    tekst = NABOER[sammenheng].format(nr=FNR)
+    assert not _roper(_sladd(tekst), FNR), (
+        f"nabotallet i «{sammenheng}» limte seg på og skjulte nummeret")
+
+
+def test_naboen_selv_blir_staaende():
+    """Motprøven. Å sladde datoen eller beløpet ville vært den andre
+    feilen — lovlig innhold som forsvinner (R53)."""
+    tekst = f"Vedtaksdato: 15.03.2024\n{FNR}\nUtbetalt 12345,50 kroner\n"
+    sladdet = _sladd(tekst)
+    assert "15.03.2024" in sladdet
+    assert "12345,50" in sladdet
+    assert not _roper(sladdet, FNR)
+
+
+def test_naboliming_dikter_ikke_opp_et_nummer():
+    """Vakten fra R53 må overleve oppdelingen: to nabotall som TILSAMMEN
+    blir elleve siffer er ikke et fødselsnummer."""
+    for tekst in ("Vedtak datert 01.01.2024 114 kroner",
+                  "Fra 01.01.2024 til 02.02.2024",
+                  "Fakturabelop kr 103 456 789"):
+        assert not finn_sladdeomraader(tekst, ("fodselsnummer",)), tekst
+
+
 def test_samme_nummer_i_ULIKE_former_i_samme_dokument():
     """Dokumentet skriver nummeret én gang med bindestrek og én gang
     ordrett. Begge må bort — den ene formen sladdet er ingen sladding."""

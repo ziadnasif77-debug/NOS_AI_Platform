@@ -29,6 +29,7 @@ Start:
 Enhver HTTP-klient: POST http://localhost:8600/dokument med filen som
 multipart-felt «fil». Se GET /hjelp for alle endepunkter.
 """
+import copy
 import gzip
 import hashlib
 import io
@@ -1293,15 +1294,26 @@ def analyser_med_cache(filnavn: str, data: bytes, ocr_maks_sider=None,
     # resultat videre til en som faktisk ba om dem.
     nokkel = (hashlib.sha256(data).hexdigest()
               + f":{ocr_maks_sider}:{int(les_strekkoder)}")
+    # DYP kopi, ikke `{**…}` (R152). En grunn kopi deler de NESTEDE
+    # objektene — `felter`, `datoer_detaljert` — med cachen, og
+    # personvernbryteren nuller dem PÅ STEDET. Målt: ett kall med
+    # `profil=sammendrag` tømte fødselsnummeret i cachen, og NESTE
+    # forespørsel for samme dokument — uten bryteren, fra hvilken som
+    # helst klient — fikk `fodselsnummer: null` uten et eneste varsel.
+    # Svaret påsto altså at dokumentet ikke inneholdt noe nummer.
+    #
+    # Kopien tas i BEGGE retninger: uten kopi ved skriving deler det
+    # første (ucachede) svaret objektene med cacheoppføringen, så et
+    # `sammendrag` som er FØRSTE kall forgifter den like fullt.
     with _analyse_cache_las:
         if nokkel in _analyse_cache:
             _analyse_cache.move_to_end(nokkel)
-            return {**_analyse_cache[nokkel],
+            return {**copy.deepcopy(_analyse_cache[nokkel]),
                     "filnavn": filnavn, "fra_cache": True}
     resultat = analyser_bytes(filnavn, data, ocr_maks_sider, les_strekkoder)
     if resultat.get("ok"):
         with _analyse_cache_las:
-            _analyse_cache[nokkel] = resultat
+            _analyse_cache[nokkel] = copy.deepcopy(resultat)
             while len(_analyse_cache) > ANALYSE_CACHE_MAKS:
                 _analyse_cache.popitem(last=False)
     return {**resultat, "fra_cache": False}
@@ -5719,10 +5731,15 @@ class Handler(BaseHTTPRequestHandler):
         # profil=sammendrag tok seksjoner bort; da skal ingen peker vise
         # dit. En peker til et fjernet felt lekker nettopp det bryteren
         # skulle skjule, og gir klienten et oppslag som ikke går noe sted.
-        opphav = uten_utelatte(opphav, profil if isinstance(profil, dict) else {})
+        # Skjemapekerne slås inn FØR rensingen (R152). Sto de etter, ble
+        # de aldri renset — og en peker som sier «/skjema/skjema/
+        # fodselsnummer: Bevist deterministisk» lekker nettopp det
+        # bryteren skulle skjule: at et gyldig nummer STÅR i dokumentet.
+        # Samme klasse som pekerne R89 fjernet fra /part/fnr.
         skjemadel = deler.get("skjema")
         if isinstance(skjemadel, dict) and skjemadel.get("kilde_per_felt"):
             opphav.update(opphav_for_skjema(skjemadel["kilde_per_felt"]))
+        opphav = uten_utelatte(opphav, profil if isinstance(profil, dict) else {})
 
         svar = {
             "ok": True, "filnavn": filnavn,
@@ -7303,14 +7320,32 @@ def _sammendragsform(svar: dict) -> dict:
     fortsatt bærer navn og adresse ville byttet ett falskt løfte mot et
     svakere. Feltene settes derfor til null, og navngis i «utelatt».
 
-    Formen står stille: ingen nøkkel fjernes, bare verdier nulles."""
+    Formen står stille: ingen nøkkel fjernes, bare verdier nulles.
+
+    GRENSA, SAGT HØYT: `svar.svar` renses IKKE. Det er fritekst modellen
+    skrev fordi klienten stilte et spørsmål, og spurte klienten «hva er
+    fødselsnummeret», er svaret det den ba om. Bryteren dekker alt
+    serveren trekker ut på EGET initiativ; den overstyrer ikke et
+    eksplisitt spørsmål. Dette er en uttalt grense, ikke et hull som
+    ingen har sett — og den står her fordi den forrige versjonen av
+    denne funksjonen hadde tre hull ingen hadde sett (R152)."""
     if not isinstance(svar, dict):
         return svar
     fjernet = []
 
-    if svar.get("tekst") is not None:
-        svar["tekst"] = None
-        fjernet.append("tekst")
+    # ALLE råtekstbærerne, ikke bare «tekst» (R152). `korrigert_tekst`
+    # og `korriger.tekst` er dokumentet ORDRETT etter OCR-retting — like
+    # fullt av fødselsnummer og adresser som originalen. De sto igjen
+    # mens `utelatt` meldte at «tekst» var fjernet: svaret avga altså en
+    # falsk erklæring om seg selv, og innholdet lå i nabofeltet.
+    for navn in ("tekst", "korrigert_tekst"):
+        if svar.get(navn) is not None:
+            svar[navn] = None
+            fjernet.append(navn)
+    korr = svar.get("korriger")
+    if isinstance(korr, dict) and korr.get("tekst") is not None:
+        korr["tekst"] = None
+        fjernet.append("korriger.tekst")
 
     # «struktur» er en PARALLELL utvinning av de samme identifikatorene
     # — kontakt.telefoner, identifikatorer.fodselsnummer, adresser. Den
@@ -7351,6 +7386,43 @@ def _sammendragsform(svar: dict) -> dict:
                         and d.get("type") == "fodselsdato_fra_fnr")]
             if len(felter["datoer_detaljert"]) != for_e:
                 fjernet.append("felter.datoer_detaljert[fodselsdato_fra_fnr]")
+
+    # Den UTFYLTE malen. Ber klienten om et `{fodselsnummer}`-felt, blir
+    # det fylt — og da bærer «skjema» nøyaktig det bryteren nekter, i en
+    # blokk _sammendragsform ikke så på (R152). Feltnavnene er klientens
+    # egne, så vi matcher på det NORMALISERTE navnet, ikke på likhet.
+    skjema = svar.get("skjema")
+    if isinstance(skjema, dict) and isinstance(skjema.get("skjema"), dict):
+        for navn, verdi in skjema["skjema"].items():
+            if verdi is None:
+                continue
+            enkel = re.sub(r"[^a-zøæå]", "", navn.lower())
+            if any(p in enkel for p in _PERSONFELT_I_FELTER):
+                skjema["skjema"][navn] = None
+                fjernet.append(f"skjema.skjema.{navn}")
+
+    # Koordinatene bærer et tekstutsnitt per treff — samme råtekst, bare
+    # oppstykket.
+    koord = svar.get("koordinater")
+    if isinstance(koord, dict):
+        for side in koord.get("sider") or []:
+            for funn in (side or {}).get("funn") or []:
+                if isinstance(funn, dict) and funn.get("tekst") is not None:
+                    funn["tekst"] = None
+                    if "koordinater.sider[].funn[].tekst" not in fjernet:
+                        fjernet.append("koordinater.sider[].funn[].tekst")
+
+    # Ingen peker skal vise til noe vi nettopp nullet. `uten_utelatte`
+    # dekker bare `/dokumentprofil/…`, og skjemapekerne heter
+    # `/skjema/skjema/fodselsnummer` — de overlevde derfor bryteren og
+    # fortalte at et gyldig nummer STÅR i dokumentet, i et svar som
+    # uttrykkelig ba om det motsatte (R152).
+    opphav = svar.get("opphav")
+    if isinstance(opphav, dict) and fjernet:
+        stengt = tuple("/" + n.replace(".", "/") for n in fjernet)
+        for peker in [p for p in opphav
+                      if p.startswith(stengt) or p in stengt]:
+            del opphav[peker]
 
     # «utelatt» er løftet om at ingenting forsvinner i stillhet (R65).
     # Den bor i profilen, der _profilform alt har fylt seksjonsnavnene.
@@ -7475,19 +7547,48 @@ def _sammendragsform_operasjoner(svar: dict) -> dict:
     R90 slo fast at personvernbryteren må virke i BEGGE kontraktene.
     Uten dette ville en klient som byttet fra brytere til «operasjoner»
     mistet vernet uten å bli fortalt det — og operasjonen `felter`
-    leverer nøyaktig de samme identifikatorene."""
+    leverer nøyaktig de samme identifikatorene.
+
+    HULLET SOM STO IGJEN (R152). Bare typen «tekst» ble håndtert, og
+    resten falt gjennom `isinstance(data, dict)` inn i en rensing som
+    leter etter nøklene `felter` og `datoer_detaljert`. Operasjonen
+    «struktur» har ingen av dem — den har `identifikatorer`, `kontakt`
+    og `adresser` — så den passerte urørt. Målt: fødselsnummer,
+    kontonummer og full adresse levert under en bryter som lover det
+    motsatte, med `utelatt: []`.
+
+    Typene navngis derfor EKSPLISITT. Faller en ny operasjonstype
+    utenfor lista, blir den ikke renset — og da skal den også nektes
+    adgang her, ikke slippe gjennom på et `isinstance`-tilfelle."""
     if not isinstance(svar, dict):
         return svar
+    fjernet = []
     for res in svar.get("resultater") or []:
         if not isinstance(res, dict):
             continue
         data = res.get("data")
-        if res.get("type") == "tekst" and data:
+        if data is None:
+            continue
+        type_ = res.get("type")
+        # Råtekstbærerne: hele nyttelasten ER dokumentet.
+        if type_ in ("tekst", "korriger"):
             res["data"] = None
-        elif isinstance(data, dict):
-            # Operasjonen «felter» har samme form som blokka «felter» på
-            # bryterveien, så den gjenbruker rensingen der.
-            _sammendragsform({"felter": data})
+            fjernet.append(f"resultater[{type_}].data")
+        # «struktur» er den parallelle utvinningen av de samme
+        # identifikatorene — samme begrunnelse som på bryterveien.
+        elif type_ == "struktur":
+            res["data"] = None
+            fjernet.append("resultater[struktur].data")
+        # «felter» har samme form som blokka «felter» på bryterveien, så
+        # den gjenbruker rensingen der.
+        elif type_ == "felter" and isinstance(data, dict):
+            for_e = _sammendragsform({"felter": data,
+                                      "dokumentprofil": {}})
+            fjernet.extend(
+                (for_e.get("dokumentprofil") or {}).get("utelatt") or [])
+    # R65: ingenting forsvinner i stillhet — heller ikke her.
+    if fjernet:
+        svar["utelatt"] = sorted(set(svar.get("utelatt") or []) | set(fjernet))
     return svar
 
 
