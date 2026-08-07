@@ -105,10 +105,16 @@ def _objektstier(node, prefiks="", lister=None):
         for nokkel in node:
             ut.add(f"{prefiks}/{nokkel}")
             ut |= _objektstier(node[nokkel], f"{prefiks}/{nokkel}", lister)
-    elif isinstance(node, list) and node:
-        # bare elementskjemaet — LENGDEN er data, ikke form
-        lister.setdefault(prefiks, set())
-        lister[prefiks] |= _objektstier(node[0], "", {})
+    elif isinstance(node, list):
+        # Bare elementskjemaet — LENGDEN er data, ikke form. ALLE
+        # elementene, ikke `node[0]`: den avvikende oppføringen i
+        # `felter.datoer_detaljert` legges SIST, så et førsteelement-søk
+        # kunne aldri se den. Fanget utenfor profilen av
+        # test_formstabilitet_hele_svaret.
+        for element in node:
+            if isinstance(element, dict):
+                lister.setdefault(prefiks, []).append(
+                    frozenset(_objektstier(element, "", {})))
     return ut
 
 
@@ -141,7 +147,14 @@ def test_listeelementene_har_fast_skjema():
     for navn in DOKUMENTER:
         lister = {}
         _objektstier(_profil(navn), lister=lister)
-        for sti, nokler in lister.items():
+        for sti, former in lister.items():
+            # Først: er elementene like hverandre i SAMME svar?
+            ulike = set(former)
+            assert len(ulike) == 1, (
+                f"«{navn}»: elementene i {sti} har ulike nøkler i samme "
+                f"svar:\n" + "\n".join(f"  {sorted(f)}" for f in ulike))
+            nokler = next(iter(ulike))
+            # Så: er de like på tvers av dokumenter?
             if sti not in sett:
                 sett[sti] = (navn, nokler)
                 continue
