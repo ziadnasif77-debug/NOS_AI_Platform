@@ -479,6 +479,20 @@ def _skriv_tilgang(handler, code) -> None:
             # sikkerhetskopier. None = nøkkelen traff ingen klient.
             "klient_id": getattr(handler, "_klient_id", None),
             "ms": ms,
+            # R147: tallvakten er en SIKKERHETSMEKANISME, og en slik må
+            # måles uavhengig av det den beskytter. Uten et tall her
+            # kunne ingen svare på «hvor ofte slår den til?» — og de to
+            # ytterpunktene betyr hver sin alvorlige ting:
+            #
+            #   svært høyt  →  modellen dikter tall; ikke til å stole på
+            #   alltid null →  vakten er slått av, og ingen vet det
+            #
+            # Bare UTFALLET logges — aldri tallene selv. Et beløp eller
+            # et fødselsnummer i en logg er en lekkasje som overlever i
+            # sikkerhetskopier (samme grunn som at nøkkelen aldri
+            # logges). `null` betyr at vakten ikke var innom denne
+            # forespørselen i det hele tatt.
+            "tallvakt": getattr(handler, "_tallvakt", None),
         }, ensure_ascii=False)
         _tilgangslogger().info(rad)
     except Exception:
@@ -2675,6 +2689,25 @@ def _skjemaer() -> dict:
                     description="Hvert tall i svaret står ORDRETT i "
                                 "dokumentet. false ⇒ modellen kan ha "
                                 "funnet på et tall — ikke stol på svaret."),
+                "uverifiserte_tall": {
+                    "type": "array", "nullable": True, "items": s(),
+                    "description": (
+                        "HVILKE tall vakten stoppet. Sto tidligere bare "
+                        "som prosa i «advarsel», så en klient som ville "
+                        "telle måtte tolke en setning. «[]» er en "
+                        "PÅSTAND — vakten kjørte og stoppet ingenting; "
+                        "«null» betyr at den aldri var innom (rene "
+                        "tekstveier går ikke via modellen)")},
+                "tallvakt_forsok": {
+                    "type": "integer", "nullable": True, "enum": [1, 2],
+                    "description": (
+                        "Hvor mange modellrunder som trengtes. Har "
+                        "svaret uverifiserte tall, får modellen ÉN ny "
+                        "sjanse med en strengere instruks. Lyktes runde "
+                        "to, sto svaret som «tall_verifisert: true» — "
+                        "helt likt et svar som traff med én gang. En "
+                        "modell som trenger omskriving hver gang er en "
+                        "modell i trøbbel, og det var usynlig")},
                 "tolket_sporsmal": s(nullable=True,
                                      description="Satt hvis et uklart "
                                                  "spørsmål måtte tolkes om"),
@@ -5528,6 +5561,8 @@ class Handler(BaseHTTPRequestHandler):
                             "svar": kjerne["svar"],
                             "modell_brukt": kjerne.get("modell_brukt", False) is True,
                             "tall_verifisert": kjerne["tall_verifisert"],
+                            "uverifiserte_tall": kjerne.get("uverifiserte_tall"),
+                            "tallvakt_forsok": kjerne.get("tallvakt_forsok"),
                             "tolket_sporsmal": kjerne["tolket_sporsmal"],
                             "svar_avkortet": kjerne["svar_avkortet"]}
                 deler["svar"] = trygt(_svar_del)
@@ -6235,6 +6270,15 @@ class Handler(BaseHTTPRequestHandler):
         advarsler.extend(kjerne["advarsler"])
         svar = kjerne["svar"]
         tall_verifisert = kjerne["tall_verifisert"]
+        # `.get` fordi de rene tekstveiene over aldri var innom modellen
+        # og derfor heller ikke innom vakten — der er svaret `null`
+        # («ikke kjørt»), ikke `[]` («kjørte og stoppet ingenting»).
+        uverifiserte = kjerne.get("uverifiserte_tall")
+        tallvakt_forsok = kjerne.get("tallvakt_forsok")
+        # Til tilgangsloggen: bare ANTALL og runder, aldri tallene.
+        if tallvakt_forsok is not None:
+            self._tallvakt = {"stoppet": len(uverifiserte or []),
+                              "forsok": tallvakt_forsok}
         tolket_sporsmal = kjerne["tolket_sporsmal"]
         svar_avkortet = kjerne["svar_avkortet"]
         advarsel = "; ".join(advarsler) if advarsler else None
@@ -6253,6 +6297,8 @@ class Handler(BaseHTTPRequestHandler):
             handskrift=handskrift,
             korrigert_tekst=korrigert,
             tall_verifisert=tall_verifisert,
+            uverifiserte_tall=uverifiserte,
+            tallvakt_forsok=tallvakt_forsok,
             tolket_sporsmal=tolket_sporsmal,
             svar_avkortet=svar_avkortet,
             advarsel=advarsel,
@@ -6925,7 +6971,9 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     # Tallvakt: inneholder svaret tall som ikke står i dokumentet,
     # prøves én streng ny runde — hjelper ikke det, flagges svaret
     mangler = uverifiserte_tall(svar, tekst)
+    tallvakt_forsok = 1
     if mangler:
+        tallvakt_forsok = 2
         svar2, avkortet2 = spor_borealis(
             tekst,
             sporsmal + " (VIKTIG: gjengi tallet NØYAKTIG slik det står "
@@ -6946,6 +6994,12 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
             "uavkortet i /analyser-feltet 'tekst'.")
     return {"tom": False, "modell_brukt": True,
             "svar": svar, "tall_verifisert": tall_verifisert,
+            # Maskinlesbart ved siden av boolen — samme mønster som
+            # `mistenkt_usladdet` ved siden av `sladding_fullstendig`
+            # (R129). `[]` er en PÅSTAND: vakten kjørte og stoppet
+            # ingenting (R128).
+            "uverifiserte_tall": list(mangler),
+            "tallvakt_forsok": tallvakt_forsok,
             "tolket_sporsmal": tolket_sporsmal,
             "svar_avkortet": svar_avkortet, "advarsler": advarsler}
 
@@ -7309,6 +7363,20 @@ def _spor_svar(**felt) -> dict:
         "handskrift": None,
         "korrigert_tekst": None,
         "tall_verifisert": None,
+        # R147: hvilke tall vakten stoppet, og hvor mange runder den
+        # trengte. `tall_verifisert` sier BARE ja/nei, og resten sto i
+        # `advarsel` som prosa — «fritekst er ikke en kontrakt» (R132).
+        # En klient som vil telle hvor ofte vakten slår til, måtte
+        # tolke en setning.
+        #
+        # `tallvakt_forsok` er ny informasjon som ingen kunne se: koden
+        # gir modellen ÉN ny sjanse med en strengere instruks når det
+        # første svaret har uverifiserte tall. Lyktes runde to, sto
+        # svaret som `tall_verifisert: true` — helt likt et svar som
+        # traff med én gang. En modell som trenger omskriving hver gang
+        # er en modell i trøbbel, og det var usynlig.
+        "uverifiserte_tall": None,
+        "tallvakt_forsok": None,
         "tolket_sporsmal": None,
         "svar_avkortet": None,
         "advarsel": None,
@@ -7714,6 +7782,8 @@ class SvarOperasjon(Operasjon):
                 "svar": kjerne["svar"],
                 "modell_brukt": kjerne.get("modell_brukt", False) is True,
                 "tall_verifisert": kjerne["tall_verifisert"],
+                "uverifiserte_tall": kjerne.get("uverifiserte_tall"),
+                "tallvakt_forsok": kjerne.get("tallvakt_forsok"),
                 "tolket_sporsmal": kjerne["tolket_sporsmal"],
                 "svar_avkortet": kjerne["svar_avkortet"],
                 "advarsler": kjerne["advarsler"]}

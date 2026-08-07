@@ -35,6 +35,11 @@ FORVENTEDE_NOKLER = {
     "ok", "modus", "filnavn", "sporsmal", "svar", "melding",
     "uten_dokument", "trenger_ocr", "ocr_brukt", "ocr_motorer",
     "strekkoder", "handskrift", "korrigert_tekst", "tall_verifisert",
+    # R147: hvilke tall vakten stoppet, og hvor mange modellrunder som
+    # trengtes. `tall_verifisert` sa bare ja/nei, og resten sto som
+    # PROSA i `advarsel` — en klient som ville telle hvor ofte vakten
+    # slår til, måtte tolke en setning (R132).
+    "uverifiserte_tall", "tallvakt_forsok",
     "tolket_sporsmal", "svar_avkortet", "advarsel", "fra_cache",
     "tid_sekunder", "kilde", "versjon",
 }
