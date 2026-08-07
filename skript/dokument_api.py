@@ -2472,7 +2472,23 @@ def _skjemaer() -> dict:
                 "konfidens": s(example="hoy", enum=KONFIDENS,
                                description="Samme skala som overalt ellers"),
                 "begrunnelse": s(nullable=True),
-                "side": {"type": "integer", "nullable": True}}},
+                "side": {"type": "integer", "nullable": True,
+                         "description": (
+                             "Siden verdien står på. Står den flere "
+                             "steder, er dette FØRSTE forekomst — se "
+                             "«side_entydig» før du stoler på den")},
+                "side_entydig": {
+                    "type": "boolean", "nullable": True,
+                    "description": (
+                        "Kan sidetallet stoles på? «true» når verdien "
+                        "finnes ett sted, eller når sidetallet kommer "
+                        "fra selve uttrekket (parten, dokumentdatoen) "
+                        "og ikke fra et søk. «false» når verdien står "
+                        "flere steder — da er «side» første forekomst, "
+                        "som ikke nødvendigvis er der uttrekket hentet "
+                        "den. «null» når feltet ikke har noen side i "
+                        "det hele tatt: en AVLEDET verdi står ikke i "
+                        "dokumentet")}}},
         "Hjemmel": {
             "type": "object",
             "description": (

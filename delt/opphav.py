@@ -142,6 +142,33 @@ def side_for_verdi(tekst: str, verdi, sidekart=None, strippet=None):
     return side
 
 
+def _antall_forekomster(tekst: str, verdi, strippet=None) -> int:
+    """Hvor mange ganger verdien står i dokumentet.
+
+    Samme to former som `side_for_verdi` søker med — ordrett, og
+    strippet for alt annet enn bokstav og siffer — så et kontonummer
+    som står med punktum ett sted og uten et annet regnes som to
+    forekomster av det SAMME, ikke som to ulike verdier.
+
+    Teller ikke over to: kalleren spør bare «ett sted eller flere?»,
+    og på et 200-siders dokument er det unødig arbeid å telle ferdig."""
+    if verdi in (None, "", [], {}):
+        return 0
+    naal = str(verdi)
+    if not naal.strip():
+        return 0
+    antall = (tekst or "").count(naal)
+    if antall >= 2:
+        return 2
+    flat, _ = _bare_tegn(tekst) if strippet is None else strippet
+    n, _ = _bare_tegn(naal)
+    if not n:
+        return antall
+    # Den strippede formen finner BEGGE skrivemåtene, også den ordrette,
+    # så den er fasit — ikke et tillegg til tellingen over.
+    return min(2, flat.count(n))
+
+
 def _side_for_posisjon(pos, merker):
     """Sidetallet for en KJENT tegnposisjon. Brukes når uttrekket alt
     vet hvor beviset står — da skal ingen lete etter det på nytt."""
@@ -158,11 +185,20 @@ def _side_for_posisjon(pos, merker):
     return side
 
 
-def _post(metode, konfidens, begrunnelse=None, side=None) -> dict:
+def _post(metode, konfidens, begrunnelse=None, side=None,
+          side_entydig=None) -> dict:
     """Én oppføring. Feltene er alltid til stede, tomt er `null` — samme
-    regel som resten av profilen."""
+    regel som resten av profilen.
+
+    `side_entydig` (R143) svarer på spørsmålet «kan jeg stole på dette
+    sidetallet?». For de fleste felt finnes verdien ÉTT sted, og da er
+    svaret `true`. Står den flere steder, er `side` FØRSTE forekomst —
+    som ikke nødvendigvis er der uttrekket hentet den — og da er svaret
+    `false`. `null` betyr at feltet ikke har noen side å være entydig
+    om: avledede verdier står ikke på noen side i det hele tatt."""
     return {"metode": metode, "konfidens": konfidens,
-            "begrunnelse": begrunnelse or None, "side": side}
+            "begrunnelse": begrunnelse or None, "side": side,
+            "side_entydig": side_entydig}
 
 
 def bygg_opphav(profil: dict, nivaa: str = "viktige",
@@ -191,6 +227,16 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
         return (side_for_verdi(tekst, verdi, merker, strippet)
                 if tekst else None)
 
+    def entydig(verdi):
+        """Står verdien ÉTT sted i dokumentet? (R143)
+
+        `side_for_verdi` melder første forekomst. Det er riktig når
+        verdien bare finnes ett sted — og en gjetning når den ikke gjør
+        det. Klienten skal få vite hvilken av de to den har fått."""
+        if not tekst or verdi in (None, "", [], {}):
+            return None
+        return _antall_forekomster(tekst, verdi, strippet) <= 1
+
     kart = {}
     part = profil.get("part") or {}
     dokument = profil.get("dokument") or {}
@@ -207,13 +253,18 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
         _PARTKONFIDENS.get(grunnlag, "ingen"),
         part.get("begrunnelse"),
         _side_for_posisjon(part.get("_posisjon"), merker)
-        if part.get("_posisjon") is not None else side(part.get("fnr")))
+        if part.get("_posisjon") is not None else side(part.get("fnr")),
+        True if part.get("_posisjon") is not None
+        else entydig(part.get("fnr")))
 
     # --- dokumentets egen dato (R80) ----------------------------------
     kart["/dokumentprofil/dokument/dato"] = _post(
         _DATOMETODE.get(dokument.get("dato_kilde"), "ingen"),
         dokument.get("dato_sikkerhet") or "ingen",
-        dokument.get("dato_begrunnelse"), dokument.get("dato_side"))
+        dokument.get("dato_begrunnelse"), dokument.get("dato_side"),
+        # Sidetallet kommer fra UTTREKKET, ikke fra et soek — det er
+        # per definisjon der beviset ble funnet.
+        True if dokument.get("dato_side") is not None else None)
 
     if nivaa != "alle":
         return kart
@@ -223,11 +274,27 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
     # den følger av en annen verdi som gjør det. Uten skillet ser den ut
     # som et selvstendig funn.
     if part.get("navn"):
+        # R143: navnet står PER DEFINISJON ved siden av det beviste
+        # fødselsnummeret — det er slik `finn_dokument_eier` plukker
+        # det (R124), og det er det denne begrunnelsen sier. Da må det
+        # dele side med nummeret.
+        #
+        # Målt før fiksen sa svaret seg selv imot i samme kart:
+        #   part/fnr   side 3  «står under «Opplysninger om»»
+        #   part/navn  side 1  «står ved siden av det beviste nummeret»
+        # De to kan ikke begge være sanne. Side 1 var første forekomst
+        # av navnet — et følgebrev som nevnte personen, uten etikett.
+        _navneside = (_side_for_posisjon(part.get("_posisjon"), merker)
+                      if part.get("_posisjon") is not None
+                      else side(part.get("navn")))
         kart["/dokumentprofil/part/navn"] = _post(
             _PARTMETODE.get(grunnlag, "ingen"),
             _PARTKONFIDENS.get(grunnlag, "ingen"),
             "Navnet står ved siden av det beviste fødselsnummeret",
-            side(part.get("navn")))
+            _navneside,
+            # Entydig fordi den følger nummerets posisjon, ikke et søk
+            True if part.get("_posisjon") is not None
+            else entydig(part.get("navn")))
 
     if part.get("fodselsdato"):
         kart["/dokumentprofil/part/fodselsdato"] = _post(
@@ -254,14 +321,17 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
     okonomi = profil.get("okonomi") or {}
     for i, v in enumerate(okonomi.get("kontonummer") or []):
         kart[f"/dokumentprofil/okonomi/kontonummer/{i}"] = _post(
-            "sjekksum", "hoy", "Elleve siffer som består mod11", side(v))
+            "sjekksum", "hoy", "Elleve siffer som består mod11", side(v),
+            entydig(v))
     for i, v in enumerate(okonomi.get("kid") or []):
         kart[f"/dokumentprofil/okonomi/kid/{i}"] = _post(
-            "sjekksum", "hoy", "KID-nummer som består mod10/mod11", side(v))
+            "sjekksum", "hoy", "KID-nummer som består mod10/mod11", side(v),
+            entydig(v))
     arbeid = profil.get("arbeid") or {}
     for i, v in enumerate(arbeid.get("organisasjonsnummer") or []):
         kart[f"/dokumentprofil/arbeid/organisasjonsnummer/{i}"] = _post(
-            "sjekksum", "hoy", "Ni siffer som består mod11", side(v))
+            "sjekksum", "hoy", "Ni siffer som består mod11", side(v),
+            entydig(v))
 
     # --- etikettbundne felter (R71) ------------------------------------
     # De hentes BARE når ordet står i dokumentet, så metoden er alltid
@@ -277,7 +347,7 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
             kart[f"/dokumentprofil/{seksjon}/{felt}"] = _post(
                 "etikett", "hoy",
                 "Hentet fordi etiketten står i dokumentet (R71)",
-                side(verdi))
+                side(verdi), entydig(verdi))
 
     # --- kontakt: står ofte i et brevhode på FØRSTE side, men i en
     # bunke kan hvert dokument ha sitt eget -------------------------------
@@ -285,13 +355,14 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
     for navn in ("telefoner", "eposter"):
         for i, v in enumerate(kontakt.get(navn) or []):
             kart[f"/dokumentprofil/kontakt/{navn}/{i}"] = _post(
-                "regel", "hoy", "Formvalidert (lengde/mønster)", side(v))
+                "regel", "hoy", "Formvalidert (lengde/mønster)", side(v),
+                entydig(v))
     for i, adr in enumerate(kontakt.get("adresser") or []):
         if isinstance(adr, dict):
             kart[f"/dokumentprofil/kontakt/adresser/{i}"] = _post(
                 "etikett", "middels",
                 "Gate + postnummer + poststed sto sammen",
-                side(adr.get("gate")))
+                side(adr.get("gate")), entydig(adr.get("gate")))
 
     # --- koder lest av dekoderen ---------------------------------------
     koder = profil.get("koder") or {}
@@ -311,12 +382,15 @@ def bygg_opphav(profil: dict, nivaa: str = "viktige",
     if ytelse_ord:
         kart["/dokumentprofil/ytelse/navn"] = _post(
             "regel", "middels", "Kjent ytelsesnavn funnet i teksten",
-            side(ytelse_ord))
+            side(ytelse_ord), entydig(ytelse_ord))
     if (dokument.get("type") or {}).get("kode"):
-        # typen avgjøres av TITTELEN, som per definisjon står først
+        # typen avgjøres av TITTELEN, som per definisjon står først —
+        # side 1 er ikke et søketreff her, men følger av regelen. Da er
+        # den entydig (R143).
         kart["/dokumentprofil/dokument/type"] = _post(
             "regel", "middels", "Klassifisert av tittel- og ordmønstre",
-            1 if merker or tekst else None)
+            1 if merker or tekst else None,
+            True if (merker or tekst) else None)
 
     return kart
 
