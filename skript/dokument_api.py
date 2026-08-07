@@ -2242,12 +2242,31 @@ def _jobb_status(jobb: dict, ny_status: str, **felter) -> None:
 
 
 def _jobb_lagre(jobb: dict) -> None:
+    """Skriver jobben til disk ATOMISK.
+
+    Underscore-nøklene er interne og skal ikke ut til klienten — men
+    `_eier` må overleve en omstart, ellers mister den rettmessige
+    eieren tilgangen til sin egen jobb (R153). Den lagres derfor
+    eksplisitt, og siles bort fra svaret av samme regel som før.
+
+    SKRIVINGEN ER ATOMISK fordi prosessen faktisk dør: README
+    dokumenterer 0xC0000005 fra llama.cpp/CUDA, og lange jobber lagres
+    hver 25. side — et vindu som gjentar seg. Dør vi midt i
+    `json.dump`, blir det stående en avkortet JSON-fil, og
+    `_jobb_last_fra_disk` fanget bare FileNotFoundError. Én slik fil
+    stoppet HELE oppstarten, vakthunden startet på nytt og traff samme
+    fil: en evig løkke med en datafil som årsak (R153)."""
     os.makedirs(JOBB_STI, exist_ok=True)
     with _jobb_las:
         lagres = {k: v for k, v in jobb.items() if not k.startswith("_")}
-    with open(os.path.join(JOBB_STI, jobb["jobb_id"] + ".json"), "w",
-              encoding="utf-8") as f:
+        lagres["_eier"] = jobb.get("_eier")
+    endelig = os.path.join(JOBB_STI, jobb["jobb_id"] + ".json")
+    midlertidig = endelig + ".ny"
+    with open(midlertidig, "w", encoding="utf-8") as f:
         json.dump(lagres, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(midlertidig, endelig)      # atomisk på Windows og POSIX
 
 
 def rydd_jobber(maks_alder_dager: int = None, naa: float = None) -> dict:
@@ -2299,17 +2318,28 @@ def _jobb_last_fra_disk() -> None:
     for å bli slettet senere."""
     rydd_jobber()
     try:
-        for navn in os.listdir(JOBB_STI):
-            if not navn.endswith(".json"):
-                continue
+        navn_liste = os.listdir(JOBB_STI)
+    except FileNotFoundError:
+        return
+    for navn in navn_liste:
+        if not navn.endswith(".json"):
+            continue
+        # Én ødelagt fil skal koste ÉN jobb, ikke hele oppstarten. Før
+        # dette fanget vi bare FileNotFoundError, og en avkortet fil
+        # (JSONDecodeError, som er en ValueError) drepte serveren i
+        # oppstart — hver eneste gang vakthunden prøvde igjen (R153).
+        try:
             with open(os.path.join(JOBB_STI, navn), encoding="utf-8") as f:
                 jobb = json.load(f)
-            if jobb.get("status") in ("kø", "pågår"):
-                jobb["status"] = "feil"
-                jobb["feil"] = "Serveren ble restartet før jobben ble ferdig — last opp på nytt."
-            _jobber[jobb["jobb_id"]] = jobb
-    except FileNotFoundError:
-        pass
+            jobb_id = jobb["jobb_id"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"  Hoppet over ødelagt jobbfil {navn}: "
+                  f"{type(exc).__name__}", file=sys.stderr)
+            continue
+        if jobb.get("status") in ("kø", "pågår"):
+            jobb["status"] = "feil"
+            jobb["feil"] = "Serveren ble restartet før jobben ble ferdig — last opp på nytt."
+        _jobber[jobb_id] = jobb
 
 
 def _jobb_arbeider() -> None:
@@ -4456,6 +4486,23 @@ class Handler(BaseHTTPRequestHandler):
             self._korr_id = trygg or uuid.uuid4().hex
         return self._korr_id
 
+    def _eier_jobben(self, jobb: dict) -> bool:
+        """Er det DENNE klienten som lastet opp jobben? (R153)
+
+        Nøkkelen er gyldig — men er den den SAMME? Uten dette kunne
+        enhver autentisert klient lese enhver annens jobb, og jobben
+        bærer HELE dokumentteksten og de uttrukne feltene. Nøyaktig
+        samme begrunnelse som /innsyn alt hadde; her manglet den.
+
+        Jobber lagret av en eldre versjon har ingen eier. De regnes som
+        ALLES — å låse dem ute ville brutt en poll som var i gang da
+        serveren ble oppgradert, og etter oppbevaringsfristen finnes de
+        ikke lenger. Nye jobber får alltid en eier."""
+        eier = jobb.get("_eier")
+        if eier is None:
+            return True
+        return eier == getattr(self, "_klient_id", None)
+
     def _forventet_versjon(self):
         """Klientens forventede jobb-versjon for optimistisk låsing, fra
         ?versjon=N eller X-Versjon-headeren. None hvis ikke oppgitt (da
@@ -4622,8 +4669,17 @@ class Handler(BaseHTTPRequestHandler):
         if sti.startswith("/jobb/"):
             if not self._autorisert():
                 return self._svar(401, {"ok": False, "feil": "Ugyldig eller manglende X-API-Key"})
+            # (eierkontrollen ligger i _eier_jobben, se nedenfor)
             deler = [d for d in sti.split("/") if d]
             jobb = _jobber.get(deler[1]) if len(deler) >= 2 else None
+            # SAMME eierkontroll som /innsyn (R153). Her sto den ikke, og
+            # begrunnelsen for /innsyn gjelder ordrett: jobben bærer HELE
+            # dokumentteksten og de uttrukne feltene. Målt med to ekte
+            # nøkler: klient B leste klient A-s dokument, fødselsnummer og
+            # alt — mens /innsyn svarte 404 på nøyaktig samme forsøk.
+            # 404, ikke 403: en fremmed skal ikke få vite at id-en finnes.
+            if jobb is not None and not self._eier_jobben(jobb):
+                jobb = None
             if jobb is None:
                 return self._svar(404, {"ok": False, "feil": "Ukjent jobb_id"})
             # Arbeidstråden muterer det samme jobb-objektet — ta et
@@ -5835,6 +5891,9 @@ class Handler(BaseHTTPRequestHandler):
         if sti.startswith("/jobb/") and sti.endswith("/avbryt"):
             jid = sti.split("/")[2]
             jobb = _jobber.get(jid)
+            # Å AVBRYTE en annens jobb er verre enn å lese den (R153).
+            if jobb is not None and not self._eier_jobben(jobb):
+                jobb = None
             if jobb is None:
                 return self._svar(404, {"ok": False, "feil": "Ukjent jobb_id"})
             # Optimistisk låsing (NAV-konvensjon): sender klienten en
@@ -6153,6 +6212,13 @@ class Handler(BaseHTTPRequestHandler):
                     "strekkoder": None, "handskrift": None,
                     "ocr_motorer": None,
                     "opprettet": time.strftime("%Y-%m-%d %H:%M:%S")}
+            # Hvem som lastet opp — settes UTENFOR ordboka over, fordi
+            # den ordboka er selve klientkontrakten (R118: alle nøkler
+            # finnes fra første stund, og en vakt leser den ordrett fra
+            # kilden). Eieren er intern bokføring: underscore-prefikset
+            # siler den ut av hvert svar, mens `_jobb_lagre` bevarer den
+            # så den overlever en omstart (R153).
+            jobb["_eier"] = getattr(self, "_klient_id", None)
             if slag == "tekst":
                 t = innhold.strip()
                 # `_jobb_status`, ikke `jobb.update`: den løfter
@@ -6256,6 +6322,10 @@ class Handler(BaseHTTPRequestHandler):
         if jobb_ref:
             # Svar fra en ferdig bakgrunnsjobb — ingen ny OCR
             jobb = _jobber.get(jobb_ref)
+            # Den tredje døra inn til jobbens tekst: å SPØRRE om en
+            # annens dokument er samme lekkasje som å lese det (R153).
+            if jobb is not None and not self._eier_jobben(jobb):
+                jobb = None
             if jobb is None:
                 return self._svar(404, {"ok": False, "feil": "Ukjent jobb_id"})
             if jobb.get("status") != "ferdig":
@@ -6267,8 +6337,14 @@ class Handler(BaseHTTPRequestHandler):
                 })
             filnavn = jobb["filnavn"]
             tekst = jobb.get("tekst", "")
-            strekkoder = jobb.get("strekkoder", [])
-            handskrift = list(jobb.get("handskrift", []))
+            # `or []`, ikke en standardverdi: R118 forhåndsdeklarerer
+            # nøklene, så de FINNES med verdien None på en tekstjobb —
+            # og da traff standardverdien aldri. `list(None)` ga
+            # TypeError, altså 500 på et flyt serveren selv annonserer
+            # («sporsmal_senere» i 202-svaret). Målt: POST /jobb med en
+            # DOCX, så POST /spor med jobb_id → 500 hver gang (R153).
+            strekkoder = jobb.get("strekkoder") or []
+            handskrift = list(jobb.get("handskrift") or [])
             ocr_motorer = jobb.get("ocr_motorer") or None
             ocr_brukt = bool(ocr_motorer)
         elif slag == "tekst":

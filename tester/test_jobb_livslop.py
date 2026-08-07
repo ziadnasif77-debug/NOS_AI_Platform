@@ -42,24 +42,49 @@ FORVENTEDE = {
 }
 
 
-def _ny_jobb():
-    """Jobbposten slik ruteren bygger den, uten HTTP."""
+class _Klient:
+    """Står inn for `self` i utdraget. Ruteren setter eieren på jobben
+    (R153), og da må rommet kjenne navnet."""
+    _klient_id = "prove-klient"
+
+
+def _ny_jobb(alt=False):
+    """Jobbposten slik ruteren bygger den, uten HTTP.
+
+    `alt=False` gir bare de KLIENTSYNLIGE nøklene — det er dem R118
+    handler om. Underscore-nøklene er intern bokføring og siles ut av
+    hvert svar; `alt=True` viser dem, til vaktene som skal se dem."""
     import inspect
-    import re
     kilde = inspect.getsource(api.Handler._do_post_intern)
     start = kilde.index('jobb = {"jobb_id": jobb_id')
     slutt = kilde.index('if slag == "tekst":', start)
-    kropp = kilde[start:slutt]
+    import textwrap
+    # Utdraget starter midt i en metode, så det er innrykket. `strip()`
+    # rakk bare første linje — det holdt så lenge blokka var ÉN setning,
+    # men ikke da eiersettingen (R153) kom som en setning nummer to.
+    kropp = textwrap.dedent("            " + kilde[start:slutt])
     kropp = "\n".join(l for l in kropp.splitlines()
                       if not l.strip().startswith("#"))
     rom = {"jobb_id": "abc", "filnavn": "p.pdf", "time": __import__("time"),
+           "self": _Klient(), "getattr": getattr,
            "_tomt_dokumentdato": api._tomt_dokumentdato}
-    exec(kropp.strip(), rom)
-    return rom["jobb"]
+    exec(kropp, rom)
+    jobb = rom["jobb"]
+    return jobb if alt else {k: v for k, v in jobb.items()
+                             if not k.startswith("_")}
 
 
 def test_alle_nokler_finnes_fra_forste_stund():
     assert set(_ny_jobb()) == FORVENTEDE
+
+
+def test_eieren_settes_men_naar_aldri_klienten():
+    """R153: jobben bærer HELE dokumentteksten, så den må ha en eier.
+    Men eieren er intern — kommer den ut, lekker den hvem ANDRE som
+    bruker serveren, og det er en opplysning ingen klient skal ha."""
+    assert _ny_jobb(alt=True)["_eier"] == "prove-klient"
+    assert "_eier" not in _ny_jobb()
+    assert not [k for k in FORVENTEDE if k.startswith("_")]
 
 
 def test_avbrutt_og_feil_staar_der_for_de_skjer():
