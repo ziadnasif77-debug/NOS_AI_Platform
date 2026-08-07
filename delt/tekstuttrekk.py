@@ -126,18 +126,55 @@ _MAANEDER_EN = {
 _ALLE_MAANEDER = {**_MAANEDER, **_MAANEDER_EN}
 
 
+def iso(d: int, m: int, y: int) -> str:
+    """Den ENE normaliserte datoformen i hele prosjektet: ISO 8601.
+
+    Alle datoverdier bygges her. Grunnen til at det er ett sted: så
+    lenge formen ble skrevet ut med f-streng på fem steder, kunne et
+    nytt uttrekk nummer seks lett få en annen form uten at noe sa fra.
+
+    ISO og ikke dd.mm.åååå av tre grunner som alle er målbare, ikke
+    smakssaker:
+      1) Den sorterer riktig som REN TEKST. `sorted()` på dd.mm.åååå
+         sorterer på dagen først, altså på ingenting.
+      2) `date.fromisoformat` leser den; dd.mm.åååå krever egen parser
+         i hver klient.
+      3) Den er entydig. 03.04.2026 er 3. april for en nordmann og
+         4. mars for en amerikaner — og klientene her er roboter som
+         ikke vet hvilken de leser.
+
+    Presentasjon er en ANNEN sak: `til_norsk()` renderer for menneske-
+    øyne der det trengs (utfylte skjemaer). Det er en renderer på
+    kanten, ikke et tvillingfelt i svaret (R110)."""
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+def til_norsk(dato_iso):
+    """«2026-03-04» → «04.03.2026». For PRESENTASJON — aldri for et
+    felt i API-svaret.
+
+    Eneste lovlige bruk er der utdataet leses av et menneske eller
+    skrives inn i et norsk skjemafelt som selv sier «dd.mm.åååå». Dukker
+    denne opp i en svarbygger, er det en R110-tvilling."""
+    try:
+        aar, maaned, dag = (int(x) for x in str(dato_iso).split("-"))
+        return f"{dag:02d}.{maaned:02d}.{aar:04d}"
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def finn_dato(tekst: str):
     """Første gyldige dato — numeriske formater og «12. januar 2020».
-    Normaliseres til dd.mm.yyyy."""
+    Normaliseres til ISO 8601 (se `iso`)."""
     for treff in re.finditer(
             r"(?<!\d)(\d{1,2})[./](\d{1,2})[./](\d{4})(?!\d)", tekst):
         d, m, y = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
         if _gyldig_dato(d, m, y):
-            return f"{d:02d}.{m:02d}.{y}"
+            return iso(d, m, y)
     for treff in re.finditer(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", tekst):
         y, m, d = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
         if _gyldig_dato(d, m, y):
-            return f"{d:02d}.{m:02d}.{y}"
+            return iso(d, m, y)
     maaneder = "|".join(_MAANEDER)
     for treff in re.finditer(
         rf"(?<!\d)(\d{{1,2}})[.\s]+({maaneder})[.\s]+(\d{{4}})(?!\d)",
@@ -147,7 +184,7 @@ def finn_dato(tekst: str):
         m = _MAANEDER[treff.group(2).lower()]
         y = int(treff.group(3))
         if _gyldig_dato(d, m, y):
-            return f"{d:02d}.{m:02d}.{y}"
+            return iso(d, m, y)
     return None
 
 
@@ -163,7 +200,7 @@ def _alle_datotreff(tekst: str) -> list:
     to- eller firesifret år, ISO, og norske/engelske månedsnavn.
 
     Returnerer sortert liste av
-    (start, slutt, raatekst, normalisert dd.mm.yyyy, aar_antatt) der
+    (start, slutt, raatekst, normalisert ISO 8601, aar_antatt) der
     aar_antatt=True betyr at århundret er antatt (tosifret år) — en
     deklarert antagelse, ikke et faktum."""
     funn = []
@@ -171,7 +208,7 @@ def _alle_datotreff(tekst: str) -> list:
     def _legg_til(treff, d, m, y, aar_antatt=False):
         if _gyldig_dato(d, m, y):
             funn.append((treff.start(), treff.end(), treff.group(0),
-                         f"{d:02d}.{m:02d}.{y}", aar_antatt))
+                         iso(d, m, y), aar_antatt))
 
     # Numerisk, firesifret år: 12.03.2024, 12/3/2024 — og OCR-varianter
     # med mellomrom rundt skilletegnene («21.04 . 1994»).
@@ -218,7 +255,7 @@ def _alle_datotreff(tekst: str) -> list:
 
 
 def finn_alle_datoer(tekst: str, maks: int = 100) -> list:
-    """ALLE gyldige datoer i teksten — normalisert til dd.mm.yyyy, i
+    """ALLE gyldige datoer i teksten — normalisert til ISO 8601, i
     tekstrekkefølge, uten duplikater. Forstår numeriske formater, ISO,
     norske OG engelske månedsnavn («12 March 2024», «March 12, 2024»).
     Deterministisk og rask nok for dokumenter på hundrevis av sider."""
@@ -453,9 +490,14 @@ def sett_dato_roller(datoer: list) -> list:
 
 
 def _til_dato(dato_str):
-    """«dd.mm.åååå» → date, eller None hvis den ikke lar seg lese."""
+    """ISO 8601 → date, eller None hvis den ikke lar seg lese.
+
+    Med VILJE streng: den godtar ikke dd.mm.åååå «for sikkerhets
+    skyld». Slapp den begge former gjennom, ville en gjenglemt norsk
+    verdi et sted i koden fortsatt regne riktig her — og feilen ville
+    først dukke opp ute i svaret, der den er dyrest å finne."""
     try:
-        d, m, a = (int(x) for x in str(dato_str).split("."))
+        a, m, d = (int(x) for x in str(dato_str).split("-"))
         return date(a, m, d)
     except (ValueError, TypeError, AttributeError):
         return None
@@ -979,7 +1021,7 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
         d, m, aar = fodselsdato_av_fnr(fnr) or (None, None, None)
         if d and _gyldig_dato(d, m, aar):
             resultater.append({
-                "dato": f"{d:02d}.{m:02d}.{aar}",
+                "dato": iso(d, m, aar),
                 "raatekst": fnr[:6] + "*****",
                 "type": "fodselsdato_fra_fnr",
                 "etikett": None,

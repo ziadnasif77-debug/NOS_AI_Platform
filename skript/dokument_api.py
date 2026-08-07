@@ -107,7 +107,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                felter_flatt, flett_mal,
                                identifikatortyper_i_mal, klassifiser_datoer,
                                refererte_felt, sett_dato_roller,
-                               sladd_tekst, strukturert_uttrekk,
+                               sladd_tekst, strukturert_uttrekk, til_norsk,
                                utvid_entiteter, FLETT_REGEL_VERSJON,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
@@ -1750,9 +1750,24 @@ def dato_tokens(kilde: str) -> set:
     «12 06 2026» i dokumentet, bare skrevet på standardform. Uten dette
     ble en korrekt lest dato avvist som «tall som ikke står i
     dokumentet» — to sikkerhetsmekanismer som slo hverandre i hjel.
-    """
+
+    R133: BEGGE rekkefølger legges inn. Parseren gir ISO («2026-06-12»
+    → «20260612»), mens modellen fyller skjemafelter på norsk form
+    («12.06.2026» → «12062026»). Da datoene ble ISO internt, sluttet
+    strippingen å treffe: `-` sto ikke i tegnsettet som ble fjernet, så
+    hele mengden besto av tokens med bindestrek — som ingen tallvakt
+    noensinne kan matche. Resultatet var at en korrekt lest dato ble
+    tømt igjen, akkurat den feilen R53 fjernet. Rekkefølgen er ikke en
+    ny opplysning: begge er renderinger av EN dato parseren har funnet
+    i kilden."""
     try:
-        return {re.sub(r"[ ., \xa0]", "", d) for d in finn_alle_datoer(kilde)}
+        ut = set()
+        for d in finn_alle_datoer(kilde):
+            ut.add(re.sub(r"[-. \xa0,]", "", d))
+            norsk = til_norsk(d)
+            if norsk:
+                ut.add(re.sub(r"[-. \xa0,]", "", norsk))
+        return ut
     except Exception:
         return set()
 
@@ -1922,6 +1937,13 @@ def rens_skjemasvar(mal, svar, dok_tekst: str):
                 avvik.append(f"{sti}: «{verdi}» er ikke en gjenkjennelig "
                              "dato — feltet er tømt")
                 return ""
+            # R133: KONTROLLEN skjer på kanonisk form (ISO), men det som
+            # skrives inn i feltet er norsk form. Et utfylt skjema er
+            # ikke data — det er et dokument et menneske skal lese, og
+            # datoruta på en NAV-blankett sier selv «dd.mm.åååå».
+            # Skrev vi den kanoniske formen her, ville hele API-ets
+            # datovalg lekket ut i et papirskjema.
+            normalisert = til_norsk(normalisert) or normalisert
             if normalisert != verdi:
                 avvik.append(f"{sti}: «{verdi}» ble normalisert til "
                              f"«{normalisert}»")
@@ -2405,7 +2427,7 @@ def _skjemaer() -> dict:
             "properties": {
                 "navn": s(nullable=True, example="Ola Nordmann"),
                 "fnr": s(nullable=True),
-                "fodselsdato": s(nullable=True,
+                "fodselsdato": s(nullable=True, format="date",
                                  description="Avledet av et BEVIST "
                                              "fødselsnummer"),
                 "fastslatt": b(description="Har vi en part eller ikke — som "
@@ -2493,8 +2515,8 @@ def _skjemaer() -> dict:
                            "varsler at fila trolig inneholder mer enn ett "
                            "dokument — da er én dokumentdato misvisende.",
             "properties": {
-                "fra": s(format="dd.MM.yyyy", example="12.06.2026"),
-                "til": s(format="dd.MM.yyyy", example="12.06.2026"),
+                "fra": s(format="date", example="2026-06-12"),
+                "til": s(format="date", example="2026-06-12"),
                 "antall": {"type": "integer", "example": 1},
                 "per_side": {"type": "array", "items": {
                     "type": "object",
@@ -2507,7 +2529,7 @@ def _skjemaer() -> dict:
                            "i teksten og begrunnet. Skilt fra datoene "
                            "dokumentet HANDLER om. Alltid deterministisk.",
             "properties": {
-                "dato": s(format="dd.MM.yyyy", example="12.06.2026"),
+                "dato": s(format="date", example="2026-06-12"),
                 "type": s(example="brevdato_sannsynlig"),
                 "type_kodet": ref("Kodet"),
                 "rolle_kodet": ref("Kodet"),
@@ -2530,7 +2552,7 @@ def _skjemaer() -> dict:
             "type": "object",
             "description": "Én dato med klassifisering og kontekst.",
             "properties": {
-                "dato": s(example="12.06.2026"),
+                "dato": s(format="date", example="2026-06-12"),
                 "raatekst": s(description="Slik datoen sto i dokumentet"),
                 "type": s(example="brevdato_sannsynlig"),
                 "etikett": s(nullable=True,
@@ -2562,7 +2584,7 @@ def _skjemaer() -> dict:
                            "utelates de helt. Et felt som ikke ble funnet "
                            "MANGLER (nøkkelen er ikke null).",
             "properties": {
-                "dato": s(example="12.06.2026"),
+                "dato": s(format="date", example="2026-06-12"),
                 "belop": {"type": "number", "example": 463.0,
                           "description": "FØRSTE beløp i teksten"},
                 "totalbelop": {"type": "number", "example": 486.0,
@@ -2790,12 +2812,12 @@ def _skjemaer() -> dict:
                         "dato_sikkerhet": s(example="hoy"),
                         "dato_begrunnelse": s(nullable=True),
                         "dato_side": {"type": "integer", "nullable": True},
-                        "periode_start": s(nullable=True,
+                        "periode_start": s(nullable=True, format="date",
                                            example="2025-01-01"),
-                        "periode_slutt": s(nullable=True,
+                        "periode_slutt": s(nullable=True, format="date",
                                            example="2025-12-31"),
-                        "spenn_fra": s(nullable=True),
-                        "spenn_til": s(nullable=True),
+                        "spenn_fra": s(nullable=True, format="date"),
+                        "spenn_til": s(nullable=True, format="date"),
                         "flere_dokumenter": b()}},
                 "sak": {
                     "type": "object",
@@ -2939,7 +2961,7 @@ def _skjemaer() -> dict:
                         "utbetalt_belop": {"type": "number", "nullable": True},
                         "tilbakebetalingsbelop": {"type": "number",
                                                   "nullable": True},
-                        "utbetalingsdato": s(nullable=True),
+                        "utbetalingsdato": s(nullable=True, format="date"),
                         "valuta": s(example="NOK"),
                         "kontonummer": {"type": "array", "items": s()},
                         "kid": {"type": "array", "items": s()}}},
@@ -2950,8 +2972,8 @@ def _skjemaer() -> dict:
                         "stilling": s(nullable=True),
                         "stillingsprosent": {"type": "integer",
                                              "nullable": True, "example": 80},
-                        "startdato": s(nullable=True),
-                        "sluttdato": s(nullable=True),
+                        "startdato": s(nullable=True, format="date"),
+                        "sluttdato": s(nullable=True, format="date"),
                         "arsinntekt": {"type": "number", "nullable": True},
                         "manedslonn": {"type": "number", "nullable": True},
                         "organisasjonsnummer": {"type": "array",
@@ -6126,9 +6148,16 @@ def fyll_skjema_kjerne(dok: str, mal: dict) -> dict:
     # hele tiden. Nå får modellen de faktiske datoene å velge blant.
     dato_liste = klassifiser_datoer(dok, maks=15)
     if dato_liste:
+        # R133: datoene er ISO 8601 overalt ellers, men her RENDERES de
+        # til norsk form. Dette er ikke en tvilling — det er kanten der
+        # utdataet slutter å være data og blir et utfylt norsk skjema.
+        # Et datofelt på en NAV-blankett sier «dd.mm.åååå» ved siden av
+        # ruta; skrev vi «2026-03-04» der, ville skjemaet vært feil
+        # utfylt selv om verdien var riktig.
         belop_del += ("\n" + prompter.avsnitt("fyll_skjema.datoer_overskrift")
                       + "\n".join(
-                          f"- {d['dato']} ({d.get('etikett') or d['type']}):"
+                          f"- {til_norsk(d['dato']) or d['dato']}"
+                          f" ({d.get('etikett') or d['type']}):"
                           f" «{d.get('kontekst', '')}»"
                           for d in dato_liste) + "\n")
 

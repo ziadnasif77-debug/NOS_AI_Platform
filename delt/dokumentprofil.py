@@ -24,22 +24,20 @@ from delt.tekstuttrekk import (DOKUMENTTYPE_TERM, ROLLE_BEHANDLING,
                                kodeverk, rolle_for_type, ytelse_kodet)
 
 # ------------------------------------------------------------------ #
-#  Datoer: norsk form ut og inn, ISO i profilen                       #
+#  Datoer                                                             #
 # ------------------------------------------------------------------ #
-
-
-def til_iso(dato_norsk):
-    """«17.05.2024» → «2024-05-17». None når datoen ikke lar seg lese.
-
-    Profilen svarer i ISO fordi den leses av andre systemer; resten av
-    API-et beholder den norske formen, og begge følger med."""
-    try:
-        dag, maaned, aar = (int(x) for x in str(dato_norsk).split("."))
-        return f"{aar:04d}-{maaned:02d}-{dag:02d}"
-    except (ValueError, TypeError, AttributeError):
-        return None
-
-
+#
+# Her sto `til_iso()`. Den fantes fordi profilen svarte ISO mens resten
+# av API-et svarte dd.mm.åååå — og en oversetter mellom dem er nettopp
+# beviset på at det fantes to former. Målt i ett svar: 55 norske verdier
+# og 14 ISO-verdier, med SAMME dato i begge former to steder
+# (`felter.dokumentdato.dato: "04.03.2026"` mot
+# `dokumentprofil.dokument.dato: "2026-03-04"`).
+#
+# Nå normaliserer `tekstuttrekk.iso()` til ISO 8601 ÉN gang, ved
+# uttrekket, og alt nedstrøms arver formen. Oversetteren er borte fordi
+# det ikke lenger finnes noe å oversette mellom.
+#
 # ------------------------------------------------------------------ #
 #  QR-koder og strekkoder: hvilken SIDE står de på                    #
 # ------------------------------------------------------------------ #
@@ -158,10 +156,7 @@ def stempeldatoer(tekst: str, datoer) -> list:
             i_stempel = _stempelord_foran(tekst, d["dato"])
         if not i_stempel:
             continue
-        iso = til_iso(d["dato"])
-        if not iso:
-            continue
-        funn.append({"dato": iso, "dato_original": d.get("raatekst"),
+        funn.append({"dato": d["dato"], "dato_original": d.get("raatekst"),
                      "type": type_, "side": d.get("side"),
                      "rolle": rolle_for_type(type_)})
     # samme stempeldato flere steder er ett stempel, ikke flere
@@ -485,7 +480,7 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
                        if l.strip()), "")
         ut.append({
             "sider": g["sider"],
-            "dato": til_iso(g["dato"]),
+            "dato": g["dato"],
             # ingen arv fra filens type: et dokument vi ikke kjenner
             # igjen, skal si «vet ikke» — ikke låne naboens etikett.
             # SAMME form som «dokument.type»: feltet var en bar streng
@@ -725,27 +720,13 @@ def _med_forbehold(begrunnelse, dekning) -> str:
             f"leste sidene — ikke hele dokumentet.")
 
 
-def _iso_datoer(felter: dict, navn) -> dict:
-    """Gjør de navngitte datofeltene om til ISO.
-
-    Profilen erklærer ISO («leses av andre systemer»), men feltene fra
-    saksfelter.py kom gjennom `finn_dato` og var norske. Resultatet var
-    `arbeid.startdato: "01.08.2019"` i samme objekt som
-    `dokument.dato: "2026-05-28"` — en klient kunne ikke vite hvilket
-    format et datofelt hadde uten en tabell.
-
-    Den norske formen fulgte en stund med som `_norsk`-tvilling. Den er
-    borte: målt gir «28. mai 2026», «28/05/2026», «2026-05-28» og
-    «28.5.26» ALLE samme tvilling «28.05.2026» — den var altså en andre
-    RENDERING av den normaliserte verdien, ikke det som sto i
-    dokumentet. En klient som har ISO kan formatere selv.
-
-    Det som er verdt å ta vare på er den EKTE originalen, og den ligger
-    i `dokument.dato_original`."""
-    ut = dict(felter)
-    for n in navn:
-        ut[n] = til_iso(ut.get(n))
-    return ut
+# Her sto `_iso_datoer()`, som konverterte `okonomi.utbetalingsdato`,
+# `arbeid.startdato` og `arbeid.sluttdato` enkeltvis. Den fantes fordi
+# saksfelter.py gikk gjennom `finn_dato` og derfor ga norsk form midt i
+# et objekt som ellers var ISO — «en klient kunne ikke vite hvilket
+# format et datofelt hadde uten en tabell». Nå gir `finn_dato` ISO, så
+# den listen over navn — som måtte vedlikeholdes for hånd hver gang et
+# nytt datofelt kom til — trengs ikke lenger.
 
 
 # Valutamarkører slik de faktisk står i norske dokumenter
@@ -788,8 +769,7 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
     s_ident = struktur.get("identifikatorer") or {}
     s_kontakt = struktur.get("kontakt") or {}
 
-    dato_norsk = dokumentdato.get("dato")
-    dato_iso = til_iso(dato_norsk)
+    dato_iso = dokumentdato.get("dato")
     periode = gjelder_periode(datoer)
     # Datospennet i en BUNKE er noe annet enn perioden dokumentet gjelder
     # for — begge kan finnes samtidig, og de skal ikke forveksles
@@ -847,19 +827,19 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             # «alder.aar» — to skrivemåter av samme bokstav, to
             # betydninger (årstallet kontra hvor gammelt dokumentet er).
             "aarstall": int(dato_iso[:4]) if dato_iso else None,
-            "alder": dokumentets_alder(dato_norsk),
+            "alder": dokumentets_alder(dato_iso),
             "dato_kilde": dokumentdato.get("kilde"),
             "dato_sikkerhet": dokumentdato.get("konfidens") or "ingen",
             "dato_begrunnelse": dokumentdato.get("begrunnelse"),
             "dato_side": dokumentdato.get("side"),
 
             # perioden dokumentet GJELDER FOR (null når det ikke er en periode)
-            "periode_start": til_iso(periode["fra"]) if periode else None,
-            "periode_slutt": til_iso(periode["til"]) if periode else None,
+            "periode_start": periode["fra"] if periode else None,
+            "periode_slutt": periode["til"] if periode else None,
 
             # datospennet når filen er en BUNKE av flere daterte dokumenter
-            "spenn_fra": til_iso(spenn["fra"]) if spenn else None,
-            "spenn_til": til_iso(spenn["til"]) if spenn else None,
+            "spenn_fra": spenn["fra"] if spenn else None,
+            "spenn_til": spenn["til"] if spenn else None,
             "flere_dokumenter": bool(spenn and spenn.get("flere_dokumenter")),
         },
 
@@ -906,14 +886,14 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
         },
 
         "okonomi": {
-            **_iso_datoer(okonomi_felter(tekst), ("utbetalingsdato",)),
+            **okonomi_felter(tekst),
             **_valuta(tekst),
             "kontonummer": s_ident.get("kontonummer") or [],
             "kid": s_ident.get("kid") or [],
         },
 
         "arbeid": {
-            **_iso_datoer(arbeid_felter(tekst), ("startdato", "sluttdato")),
+            **arbeid_felter(tekst),
             "organisasjonsnummer": s_ident.get("organisasjonsnummer") or [],
         },
 

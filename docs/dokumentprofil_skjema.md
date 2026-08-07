@@ -137,9 +137,9 @@ allerede har to konkurrerende kilder etter én dag.
     "kategori": null,
     "tittel": "Vedtak om dagpenger",
     "sprak": "norsk",
-    "dato": "2026-05-08",
-    "dato_norsk": "08.05.2026",
-    "ar": 2026,
+    "dato": "2026-05-08",           // ISO 8601 — ENESTE datoform (R133)
+    "dato_original": "8. mai 2026", // ORDRETT slik det sto (R110)
+    "aarstall": 2026,
     "alder": {"dager": 810, "tekst": "2 år og 2 måneder gammelt", "fremtidig": false},
     "periode_start": "2025-01-01",  // hva dokumentet GJELDER FOR
     "periode_slutt": "2025-12-31",

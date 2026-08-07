@@ -65,7 +65,7 @@ def test_vedtaksbrev_velger_vedtaksdato_ikke_frist():
         "Vedtaksdato: 12.06.2026\n\n"
         "Du har rett til dagpenger fra 01.07.2026 til 31.12.2026.\n"
         "Klagefrist: innen 05.07.2026.\n")
-    assert resultat["dato"] == "12.06.2026"
+    assert resultat["dato"] == "2026-06-12"
     assert resultat["type"] == "vedtaksdato"
     assert resultat["konfidens"] == "hoy"
 
@@ -73,16 +73,16 @@ def test_vedtaksbrev_velger_vedtaksdato_ikke_frist():
 def test_dato_overst_paa_side_1_blir_brevdato():
     resultat = _dokumentdato(
         "15.03.2026\n\nTil Ola Nordmann\nUtbetaling skjer 20.04.2026.\n")
-    assert resultat["dato"] == "15.03.2026"
+    assert resultat["dato"] == "2026-03-15"
     assert resultat["kilde"] == "posisjon"
 
 
 def test_bare_innholdsdatoer_gir_aerlig_ingen():
     """Ingen dokumentdato er et GYLDIG svar — bedre enn en gjetning."""
     resultat = finn_dokumentdato([
-        _kandidat("05.07.2026", "frist"),
-        _kandidat("03.04.1985", "fodselsdato"),
-        _kandidat("01.07.2026", "periode_start"),
+        _kandidat("2026-07-05", "frist"),
+        _kandidat("1985-04-03", "fodselsdato"),
+        _kandidat("2026-07-01", "periode_start"),
     ])
     assert resultat["dato"] is None
     assert resultat["konfidens"] == "ingen"
@@ -91,35 +91,35 @@ def test_bare_innholdsdatoer_gir_aerlig_ingen():
 
 def test_etikett_slaar_pdf_metadata():
     resultat = finn_dokumentdato([
-        _kandidat("01.02.2026", "pdf_opprettet", side=None),
-        _kandidat("12.06.2026", "vedtaksdato"),
+        _kandidat("2026-02-01", "pdf_opprettet", side=None),
+        _kandidat("2026-06-12", "vedtaksdato"),
     ])
-    assert resultat["dato"] == "12.06.2026"
+    assert resultat["dato"] == "2026-06-12"
     # den tapende kandidaten skal fortsatt være synlig, ikke forsvinne
-    assert "01.02.2026" in [a["dato"] for a in resultat["alternativer"]]
+    assert "2026-02-01" in [a["dato"] for a in resultat["alternativer"]]
 
 
 def test_pdf_metadata_paa_skannet_dokument_merkes_som_skannedato():
     skannet = finn_dokumentdato(
-        [_kandidat("01.02.2026", "pdf_opprettet", side=None)], ocr_brukt=True)
-    assert skannet["dato"] == "01.02.2026"
+        [_kandidat("2026-02-01", "pdf_opprettet", side=None)], ocr_brukt=True)
+    assert skannet["dato"] == "2026-02-01"
     assert skannet["konfidens"] == "lav"
     assert "SKANNEDATOEN" in skannet["advarsel"]
 
 
 def test_uenighet_mellom_like_sterke_kandidater_varsles():
     resultat = finn_dokumentdato([
-        _kandidat("12.06.2026", "vedtaksdato"),
-        _kandidat("20.06.2026", "utstedt"),
+        _kandidat("2026-06-12", "vedtaksdato"),
+        _kandidat("2026-06-20", "utstedt"),
     ])
-    assert resultat["dato"] == "12.06.2026"      # første vinner
+    assert resultat["dato"] == "2026-06-12"      # første vinner
     assert "ULIKE datoer" in resultat["advarsel"]
-    assert "20.06.2026" in resultat["advarsel"]
+    assert "2026-06-20" in resultat["advarsel"]
 
 
 def test_haandskrevet_dokumentdato_nedgraderes():
     resultat = finn_dokumentdato(
-        [_kandidat("12.06.2026", "vedtaksdato", skrevet_for_hand=True)],
+        [_kandidat("2026-06-12", "vedtaksdato", skrevet_for_hand=True)],
         ocr_brukt=True)
     assert resultat["konfidens"] == "middels"    # ned fra «hoy»
     assert "håndskrevet" in resultat["advarsel"]
@@ -128,13 +128,13 @@ def test_haandskrevet_dokumentdato_nedgraderes():
 def test_mottatt_dato_blir_ikke_dokumentdato():
     """«Mottatt 05.01.2026» sier når NAV fikk brevet — ikke når det ble
     skrevet. Den skal aldri presenteres som dokumentets dato."""
-    resultat = finn_dokumentdato([_kandidat("05.01.2026", "mottatt")])
+    resultat = finn_dokumentdato([_kandidat("2026-01-05", "mottatt")])
     assert resultat["dato"] is None
 
 
 def test_datert_etikett_gjenkjennes():
     resultat = _dokumentdato("Vi viser til vårt brev datert 12.06.2026 i saken.")
-    assert resultat["dato"] == "12.06.2026"
+    assert resultat["dato"] == "2026-06-12"
     assert resultat["type"] == "dokumentdato"
 
 
@@ -165,7 +165,7 @@ def test_signaturblokk_nederst_blir_dokumentdato():
     """«Oslo, 15.03.2026 … (sign.)» nederst ER dokumentets dato — mens
     sykefraværsperioden og fristen over hører til innholdet."""
     resultat = _dokumentdato(_ERKLARING)
-    assert resultat["dato"] == "15.03.2026"
+    assert resultat["dato"] == "2026-03-15"
     assert resultat["type"] == "signaturdato_sannsynlig"
     assert resultat["kilde"] == "posisjon"
 
@@ -186,7 +186,7 @@ def test_naken_dato_oeverst_uten_etikett():
         "Vedrørende din henvendelse om barnehageplass fra 01.08.2026.\n"
         "Vi behandler saken snarest og svarer deg skriftlig innen "
         "15.04.2026 uansett.\n")
-    assert resultat["dato"] == "24.02.2026"
+    assert resultat["dato"] == "2026-02-24"
     assert resultat["type"] == "brevdato_sannsynlig"
 
 
@@ -200,7 +200,7 @@ def test_dato_alene_nederst_begrunnes_som_signatur_ikke_toppen():
         "møter med deltakerne. Neste evaluering er planlagt til 15.06.2026\n"
         "og skal omfatte hele tiltaket. Rapporten sendes til partene.\n\n"
         "10.02.2026\n")
-    assert resultat["dato"] == "10.02.2026"
+    assert resultat["dato"] == "2026-02-10"
     assert resultat["type"] == "signaturdato_sannsynlig"
     assert "nederst" in resultat["begrunnelse"]
 
@@ -240,14 +240,14 @@ def test_ett_brev_gir_fra_lik_til():
         "Kommunen\nPostboks 123\n\n12.06.2026\n\n"
         "Vi viser til din henvendelse om plass fra 01.08.2026 og svarer "
         "deg skriftlig innen 15.07.2026.\n")["periode"]
-    assert periode["fra"] == periode["til"] == "12.06.2026"
+    assert periode["fra"] == periode["til"] == "2026-06-12"
     assert periode["flere_dokumenter"] is False
 
 
 def test_bunke_gir_spenn_fra_foerste_til_siste():
     periode = _dokumentdato(_BUNKE)["periode"]
-    assert periode["fra"] == "12.06.2026"
-    assert periode["til"] == "05.08.2026"
+    assert periode["fra"] == "2026-06-12"
+    assert periode["til"] == "2026-08-05"
     assert periode["flere_dokumenter"] is True
     assert periode["antall"] == 3
 
@@ -257,7 +257,7 @@ def test_bunke_gir_dato_per_side():
     side. Uten dette er et spenn bare to tall uten forklaring."""
     per_side = _dokumentdato(_BUNKE)["periode"]["per_side"]
     assert [(s["side"], s["dato"]) for s in per_side] == [
-        (1, "12.06.2026"), (2, "20.07.2026"), (3, "05.08.2026")]
+        (1, "2026-06-12"), (2, "2026-07-20"), (3, "2026-08-05")]
 
 
 def test_brevdato_finnes_oeverst_paa_HVER_side():
@@ -265,14 +265,14 @@ def test_brevdato_finnes_oeverst_paa_HVER_side():
     side 2 aldri blitt funnet — og bunken fått feil spenn."""
     datoer = sett_dato_roller(klassifiser_datoer(_BUNKE))
     side2 = [d for d in datoer if d["side"] == 2 and d["rolle"] == ROLLE_DOKUMENT]
-    assert [d["dato"] for d in side2] == ["20.07.2026"]
+    assert [d["dato"] for d in side2] == ["2026-07-20"]
     assert side2[0]["type"] == "brevdato_sannsynlig"
 
 
 def test_signaturblokk_finnes_nederst_paa_SIN_side():
     datoer = sett_dato_roller(klassifiser_datoer(_BUNKE))
     side3 = [d for d in datoer if d["side"] == 3 and d["rolle"] == ROLLE_DOKUMENT]
-    assert [d["dato"] for d in side3] == ["05.08.2026"]
+    assert [d["dato"] for d in side3] == ["2026-08-05"]
 
 
 def test_innholdsdatoer_holdes_utenfor_spennet():
@@ -280,8 +280,8 @@ def test_innholdsdatoer_holdes_utenfor_spennet():
     05.07.2026, 01.02.2024) skal ikke påvirke dokumentspennet."""
     periode = _dokumentdato(_BUNKE)["periode"]
     alle = {s["dato"] for s in periode["per_side"]}
-    assert "01.02.2024" not in alle and "05.07.2026" not in alle
-    assert periode["fra"] == "12.06.2026"      # ikke 01.02.2024
+    assert "2024-02-01" not in alle and "2026-07-05" not in alle
+    assert periode["fra"] == "2026-06-12"      # ikke 01.02.2024
 
 
 def test_bunke_varsles_men_uten_dobbel_advarsel():
@@ -299,7 +299,7 @@ def test_ingen_dokumentdato_gir_tomt_periodeskjelett():
     R118 forbyr: et nestet objekt som blir null tar med seg alle stiene
     under seg, så en robot som leser `periode.fra` krasjer på det første
     udaterte dokumentet. Nå står skjelettet med null-verdier."""
-    resultat = finn_dokumentdato([_kandidat("05.07.2026", "frist")])
+    resultat = finn_dokumentdato([_kandidat("2026-07-05", "frist")])
     assert resultat["dato"] is None
     assert resultat["periode"] == {"fra": None, "til": None, "antall": 0,
                                    "per_side": [],
@@ -313,8 +313,8 @@ def test_dokumentdatoen_har_samme_nokler_med_og_uten_funn():
     men BORTE. 12 nøkler ble 10, og en robot som leser
     `felter.dokumentdato.type_kodet.kode` virket på hvert datert
     dokument og krasjet på det første udaterte."""
-    med = finn_dokumentdato([_kandidat("05.07.2026", "dokumentdato")])
-    uten = finn_dokumentdato([_kandidat("05.07.2026", "frist")])
+    med = finn_dokumentdato([_kandidat("2026-07-05", "dokumentdato")])
+    uten = finn_dokumentdato([_kandidat("2026-07-05", "frist")])
     assert sorted(med) == sorted(uten), (
         f"ulike nøkkelsett:\n  med funn: {sorted(med)}\n"
         f"  uten funn: {sorted(uten)}")
@@ -325,12 +325,12 @@ def test_dokumentdatoen_har_samme_nokler_med_og_uten_funn():
 # ---------- alder (fortsatt tilgjengelig som hjelpefunksjon) ----------
 def test_alder_regnes_fra_dokumentdatoen():
     i_dag = date(2026, 7, 28)
-    assert dokumentets_alder("28.07.2026", i_dag)["dager"] == 0
-    assert dokumentets_alder("28.07.2025", i_dag)["dager"] == 365
+    assert dokumentets_alder("2026-07-28", i_dag)["dager"] == 0
+    assert dokumentets_alder("2025-07-28", i_dag)["dager"] == 365
 
 
 def test_fremtidig_dato_flagges_i_stedet_for_negativt_tall():
-    alder = dokumentets_alder("01.12.2026", date(2026, 7, 28))
+    alder = dokumentets_alder("2026-12-01", date(2026, 7, 28))
     assert alder["fremtidig"] is True
     assert "FRAM I TID" in alder["tekst"]
 
@@ -338,7 +338,7 @@ def test_fremtidig_dato_flagges_i_stedet_for_negativt_tall():
 def test_alder_taaler_soppel():
     assert dokumentets_alder(None)["dager"] is None
     assert dokumentets_alder("tull")["dager"] is None
-    assert dokumentets_alder("31.02.2026")["dager"] is None      # finnes ikke
+    assert dokumentets_alder("2026-02-31")["dager"] is None      # finnes ikke
 
 
 # ---------- OCR-robusthet i datodetektoren (R61) ----------
@@ -350,10 +350,10 @@ def _datoer(tekst):
 @pytest.mark.parametrize("tekst,forventet", [
     # OCR limer ofte datoen til nabotekst på kvitteringer. Før R61 fant
     # \b ingen ordgrense mellom to bokstaver/sifre og forkastet datoen.
-    ("DATO12.06.2026", ["12.06.2026"]),
-    ("12.06.2026kr", ["12.06.2026"]),
-    ("12.06.2026KL14:46", ["12.06.2026"]),
-    ("Dato12.06.2026Kl14:46", ["12.06.2026"]),
+    ("DATO12.06.2026", ["2026-06-12"]),
+    ("12.06.2026kr", ["2026-06-12"]),
+    ("12.06.2026KL14:46", ["2026-06-12"]),
+    ("Dato12.06.2026Kl14:46", ["2026-06-12"]),
 ])
 def test_dato_limt_til_nabotegn_fanges(tekst, forventet):
     assert _datoer(tekst) == forventet
@@ -361,9 +361,9 @@ def test_dato_limt_til_nabotegn_fanges(tekst, forventet):
 
 @pytest.mark.parametrize("tekst,forventet", [
     # OCR mister mellomrommet rundt månedsnavnet.
-    ("08.juni 2026", ["08.06.2026"]),
-    ("8.juni.2026", ["08.06.2026"]),
-    ("1. desember 2026kl", ["01.12.2026"]),
+    ("08.juni 2026", ["2026-06-08"]),
+    ("8.juni.2026", ["2026-06-08"]),
+    ("1. desember 2026kl", ["2026-12-01"]),
 ])
 def test_maanedsnavn_uten_mellomrom_fanges(tekst, forventet):
     assert _datoer(tekst) == forventet
@@ -400,7 +400,7 @@ def test_kodeverk_uten_kode_gir_PARET_med_null():
 def test_datoer_faar_kodede_felter_i_tillegg_til_raa():
     datoer = sett_dato_roller(klassifiser_datoer(
         "Vedtaksdato: 12.06.2026\nKlagefrist innen 05.07.2026.\n"))
-    vedtak = next(d for d in datoer if d["dato"] == "12.06.2026")
+    vedtak = next(d for d in datoer if d["dato"] == "2026-06-12")
     # rå strengfelt uendret (bakoverkompatibelt)
     assert vedtak["type"] == "vedtaksdato"
     assert vedtak["rolle"] == ROLLE_DOKUMENT
@@ -420,8 +420,8 @@ def test_dokumentdato_har_kodede_felter():
 
 def test_alternativer_har_kodet_type():
     resultat = finn_dokumentdato([
-        _kandidat("01.02.2026", "pdf_opprettet", side=None),
-        _kandidat("12.06.2026", "vedtaksdato"),
+        _kandidat("2026-02-01", "pdf_opprettet", side=None),
+        _kandidat("2026-06-12", "vedtaksdato"),
     ])
     alt = resultat["alternativer"][0]
     assert alt["type"] == "pdf_opprettet"
@@ -434,5 +434,5 @@ def test_roller_settes_paa_alle_datoer():
         "Vedtaksdato: 12.06.2026\nKlagefrist: innen 05.07.2026.\n"))
     assert all("rolle" in d for d in datoer)
     roller = {d["dato"]: d["rolle"] for d in datoer}
-    assert roller["12.06.2026"] == ROLLE_DOKUMENT
-    assert roller["05.07.2026"] == ROLLE_INNHOLD
+    assert roller["2026-06-12"] == ROLLE_DOKUMENT
+    assert roller["2026-07-05"] == ROLLE_INNHOLD

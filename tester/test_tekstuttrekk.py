@@ -107,11 +107,11 @@ def test_konto_og_fnr_blandes_ikke():
 
 
 @pytest.mark.parametrize("tekst,forventet", [
-    ("Vedtaksdato: 12.03.2021", "12.03.2021"),
-    ("dato 3/1/2020 gjelder", "03.01.2020"),
-    ("mottatt 2019-11-05 hos NAV", "05.11.2019"),
-    ("Oslo, 12. januar 2020", "12.01.2020"),
-    ("den 5 desember 1998", "05.12.1998"),
+    ("Vedtaksdato: 12.03.2021", "2021-03-12"),
+    ("dato 3/1/2020 gjelder", "2020-01-03"),
+    ("mottatt 2019-11-05 hos NAV", "2019-11-05"),
+    ("Oslo, 12. januar 2020", "2020-01-12"),
+    ("den 5 desember 1998", "1998-12-05"),
 ])
 def test_finn_dato_alle_formater(tekst, forventet):
     assert finn_dato(tekst) == forventet
@@ -174,7 +174,7 @@ def test_utvid_beholder_modellens_navn():
     resultat = utvid_entiteter(tekst, {"navn": "Kari Nordmann"})
     assert resultat["navn"] == "Kari Nordmann"          # modellen vinner for navn
     assert resultat["fodselsnummer"] == GYLDIG_FNR       # deterministisk fyller
-    assert resultat["dato"] == "01.02.2020"
+    assert resultat["dato"] == "2020-02-01"
 
 
 def test_utvid_overstyrer_ugyldig_modell_ytelse():
@@ -201,7 +201,7 @@ def test_utvid_alle_nye_felter_samtidig():
     r = utvid_entiteter(tekst, {})
     assert r["fodselsnummer"] == GYLDIG_FNR
     assert r["kontonummer"] == GYLDIG_KONTO
-    assert r["dato"] == "15.03.2023"
+    assert r["dato"] == "2023-03-15"
     assert r["belop"] == 18500.0
     assert r["saksnummer"] == "22/9876"
     assert r["kontornavn"] == "NAV Sagene"

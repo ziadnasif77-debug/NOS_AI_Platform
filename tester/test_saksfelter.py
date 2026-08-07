@@ -162,8 +162,8 @@ def test_arsinntekt_og_manedslonn_holdes_fra_hverandre():
 
 def test_arbeidsforholdets_datoer():
     felter = arbeid_felter("Ansatt fra: 01.03.2020\nSluttdato: 31.12.2025")
-    assert felter["startdato"] == "01.03.2020"
-    assert felter["sluttdato"] == "31.12.2025"
+    assert felter["startdato"] == "2020-03-01"
+    assert felter["sluttdato"] == "2025-12-31"
 
 
 # ------------------------------------------------------------------ #

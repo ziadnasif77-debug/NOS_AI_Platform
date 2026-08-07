@@ -94,8 +94,8 @@ def _merket_belop(tekst: str, etiketter: str):
 
 
 def _merket_dato(tekst: str, etiketter: str):
-    """Datoen som står rett etter en etikett, normalisert til
-    dd.mm.åååå av den vanlige datoparseren."""
+    """Datoen som står rett etter en etikett, normalisert til ISO 8601
+    av den vanlige datoparseren."""
     treff = re.search(
         r"(?:" + etiketter + r")" + _ORDSLUTT + _BINDEORD
         + r"\s*[:.\-]?\s*([0-9]{1,2}[.\-/ ][0-9]{1,2}"

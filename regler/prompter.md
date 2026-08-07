@@ -180,7 +180,7 @@ Tall og koder funnet i dokumentet, med kontekst — plasser hver kode i feltet k
 [[/fyll_skjema.koder_overskrift]]
 
 [[fyll_skjema.datoer_overskrift]]
-Datoer funnet i dokumentet (normalisert til dd.mm.åååå, med hva hver av dem er) — bruk en av disse ORDRETT i datofelter:
+Datoer funnet i dokumentet (skrevet på norsk form dd.mm.åååå fordi de skal inn i et norsk skjema, med hva hver av dem er) — bruk en av disse ORDRETT i datofelter:
 [[/fyll_skjema.datoer_overskrift]]
 
 [[fyll_skjema.identifikatorer_overskrift]]
@@ -194,5 +194,5 @@ Identifikatorer som er KONTROLLERT av kode (sjekksum/format) — bruk disse i fe
 tilbake til nøyaktig den ordlyden som ga det.
 
 [[versjon]]
-p10
+p11
 [[/versjon]]

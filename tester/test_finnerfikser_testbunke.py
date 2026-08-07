@@ -169,8 +169,8 @@ def test_total_kr_paa_egen_linje_uendret():
 # ------------------------------------------------------------------ #
 
 def test_forfallsdato_fra_faktura():
-    assert finn_forfallsdato("Forfallsdato 24.06.2026") == "24.06.2026"
-    assert finn_forfallsdato("Betalingsfrist: 01.07.2026") == "01.07.2026"
+    assert finn_forfallsdato("Forfallsdato 24.06.2026") == "2026-06-24"
+    assert finn_forfallsdato("Betalingsfrist: 01.07.2026") == "2026-07-01"
 
 
 def test_forfallsdato_er_med_i_felteruttrekket():
@@ -178,7 +178,7 @@ def test_forfallsdato_er_med_i_felteruttrekket():
              "Forfallsdato 24.06.2026\n"
              "KID: 1002345678911")
     felter = utvid_entiteter(tekst, {})
-    assert felter["forfallsdato"] == "24.06.2026"
+    assert felter["forfallsdato"] == "2026-06-24"
     assert felter["totalbelop"] == 4812.0
 
 

@@ -19,9 +19,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from delt.dokumentprofil import (bygg_profil, finn_dokument_eier,
                                  gjelder_periode, koder_med_sider,
-                                 stempeldatoer, til_iso)
+                                 stempeldatoer)
 from delt.tekstuttrekk import (finn_dokumentdato, klassifiser_datoer,
-                               sett_dato_roller, strukturert_uttrekk)
+                               sett_dato_roller, strukturert_uttrekk,
+                               til_norsk)
 from syntetiske_nummer import lag_fnr
 
 EIER = lag_fnr(0)
@@ -149,10 +150,17 @@ def test_dokumentets_alder_folger_med():
     assert "dager" in profil["dokument"]["alder"]
 
 
-def test_til_iso_konverterer_og_gir_null_paa_soppel():
-    assert til_iso("17.05.2024") == "2024-05-17"
-    assert til_iso("ikke en dato") is None
-    assert til_iso(None) is None
+def test_til_norsk_renderer_og_gir_null_paa_soppel():
+    """Her sto `til_iso` — oversetteren FRA norsk form TIL ISO. Den er
+    borte fordi det ikke lenger finnes en norsk form å oversette fra:
+    `tekstuttrekk.iso()` normaliserer én gang, ved uttrekket (R133).
+
+    `til_norsk` går motsatt vei og lever videre, men bare som RENDERER
+    på én kant — utfylling av norske skjemafelter. Den skal aldri
+    brukes til å bygge et felt i svaret."""
+    assert til_norsk("2024-05-17") == "17.05.2024"
+    assert til_norsk("ikke en dato") is None
+    assert til_norsk(None) is None
 
 
 # ------------------------------------------------------------------ #

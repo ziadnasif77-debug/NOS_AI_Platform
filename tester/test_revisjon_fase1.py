@@ -145,16 +145,16 @@ def test_periode_betyr_det_samme_i_profil_og_mal():
     flat = felter_flatt(BUNKE_MED_PERIODE)
 
     assert profil["dokument"]["periode_start"] == "2026-04-02"
-    assert flat["periode_start"] == "02.04.2026"       # samme dato, norsk form
+    assert flat["periode_start"] == "2026-04-02"       # samme dato, norsk form
     assert profil["dokument"]["periode_slutt"] == "2026-04-17"
-    assert flat["periode_slutt"] == "17.04.2026"
+    assert flat["periode_slutt"] == "2026-04-17"
 
 
 def test_bunkespennet_har_fatt_sine_egne_navn():
     """Spennet forsvant ikke — det heter noe annet nå, som det skal."""
     flat = felter_flatt(BUNKE_MED_PERIODE)
-    assert flat["dokumentspenn_fra"] == "01.08.2019"
-    assert flat["dokumentspenn_til"] == "30.09.2026"
+    assert flat["dokumentspenn_fra"] == "2019-08-01"
+    assert flat["dokumentspenn_til"] == "2026-09-30"
     assert flat["dokumentspenn_fra"] != flat["periode_start"]
 
 
@@ -183,7 +183,7 @@ def test_dokumentdatoen_regnes_av_HELE_lista():
     datoen», eller «si at det ikke står i dokumentet» hvis den mangler."""
     tekst = _mange_datoer_med_vedtak_bakerst()
     hele = finn_dokumentdato(sett_dato_roller(klassifiser_datoer(tekst)))
-    assert hele["dato"] == "28.05.2026"
+    assert hele["dato"] == "2026-05-28"
     assert hele["type"] == "vedtaksdato"
 
     avkortet = finn_dokumentdato(
