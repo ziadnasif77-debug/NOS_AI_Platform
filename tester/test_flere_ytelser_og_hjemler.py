@@ -42,10 +42,13 @@ def test_begge_ytelsene_kommer_med():
     som tok slutt. Med ett felt forsvant den.
 
     Begge står med NAVs offisielle temakode (R127) — det er den formen
-    en robot ruter på."""
+    en robot ruter på — OG med sin egen betegnelse (R134), som er den
+    et menneske ruter på når to ytelser deler tema."""
     assert _profil()["ytelser"] == [
-        {"kode": "AAP", "term": "Arbeidsavklaringspenger"},
-        {"kode": "SYK", "term": "Sykepenger"},
+        {"navn": {"kode": "AAP", "term": "Arbeidsavklaringspenger"},
+         "betegnelse": "Arbeidsavklaringspenger"},
+        {"navn": {"kode": "SYK", "term": "Sykepenger"},
+         "betegnelse": "Sykepenger"},
     ]
 
 
@@ -59,11 +62,15 @@ def test_entallsfeltet_ligger_alltid_i_lista():
     """Et speil med samme krav som de øvrige: sier de to feltene ulike
     ting, er dupliseringen blitt en motsigelse.
 
-    HELE paret sammenlignes, ikke bare koden: temakodene er mange-til-én
-    (uføretrygd og uførepensjon er begge UFO), så en kodesammenligning
-    ville godtatt at entallsfeltet og lista pekte på ulike ytelser."""
+    HELE oppføringen sammenlignes, ikke bare koden: temakodene er
+    mange-til-én (uføretrygd og uførepensjon er begge UFO), så en
+    kodesammenligning ville godtatt at entallsfeltet og lista pekte på
+    ulike ytelser. Etter R134 holder det ikke å sammenligne `navn`
+    heller — pleiepenger og omsorgspenger har IDENTISK `navn`, og bare
+    `betegnelse` skiller dem."""
     profil = _profil()
-    assert profil["ytelse"]["navn"] in profil["ytelser"]
+    assert {"navn": profil["ytelse"]["navn"],
+            "betegnelse": profil["ytelse"]["betegnelse"]} in profil["ytelser"]
 
 
 def test_entallsfeltet_er_den_mest_spesifikke_ikke_den_forste():

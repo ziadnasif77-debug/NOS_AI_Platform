@@ -443,25 +443,54 @@ def ytelse_kodet(navn) -> dict:
     truffet både kapittel 8 og 9 og vært flertydig) og til å finne siden
     ordet står på i `opphav`. Koden går ut, ordet blir igjen.
 
-    Tre utfall, og de betyr tre ulike ting:
+    `term` beskriver ALLTID `kode` — aldri noe annet (R134). Tidligere
+    betydde feltet to ting avhengig av dataene: temaets navn når det
+    fantes en kode, og den SPESIFIKKE ytelsens navn når det ikke gjorde
+    det. Et felt hvis betydning varierer med innholdet kan en klient
+    ikke lese uten å kjenne innholdet først.
 
-        {"kode": "SYK", "term": "Sykepenger"}   ytelse funnet og kodet
-        {"kode": None,  "term": "Arbeids…"}     funnet, koden mangler HOS OSS
-        {"kode": None,  "term": None}           ingen ytelse funnet
-
-    Den midterste er ikke en feil: NAVs temakodeliste er levert
-    stykkevis, og en ytelse vi kjenner igjen i teksten kan mangle kode
-    her. Å skjule det bak `term: null` ville sagt at vi ikke fant noe —
-    og en klient som ruter på ytelse ville sluppet dokumentet i gulvet
-    uten å vite at det skjedde (R127)."""
+    Hvilken ytelse dokumentet faktisk navngir, står i `betegnelse()` —
+    et eget felt, fordi det er en egen opplysning. Temakoden er BEVISST
+    mange-til-én (`uforepensjon` og `uforetrygd` er begge UFO), så
+    temanavnet kan umulig også bære den."""
     if not navn:
         return {"kode": None, "term": None}
     tema = YTELSE_TEMA.get(navn)
-    if tema:
-        return {"kode": tema, "term": NAV_TEMA.get(tema, tema)}
-    # Kjent ytelse uten temakode ennå — eller et navn vi ikke har i
-    # kartet i det hele tatt. Begge skal vise seg som en fylt term.
-    return {"kode": None, "term": YTELSE_TERM.get(navn, str(navn))}
+    if not tema:
+        # Kjent ytelse uten temakode ennå: NAVs liste er levert
+        # stykkevis. `betegnelse` er fylt, koden tom — og de to sammen
+        # skiller «forsto ytelsen, mangler koden» fra «fant ingen
+        # ytelse» uten å måtte lyve om hva `term` beskriver (R127).
+        return {"kode": None, "term": None}
+    return {"kode": tema, "term": NAV_TEMA.get(tema, tema)}
+
+
+def ytelse_betegnelse(navn):
+    """Ytelsen slik den heter — ikke temaet den rutes under.
+
+    Målt: 16 av våre 25 ytelser deler tema med en annen, og fikk derfor
+    en annen betegnelse enn dokumentets egen. To av dem var direkte
+    gale, ikke bare upresise:
+
+      · `uforepensjon` (1966-loven) ble meldt som «Uføretrygd» — en
+        ytelse som ikke fantes før 1997 — SAMTIDIG som svaret sa
+        `gjeldende_lov: ftrl-1966`. Svaret motsa seg selv.
+      · `etterlattepensjon` ble meldt som «Omstillingsstønad», som kom
+        i 2024. Et dokument fra 1970-tallet fikk altså navnet på en
+        ytelse som ennå ikke er femti år yngre enn det selv.
+
+    De tre kapittel 9-ytelsene delte betegnelsen «Omsorgspenger,
+    pleiepenger og opplæringspenger», så et vedtak om pleiepenger ikke
+    kunne skilles fra ett om opplæringspenger — ulike vilkår, ulike
+    paragrafer.
+
+    Betegnelsen bærer de historiske merkene fra `YTELSE_TERM`
+    («(1966-loven; i dag uføretrygd)»), som er nettopp det en
+    saksbehandler trenger for ikke å lese et gammelt vedtak som om det
+    gjaldt dagens regelverk."""
+    if not navn:
+        return None
+    return YTELSE_TERM.get(navn, str(navn))
 
 
 def rolle_for_type(dtype) -> str:

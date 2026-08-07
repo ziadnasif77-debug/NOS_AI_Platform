@@ -21,7 +21,8 @@ from delt.tekstuttrekk import (DOKUMENTTYPE_TERM, ROLLE_BEHANDLING,
                                finn_alle_fodselsnummer, finn_alle_ytelser,
                                finn_lovhenvisninger, fodselsdato_av_fnr,
                                gjelder_periode as _gjelder_periode,
-                               kodeverk, rolle_for_type, ytelse_kodet)
+                               kodeverk, rolle_for_type, ytelse_betegnelse,
+                               ytelse_kodet)
 
 # ------------------------------------------------------------------ #
 #  Datoer                                                             #
@@ -873,10 +874,17 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             # interne norske ord — det er den andre NAV-systemer og en
             # RPA-robot kan rute på (R127).
             "navn": ytelse_kodet(s_dok.get("ytelse") or None),
+            # Hvilken ytelse dokumentet FAKTISK navngir. Temakoden er
+            # mange-til-én, så «navn.term» kan ikke bære dette: en
+            # klient som bare fikk OMS kunne ikke skille et vedtak om
+            # pleiepenger fra ett om opplæringspenger (R134).
+            "betegnelse": ytelse_betegnelse(s_dok.get("ytelse") or None),
             # Det norske ordet, internt. Understrek = ute av svaret
             # (_profilform fjerner det), men «opphav» trenger det for å
             # finne siden ordet FAKTISK står på: et søk etter «SYK»
-            # ville enten bommet eller truffet inne i «sykemelding».
+            # ville enten bommet eller truffet inne i «sykemelding», og
+            # «betegnelse» er heller ikke ordet i teksten («Uførepensjon
+            # (1966-loven; i dag uføretrygd)» står ingen steder).
             "_ord": s_dok.get("ytelse") or None,
             "type": None,
             "utfall": None,
@@ -961,19 +969,23 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             _seksjon[_sti[1]] = _med_forbehold(_seksjon[_sti[1]],
                                                dekning_sider)
 
-    # Temakodene er BEVISST mange-til-én (uføretrygd og uførepensjon er
-    # begge UFO; de tre kapittel 9-ytelsene er alle OMS). Uten avduping
-    # ville et brev som nevner både pleiepenger og omsorgspenger fått
-    # OMS to ganger i lista — samme tema listet opp som om det var to.
-    # Rekkefølgen (første forekomst) beholdes.
+    # Avdupingen skjer på YTELSEN, ikke på temaet (R134). Temakodene er
+    # bevisst mange-til-én, så en nøkkel på (kode, term) slo sammen alt
+    # som delte tema: målt ble et brev om «omsorgspenger, pleiepenger og
+    # opplæringspenger» til ÉN oppføring. Lista heter «ytelser» og
+    # skulle telle ytelser — den talte temaer, under et navn som sa noe
+    # annet. To mentions av samme ytelse er fortsatt én oppføring, og
+    # rekkefølgen (første forekomst) beholdes.
     profil["ytelser"] = []
     _sett = set()
     for _navn in finn_alle_ytelser(tekst):
-        _par = ytelse_kodet(_navn)
-        _nokkel = (_par["kode"], _par["term"])
-        if _nokkel not in _sett:
-            _sett.add(_nokkel)
-            profil["ytelser"].append(_par)
+        if _navn in _sett:
+            continue
+        _sett.add(_navn)
+        profil["ytelser"].append({
+            "navn": ytelse_kodet(_navn),
+            "betegnelse": ytelse_betegnelse(_navn),
+        })
 
     # «hjemmel» sier hvilken lov som GJALDT. «hjemler» sier hvilke
     # bestemmelser dokumentet SELV viser til — to ulike spørsmål. Et

@@ -2850,12 +2850,24 @@ def _skjemaer() -> dict:
                                      "LOV som gjaldt avgjøres likevel av "
                                      "dokumentdatoen, ikke av koden, så et "
                                      "1994-vedtak får fortsatt ftrl-1966. "
-                                     "Temakodelista er levert stykkevis: "
-                                     "«kode: null» MED fylt «term» betyr "
-                                     "at ytelsen ble funnet, men at vi ikke "
-                                     "har koden ennå — noe helt annet enn "
-                                     "at begge er null, som betyr at ingen "
-                                     "ytelse ble funnet"},
+                                     "«term» beskriver ALLTID «kode» — "
+                                     "hvilken ytelse dokumentet navngir "
+                                     "står i «betegnelse», fordi et "
+                                     "mange-til-én-tema umulig kan bære "
+                                     "den. Er koden ukjent for oss, er "
+                                     "BEGGE null og «betegnelse» fylt"},
+                        "betegnelse": s(
+                            nullable=True, example="Pleiepenger",
+                            description=(
+                                "Ytelsen slik den heter, ikke temaet den "
+                                "rutes under. Nødvendig fordi 16 av 25 "
+                                "ytelser deler tema med en annen: med bare "
+                                "«OMS» kunne et vedtak om pleiepenger ikke "
+                                "skilles fra ett om opplæringspenger. "
+                                "Bærer også de historiske merkene — "
+                                "«Uførepensjon (1966-loven; i dag "
+                                "uføretrygd)» — så et gammelt vedtak ikke "
+                                "leses som om det gjaldt dagens regelverk")),
                         "type": s(nullable=True),
                         "utfall": s(nullable=True,
                                     description="innvilget/avslatt/endret/"
@@ -2874,7 +2886,11 @@ def _skjemaer() -> dict:
                                                 "«dekning»"),
                         "navn_kodet": {**ref("Kodet"), "nullable": True}}},
                 "ytelser": {
-                    "type": "array", "items": ref("Kodet"),
+                    "type": "array",
+                    "items": {"type": "object", "properties": {
+                        "navn": {**ref("Kodet"), "nullable": True},
+                        "betegnelse": s(nullable=True,
+                                        example="Pleiepenger")}},
                     "description": (
                         "ALLE ytelsene dokumentet nevner, i den "
                         "rekkefølgen de står. «ytelse» over er den mest "
@@ -2883,8 +2899,12 @@ def _skjemaer() -> dict:
                         "første. Ett navn tapte informasjon: et "
                         "AAP-vedtak viser nesten alltid til "
                         "sykepengeperioden som tok slutt. Lista er "
-                        "avdupet på TEMAKODE: pleiepenger og "
-                        "omsorgspenger er begge «OMS» og står én gang")},
+                        "avdupet på YTELSEN, ikke på temakoden: "
+                        "pleiepenger og omsorgspenger er begge «OMS», "
+                        "men er to ulike ytelser med hver sin paragraf "
+                        "og står derfor hver for seg. Avdupet på "
+                        "temakode ble et brev om alle tre "
+                        "kapittel 9-ytelsene til ÉN oppføring")},
                 "hjemler": {
                     "type": "array", "items": ref("Hjemmel"),
                     "description": (

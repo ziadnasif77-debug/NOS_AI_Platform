@@ -134,6 +134,7 @@
   "/visuelt/stempel_sider",
   "/ytelse",
   "/ytelse/_ord",
+  "/ytelse/betegnelse",
   "/ytelse/gyldig_fra",
   "/ytelse/gyldig_til",
   "/ytelse/navn",
@@ -143,7 +144,9 @@
   "/ytelse/type",
   "/ytelse/utfall",
   "/ytelser",
-  "/ytelser[]/kode",
-  "/ytelser[]/term"
+  "/ytelser[]/betegnelse",
+  "/ytelser[]/navn",
+  "/ytelser[]/navn/kode",
+  "/ytelser[]/navn/term"
  ]
 }

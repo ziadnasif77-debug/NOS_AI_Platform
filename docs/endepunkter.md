@@ -281,12 +281,22 @@ stedet for når noe brekker. Se
             "referanse": null, "sakstype": null},
 
   // «kode» er NAVs offisielle TEMAKODE — det andre NAV-systemer ruter
-  // på (R127). Mangler koden hos oss ennå, står den som null MED fylt
-  // term: {"kode": null, "term": "Arbeidsavklaringspenger"}. Det er
-  // noe annet enn at begge er null, som betyr «fant ingen ytelse».
+  // på (R127) — og «term» beskriver ALLTID koden. Hvilken ytelse
+  // dokumentet navngir står i «betegnelse» (R134): temakoden er
+  // mange-til-én, så pleiepenger og opplæringspenger deler «OMS» og
+  // kan bare skilles der. Betegnelsen bærer også de historiske
+  // merkene — «Uførepensjon (1966-loven; i dag uføretrygd)».
+  // Mangler temakoden hos oss ennå: begge null i «navn», betegnelsen
+  // fylt. Betegnelsen null OG koden null = fant ingen ytelse.
   "ytelse": {"navn": {"kode": "DAG", "term": "Dagpenger"},
+             "betegnelse": "Dagpenger",
              "type": null, "utfall": null,
              "gyldig_fra": null, "gyldig_til": null, "status": null},
+
+  // avdupet på YTELSEN, ikke på temaet: et brev om alle tre
+  // kapittel 9-ytelsene gir tre oppføringer med samme «OMS»-kode
+  "ytelser": [{"navn": {"kode": "DAG", "term": "Dagpenger"},
+               "betegnelse": "Dagpenger"}],
 
   "dekning": {"ytelse": "delvis", "sakstype": "ikke_evaluert",
               "signatur_sider": "ikke_evaluert",
