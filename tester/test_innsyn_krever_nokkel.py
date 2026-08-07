@@ -60,7 +60,10 @@ def test_innsyn_uten_nokkel_gir_401(med_nokkel, monkeypatch):
 def test_innsyn_med_riktig_nokkel_gir_data(med_nokkel, monkeypatch):
     monkeypatch.setitem(api._innsyn_okter, "abc123", {
         "status": "ferdig", "hendelser": [],
-        "resultat": {"tekst": "dokumentinnhold"}, "feil": None})
+        "resultat": {"tekst": "dokumentinnhold"}, "feil": None,
+        # Oekta maa eies av klienten som ber om den. Uten «eier» er den
+        # utilgjengelig for ALLE — se test_okt_uten_eier_er_stengt.
+        "eier": api.ELDRE})
     h, fanget = _handler(nokkel_header=med_nokkel)
     h._do_get_intern()
     assert fanget["kode"] == 200
@@ -104,3 +107,109 @@ def test_innsyn_tar_kapasitetsplass():
     kilde = inspect.getsource(api.Handler._innsyn)
     assert "_kapasitet_port.ta(" in kilde
     assert "_kapasitet_port.slipp()" in kilde
+
+
+# ------------------------------------------------------------------ #
+#  Eierskap: en GYLDIG nøkkel er ikke det samme som SAMME nøkkel       #
+# ------------------------------------------------------------------ #
+
+def test_annen_klient_faar_ikke_lese_okta(monkeypatch):
+    """Hullet: sjekken spurte om nøkkelen var GYLDIG, ikke om den var
+    den SAMME. Med navngitte nøkler kunne enhver autentisert klient lese
+    enhver annens innsyn_id — og økta bærer hele dokumentteksten og
+    sidebilder i base64.
+
+    404, ikke 403: en fremmed skal ikke få vite at id-en finnes."""
+    monkeypatch.setattr(api, "API_NOKKEL", "")
+    monkeypatch.setattr(api, "API_NOKLER",
+                        {"robot-a": "noekkel-a-lang-nok-for-vakten-1234",
+                         "robot-b": "noekkel-b-lang-nok-for-vakten-1234"})
+    monkeypatch.setitem(api._innsyn_okter, "abc123", {
+        "status": "ferdig", "hendelser": [],
+        "resultat": {"tekst": "HEMMELIG DOKUMENTINNHOLD"},
+        "feil": None, "eier": "robot-a"})
+
+    h, fanget = _handler(nokkel_header="noekkel-b-lang-nok-for-vakten-1234")
+    h._do_get_intern()
+    assert fanget["kode"] == 404, "en annen klient skal ikke få lese økta"
+    assert "HEMMELIG" not in str(fanget["kropp"])
+
+
+def test_eieren_selv_faar_lese(monkeypatch):
+    """Speilet — uten det ville en stengt dør vært «riktig» for alle."""
+    monkeypatch.setattr(api, "API_NOKKEL", "")
+    monkeypatch.setattr(api, "API_NOKLER",
+                        {"robot-a": "noekkel-a-lang-nok-for-vakten-1234"})
+    monkeypatch.setitem(api._innsyn_okter, "abc123", {
+        "status": "ferdig", "hendelser": [],
+        "resultat": {"tekst": "mitt eget dokument"},
+        "feil": None, "eier": "robot-a"})
+
+    h, fanget = _handler(nokkel_header="noekkel-a-lang-nok-for-vakten-1234")
+    h._do_get_intern()
+    assert fanget["kode"] == 200
+    assert fanget["kropp"]["resultat"]["tekst"] == "mitt eget dokument"
+
+
+def test_okt_uten_eier_er_stengt(med_nokkel, monkeypatch):
+    """En økt uten registrert eier er utilgjengelig for alle.
+
+    Øktene lever bare i minnet og dør med prosessen, så det finnes ingen
+    «gamle» økter å ta hensyn til. Da er streng dør riktig: å slippe
+    gjennom en eierløs økt ville gjenåpnet hullet for enhver som klarte
+    å legge inn en."""
+    monkeypatch.setitem(api._innsyn_okter, "abc123", {
+        "status": "ferdig", "hendelser": [],
+        "resultat": {"tekst": "HEMMELIG"}, "feil": None})
+    h, fanget = _handler(nokkel_header=med_nokkel)
+    h._do_get_intern()
+    assert fanget["kode"] == 404
+
+
+def test_ok_folger_operasjonen_ikke_oppslaget(med_nokkel, monkeypatch):
+    """`ok` sto True selv når `status: "feil"`. En robot som ruter på
+    `ok` — slik hver annen rute i dette API-et inviterer til — leste en
+    mislykket dokumentlesing som en suksess."""
+    monkeypatch.setitem(api._innsyn_okter, "abc123", {
+        "status": "feil", "hendelser": [], "resultat": None,
+        "feil": "Lesingen feilet", "eier": api.ELDRE})
+    h, fanget = _handler(nokkel_header=med_nokkel)
+    h._do_get_intern()
+    assert fanget["kode"] == 200, "oppslaget lyktes — det er ikke 404"
+    assert fanget["kropp"]["ok"] is False, "men lesingen gjorde ikke"
+    assert fanget["kropp"]["feil"]
+
+
+# ------------------------------------------------------------------ #
+#  Levetid: økta bærer dokumentteksten og skal ikke ligge for evig     #
+# ------------------------------------------------------------------ #
+
+def test_utlopte_okter_ryddes(monkeypatch):
+    """Den eneste oppryddingen var «behold de 6 nyeste», og den kjørte
+    BARE når noen opprettet en ny økt. Sluttet opplastingen, ble seks
+    dokumenter liggende i minnet resten av prosessens levetid. `start`
+    ble registrert, men aldri lest."""
+    import time as _t
+    monkeypatch.setattr(api, "_innsyn_okter", {})
+    monkeypatch.setattr(api, "INNSYN_LEVETID_S", 60)
+    api._innsyn_okter["gammel"] = {"start": _t.time() - 3600,
+                                   "status": "ferdig", "hendelser": []}
+    api._innsyn_okter["fersk"] = {"start": _t.time(),
+                                  "status": "ferdig", "hendelser": []}
+    api._rydd_innsyn()
+    assert "gammel" not in api._innsyn_okter
+    assert "fersk" in api._innsyn_okter
+
+
+def test_antallsgrensen_gjelder_fortsatt(monkeypatch):
+    """Tid FØRST, antall etterpå — men begge må virke."""
+    import time as _t
+    monkeypatch.setattr(api, "_innsyn_okter", {})
+    monkeypatch.setattr(api, "INNSYN_LEVETID_S", 9999)
+    monkeypatch.setattr(api, "INNSYN_MAKS_OKTER", 3)
+    for i in range(6):
+        api._innsyn_okter[f"okt{i}"] = {"start": _t.time(),
+                                        "status": "ferdig", "hendelser": []}
+    api._rydd_innsyn()
+    assert len(api._innsyn_okter) == 3
+    assert "okt5" in api._innsyn_okter, "de NYESTE skal beholdes"

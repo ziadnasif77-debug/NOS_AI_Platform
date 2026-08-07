@@ -114,7 +114,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
 # å endre. Se delt/prompter.py for hvorfor.
 from delt import prompter
 from delt.dokumentprofil import bygg_profil
-from delt.klienter import (AAPEN, MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
+from delt.klienter import (AAPEN, ELDRE,
+                           MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
                            finn_klient, gjenbrukte_nokler, les_nokler,
                            svake_nokler)
 from delt.opphav import (NIVAAER, bygg_opphav, opphav_for_skjema,
@@ -4026,7 +4027,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._svar(401, {
                     "ok": False,
                     "feil": "Ugyldig eller manglende X-API-Key"})
-            okt = _innsyn_okter.get(sti.split("/")[2])
+            with _innsyn_las:
+                _rydd_innsyn()
+                okt = _innsyn_okter.get(sti.split("/")[2])
+            # Nøkkelen er GYLDIG — men er den den SAMME? Uten dette
+            # kunne enhver autentisert klient lese enhver annens økt, og
+            # økta bærer hele dokumentteksten og sidebilder. 404, ikke
+            # 403: en fremmed skal ikke få vite at id-en finnes.
+            if okt is not None and okt.get("eier") != getattr(
+                    self, "_klient_id", None):
+                okt = None
             if okt is None:
                 return self._svar(404, {"ok": False, "feil": "Ukjent innsyn_id"})
             try:
@@ -4037,7 +4047,12 @@ class Handler(BaseHTTPRequestHandler):
                 fra = 0
             hendelser = okt["hendelser"]
             return self._svar(200, {
-                "ok": True, "status": okt["status"],
+                # «ok» fulgte ikke operasjonen: den sto True selv når
+                # `status: "feil"`. En robot som ruter på `ok` — slik
+                # hver annen rute i dette API-et inviterer til — leste en
+                # mislykket dokumentlesing som en suksess.
+                "ok": okt["status"] != "feil",
+                "status": okt["status"],
                 "hendelser": hendelser[fra:], "neste": len(hendelser),
                 "resultat": okt["resultat"] if okt["status"] == "ferdig" else None,
                 "feil": okt.get("feil")})
@@ -4268,12 +4283,17 @@ class Handler(BaseHTTPRequestHandler):
                 "opptatt": True, "kapasitet": kap,
             }, hoder={"Retry-After": "30"})
         okt_id = uuid.uuid4().hex[:12]
+        # «eier» er klienten som OPPRETTET økta. Uten den sjekket
+        # oppslaget bare at nøkkelen var GYLDIG, ikke at den var den
+        # SAMME — så med navngitte nøkler kunne enhver autentisert
+        # klient lese enhver annens innsyn_id. Og økta bærer hele
+        # dokumentteksten og sidebilder i base64.
         okt = {"status": "pågår", "hendelser": [], "resultat": None,
-               "start": time.time()}
+               "start": time.time(),
+               "eier": getattr(self, "_klient_id", None)}
         with _innsyn_las:
             _innsyn_okter[okt_id] = okt
-            while len(_innsyn_okter) > 6:      # eldste økter ryddes
-                _innsyn_okter.pop(next(iter(_innsyn_okter)))
+            _rydd_innsyn()
 
         def _arbeid_med_plass():
             try:
@@ -5533,12 +5553,30 @@ class Handler(BaseHTTPRequestHandler):
                 with _jobb_las:
                     tidligere = _idempotens.get(idem)
                 if tidligere and tidligere in _jobber:
+                    # SAMME SVAR SOM FØRSTE KALL, ikke hele jobbposten.
+                    #
+                    # To feil i én: replay ga 200 med 19 nøkler der
+                    # opprettelsen gir 202 med 5, og de to feltene en
+                    # robot trenger for å fortsette (`fremdrift`,
+                    # `sporsmal_senere`) manglet i replayen.
+                    #
+                    # Og verre: posten inneholder `tekst` — hele
+                    # dokumentet. `GET /jobb/<id>` fjerner den med vilje
+                    # (`k != "tekst"`); denne veien gjorde det ikke. En
+                    # Idempotency-Key finnes nettopp fordi roboten
+                    # PRØVER PÅ NYTT ved nettverksbrudd, så dette er den
+                    # normale situasjonen, ikke unntaket.
                     with _jobb_las:
-                        vis = {k: v for k, v in _jobber[tidligere].items()
-                               if not k.startswith("_")}
-                    vis["ok"] = True
-                    vis["idempotent_gjenbruk"] = True
-                    return self._svar(200, vis)
+                        j = _jobber[tidligere]
+                        status, versjon = j.get("status"), j.get("versjon")
+                    return self._svar(202, {
+                        "ok": True, "jobb_id": tidligere,
+                        "status": status,
+                        "versjon": versjon,
+                        "idempotent_gjenbruk": True,
+                        "fremdrift": f"GET /jobb/{tidligere}",
+                        "sporsmal_senere": (
+                            f"POST /spor med jobb_id={tidligere}")})
             jobb_id = uuid.uuid4().hex[:12]
             # Alle feltene arbeidstråden senere fyller, forhåndsdeklareres
             # her — da endrer den bare VERDIER (aldri dict-størrelse), så
@@ -5572,8 +5610,16 @@ class Handler(BaseHTTPRequestHandler):
                         _idempotens.pop(next(iter(_idempotens)))
             return self._svar(202, {
                 "ok": True, "jobb_id": jobb_id, "status": jobb["status"],
+                # `versjon` var ikke med — men den optimistiske låsingen
+                # på /jobb/<id>/avbryt KREVER den, og OpenAPI påsto at
+                # 202-svaret bar den. En klient måtte gjøre en ekstra GET
+                # bare for å kunne avbryte trygt.
+                "versjon": jobb["versjon"],
+                # Alltid til stede, så replay og opprettelse har samme
+                # nøkkelsett (R118).
+                "idempotent_gjenbruk": False,
                 "fremdrift": f"GET /jobb/{jobb_id}",
-                "sporsmal_senere": f"POST /spor med felter jobb_id={jobb_id} og sporsmal",
+                "sporsmal_senere": f"POST /spor med jobb_id={jobb_id}",
             })
 
         # ---- /spor: fil + spørsmål → svar fra Borealis ----
@@ -5780,6 +5826,30 @@ class Handler(BaseHTTPRequestHandler):
 # ------------------------------------------------------------------ #
 _innsyn_okter = {}
 _innsyn_las = threading.Lock()
+
+# Hvor lenge en innsynsøkt får ligge i minnet. Økta bærer HELE
+# dokumentteksten, per-region OCR-tekst og sidebilder i base64 —
+# målt til ~290 000 tegn for ett sidebilde.
+#
+# Den eneste oppryddingen var «behold de 6 nyeste», og den kjørte BARE
+# når noen opprettet en ny økt. Sluttet opplastingen, ble seks
+# dokumenter liggende i minnet resten av prosessens levetid. `start` ble
+# registrert, men aldri lest.
+INNSYN_LEVETID_S = int(os.environ.get("INNSYN_LEVETID_S", "1800"))
+INNSYN_MAKS_OKTER = int(os.environ.get("INNSYN_MAKS_OKTER", "6"))
+
+
+def _rydd_innsyn():
+    """Fjerner utløpte økter. Kalles med `_innsyn_las` holdt.
+
+    Tid FØRST, antall etterpå: en tidsgrense virker også når ingen
+    laster opp noe nytt, og det var nettopp det hullet."""
+    naa = time.time()
+    for okt_id in [i for i, o in _innsyn_okter.items()
+                   if naa - (o.get("start") or naa) > INNSYN_LEVETID_S]:
+        _innsyn_okter.pop(okt_id, None)
+    while len(_innsyn_okter) > INNSYN_MAKS_OKTER:
+        _innsyn_okter.pop(next(iter(_innsyn_okter)))
 
 
 def _bilde_til_b64(bilde_np, maks_bredde: int = 900):
