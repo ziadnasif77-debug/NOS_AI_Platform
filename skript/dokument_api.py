@@ -172,6 +172,23 @@ CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "").strip()
 # skraping/misbruk på et eksponert endepunkt). 0 = av. Bak en tunnel/gateway
 # er socket-IP-en localhost, så den videresendte klient-IP-en brukes.
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
+# Hvor lenge klienten skal vente etter en 429. Vinduet er ett minutt, så
+# 60 s er alltid nok — og det står i Retry-After, ikke bare som «vent
+# litt» i prosa. En robot kan følge et tall; den kan ikke følge en
+# oppfordring.
+RATE_RETRY_S = int(os.environ.get("RATE_RETRY_S", "60"))
+
+# Content-Type-er som godtas som RÅ bytes i kroppen, uten multipart.
+# Alt annet gir 415. Tidligere ble ALT som ikke var multipart tolket som
+# rå PDF — så feil Content-Type ga «Ugyldig/korrupt PDF» om en helt
+# gyldig fil, og pekte utvikleren mot dokumentet i stedet for headeren.
+# `application/octet-stream` er med fordi mange klienter sender den når
+# de ikke vet typen.
+_RAA_TYPER = {
+    "application/pdf", "application/octet-stream",
+    "image/jpeg", "image/png", "image/tiff", "image/bmp", "image/webp",
+    "text/plain", "text/csv",
+}
 
 # --- Samtidighetsvakt -------------------------------------------------
 # OCR og språkmodellen deler ETT skjermkort og serialiseres uansett på
@@ -514,22 +531,35 @@ _PROBLEM_TITLER = {
     400: ("ugyldig-input", "Ugyldig input"),
     401: ("unauthorized", "Unauthorized"),
     404: ("ikke-funnet", "Ikke funnet"),
+    405: ("metode-ikke-tillatt", "Metoden er ikke tillatt"),
     409: ("konflikt", "Konflikt"),
     413: ("for-stor", "For stor forespørsel"),
+    415: ("ustottet-medietype", "Content-Type støttes ikke"),
     429: ("for-mange-kall", "For mange kall"),
     503: ("utilgjengelig", "Tjenesten er opptatt"),
     500: ("intern-feil", "Intern feil"),
 }
 
+# Feil som deler statuskode, men som klienten skal handle ULIKT på.
+# `problem.type` er det maskinlesbare «hva» — deler to feil den, må
+# klienten lese fritekst for å skille dem, og fritekst er ikke en
+# kontrakt. De to 409-ene er nettopp et slikt par: en VERSJONSKONFLIKT
+# løses ved å hente på nytt og prøve igjen, mens «jobben er allerede
+# ferdig» aldri blir bedre av å prøve igjen.
+PROBLEM_VERSJONSKONFLIKT = "versjonskonflikt"
+PROBLEM_UGYLDIG_TILSTAND = "ugyldig-tilstand"
 
-def _problem_detaljer(kode, detalj, korrelasjon, sti=None, felter_feil=None):
+
+def _problem_detaljer(kode, detalj, korrelasjon, sti=None, felter_feil=None,
+                      slug=None):
     """Bygger et RFC 9457-objekt {type, title, status, detail, traceId,
     (errors)}. traceId = korrelasjons-ID-en, så ett oppslag kobler
     problemet til logglinjen. `felter_feil` er en valgfri liste
     {pointer, message, (value)} som forteller HVILKET felt som er galt —
     slik NAV Oppgave-APIet gjør, i stedet for bare «ugyldig input»."""
     kode = kode.value if hasattr(kode, "value") else kode
-    slug, tittel = _PROBLEM_TITLER.get(kode, ("feil", "Feil"))
+    standard_slug, tittel = _PROBLEM_TITLER.get(kode, ("feil", "Feil"))
+    slug = slug or standard_slug
     problem = {
         "type": f"{PROBLEM_BASIS}/{slug}",
         "title": tittel,
@@ -3807,10 +3837,14 @@ class Handler(BaseHTTPRequestHandler):
         ikke."""
         if _rate_tillatt(self._klient_ip()):
             return True
+        # «Vent litt» er ikke en instruks en robot kan følge. Begge
+        # 503-veiene sender Retry-After; 429 gjorde det ikke, så en
+        # klient måtte gjette — og gjetter typisk for kort.
         self._svar(429, {"ok": False,
                          "feil": f"For mange forespørsler (grense "
                                  f"{RATE_LIMIT_PER_MIN}/min per klient). "
-                                 "Vent litt og prøv igjen."})
+                                 f"Prøv igjen om {RATE_RETRY_S} sekunder."},
+                   hoder={"Retry-After": str(RATE_RETRY_S)})
         return False
 
     def _cors_origin(self):
@@ -3885,7 +3919,11 @@ class Handler(BaseHTTPRequestHandler):
                 if "problem" not in data:
                     data["problem"] = _problem_detaljer(
                         kode, data.get("feil"), korr, self._sti(),
-                        data.pop("felter_feil", None))
+                        data.pop("felter_feil", None),
+                        # Feilstedet kan be om en mer presis type enn
+                        # statuskoden gir. To 409-er som betyr ulike ting
+                        # skal ikke dele «konflikt».
+                        data.pop("problem_slug", None))
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         # gzip når klienten sier den tåler det. Målt på et vanlig
         # /dokument-svar: 33 424 → 6 422 byte (−80,8 %). Innrykket alene
@@ -3938,6 +3976,29 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    # Metodene serveren IKKE støtter. Uten disse svarte
+    # BaseHTTPRequestHandler «501 Unsupported method» i HTML — uten
+    # `ok`, uten `feil`, uten `uuid`, og uten X-Correlation-ID-header.
+    # Loggraden fikk `korrelasjon: null, ms: 0`, så en operatør kunne
+    # ikke korrelere en 501 i det hele tatt. Og `HEAD /hjelp` som
+    # helsesjekk — det mest nærliggende en overvåker gjør — fikk HTML.
+    #
+    # 405 er dessuten riktigere enn 501: stien FINNES, det er metoden
+    # som ikke er tillatt. `Allow` sier hvilke som er det.
+    def _metode_ikke_tillatt(self):
+        self._t0_req = time.time()
+        self._svar(405, {
+            "ok": False,
+            "feil": (f"Metoden {self.command} støttes ikke. Bruk GET eller "
+                     f"POST — se GET /hjelp for endepunktene."),
+        }, hoder={"Allow": "GET, POST, OPTIONS"})
+
+    do_PUT = _metode_ikke_tillatt
+    do_DELETE = _metode_ikke_tillatt
+    do_PATCH = _metode_ikke_tillatt
+    do_HEAD = _metode_ikke_tillatt
+    do_TRACE = _metode_ikke_tillatt
 
     def do_OPTIONS(self):
         self._t0_req = time.time()
@@ -5365,6 +5426,11 @@ class Handler(BaseHTTPRequestHandler):
                     "feil": (f"Versjonskonflikt: du sendte versjon {forventet}, "
                              f"men jobben er nå versjon {jobb.get('versjon')} "
                              f"(status {jobb.get('status')}). Hent på nytt."),
+                    # Egen type: dette LØSES ved å hente på nytt og
+                    # prøve igjen. Delte den «konflikt» med tilfellet
+                    # under, måtte klienten lese fritekst for å vite om
+                    # det nyttet — og fritekst er ikke en kontrakt.
+                    "problem_slug": PROBLEM_VERSJONSKONFLIKT,
                     "jobb_id": jid, "versjon": jobb.get("versjon"),
                     "status": jobb.get("status")})
             if jobb.get("status") in ("kø", "pågår"):
@@ -5375,6 +5441,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(409, {
                 "ok": False,
                 "feil": f"Jobben er allerede {jobb.get('status')}",
+                # Denne blir ALDRI bedre av å prøve igjen.
+                "problem_slug": PROBLEM_UGYLDIG_TILSTAND,
                 "jobb_id": jid, "versjon": jobb.get("versjon"),
                 "status": jobb.get("status")})
 
@@ -5434,9 +5502,23 @@ class Handler(BaseHTTPRequestHandler):
         tekstfelter = {}
         if "multipart/form-data" in ct:
             filnavn, data, tekstfelter = _parse_multipart(body, ct)
-        else:
+        elif not ct or ct.split(";")[0].strip().lower() in _RAA_TYPER:
             # tillat òg rå PDF-bytes i body (Content-Type: application/pdf)
             filnavn, data = "opplastet.pdf", body
+        else:
+            # 415, IKKE «korrupt PDF». Alt som ikke var multipart ble
+            # tidligere tolket som rå PDF-bytes — så en UiPath-utvikler
+            # som satte `application/json` fikk «Ugyldig/korrupt PDF:
+            # Failed to open stream» om en helt gyldig PDF, og lette
+            # etter feil i filen sin. Feilmeldingen pekte på feil sted.
+            return self._svar(415, {
+                "ok": False,
+                "feil": (f"Content-Type {ct.split(';')[0].strip()!r} støttes "
+                         f"ikke. Bruk multipart/form-data (felt 'fil'), "
+                         f"eller send rå bytes med en av: "
+                         f"{', '.join(sorted(_RAA_TYPER))}."),
+                "felter_feil": [{"pointer": "/Content-Type",
+                                 "message": "multipart/form-data forventet"}]})
 
         # Omvendt feltnavn stoppes for ALLE ruter, ikke bare de fire som
         # hadde vakten fra før. Sjekken står her fordi det er det ene
