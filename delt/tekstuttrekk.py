@@ -1646,6 +1646,26 @@ def _opptattindeks(tekst: str):
     return starter, maks_slutt
 
 
+# Skilletegnene som kan stå INNE i et tall uten å gjøre det til et annet
+# tall (R145). Mønsteret godtok bare mellomrom og punktum, og da fant
+# sladdingen ALDRI et fødselsnummer skrevet på to av de vanligste måtene:
+#
+#   010190-10046      bindestrek — standard norsk skrivemåte
+#   010190\n10046     linjeskift — skjer hele tiden i ombrukket/OCR-lest tekst
+#
+# Målt før fiksen: 4 av 12 skrivemåter LEKKET gjennom /sladd. Det er ikke
+# en målefeil, det er personopplysninger som blir stående.
+#
+# Sjekksummen er fortsatt porten: et tilfeldig sammenslått tall må
+# bestå mod11 for å bli sladdet, akkurat som før. Vi utvider hva som
+# LESES som ett tall, ikke hva som regnes som bevist.
+_SKILLETEGN = r"[ .\-‐-―]"        # mellomrom, punktum, bindestreker
+_TALLKANDIDAT = re.compile(
+    r"(?<!\d)\d(?:(?:" + _SKILLETEGN + r"|\r?\n[ \t]*)?\d)+(?!\d)")
+# Det samme settet, til å strippe kandidaten ned til rene siffer.
+_SKILLETEGN_VEKK = re.compile(_SKILLETEGN + r"|\s")
+
+
 def _tallkandidater_med_posisjon(tekst: str, lengde: int):
     """Som _tallkandidater, men yielder (kompakt, start, slutt) — samme
     mønster og samme dato-/beløpsvakt, slik at sladding og feltuttrekk
@@ -1660,11 +1680,14 @@ def _tallkandidater_med_posisjon(tekst: str, lengde: int):
     # det maksimale sluttpunktet så langt) rekker forbi kandidatens
     # start. Samme svar, O(log n) per kandidat.
     starter, maks_slutt = _opptattindeks(tekst)
-    for treff in re.finditer(r"(?<!\d)\d(?:[ .]?\d)+(?!\d)", tekst):
+    for treff in re.finditer(_TALLKANDIDAT, tekst):
         i = bisect.bisect_left(starter, treff.end())
         if i and maks_slutt[i - 1] > treff.start():
             continue
-        kompakt = re.sub(r"[ .]", "", treff.group(0))
+        # Samme sett som mønsteret godtok — ellers ville en bindestrek
+        # blitt stående i «kompakt», lengden blitt feil, og nummeret
+        # falt ut igjen rett etter at vi nettopp fant det.
+        kompakt = _SKILLETEGN_VEKK.sub("", treff.group(0))
         if len(kompakt) == lengde:
             yield kompakt, treff.start(), treff.end()
 
