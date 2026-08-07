@@ -132,15 +132,33 @@ def kjor_ett(fasit: dict) -> dict:
     data = svar.json()
 
     bestatt, feilet = [], []
+    # R146: TRE utfall, ikke to. «Feltet mangler» og «feltet er galt» er
+    # ikke samme feil:
+    #
+    #   mangler  →  saksbehandleren SER tomrommet og fyller det selv
+    #   galt     →  saksbehandleren ser en verdi og bygger et vedtak
+    #               på den
+    #
+    # Slått sammen i én «feilet»-bøtte kunne et korpus gå fra 10 tomme
+    # felter til 10 GALE verdier uten at tallet rørte seg. Utfallene
+    # skilles nå, og presisjon/recall regnes PER FELT — et snitt over
+    # `fodselsnummer` og `kontornavn` skjuler nettopp det som betyr noe.
+    utfall = []          # (feltsti, "riktig" | "mangler" | "galt")
 
     for sti_uttrykk, forventet in (fasit.get("felter") or {}).items():
         faktisk = hent_sti(data, sti_uttrykk)
         if sammenlign(forventet, faktisk):
             bestatt.append(sti_uttrykk)
+            utfall.append((sti_uttrykk, "riktig"))
+        elif faktisk is MANGLER or faktisk in (None, "", [], {}):
+            # Ikke uttrukket. Vi vet at verdien FINNES, for fasiten sier
+            # det — dette er et hull, ikke en påstand.
+            feilet.append("%s: MANGLER (ventet %r)" % (sti_uttrykk, forventet))
+            utfall.append((sti_uttrykk, "mangler"))
         else:
-            vist = "(mangler)" if faktisk is MANGLER else repr(faktisk)
-            feilet.append("%s: ventet %r, fikk %s"
-                          % (sti_uttrykk, forventet, vist))
+            feilet.append("%s: GALT — ventet %r, fikk %r"
+                          % (sti_uttrykk, forventet, faktisk))
+            utfall.append((sti_uttrykk, "galt"))
 
     # Delmengde-sjekk for lister: fasiten krever at verdiene FINNES, uten
     # å låse hele lista (rekkefølge/støy i OCR skal ikke felle en sjekk
@@ -156,9 +174,45 @@ def kjor_ett(fasit: dict) -> dict:
         for v in forventede:
             if v in faktisk:
                 bestatt.append("%s inneholder %r" % (sti_uttrykk, v))
+                utfall.append((sti_uttrykk, "riktig"))
             else:
-                feilet.append("%s mangler %r (fikk %r)"
+                # En verdi som skulle stått i lista og ikke gjør det, er
+                # et hull — ikke en gal påstand. De andre verdiene i
+                # lista kan godt være riktige.
+                feilet.append("%s MANGLER %r (fikk %r)"
                               % (sti_uttrykk, v, faktisk))
+                utfall.append((sti_uttrykk, "mangler"))
+
+    # ANTALL i stedet for verdier (R146). En fasit på GitHub kan ikke
+    # liste fødselsnummer og kontonummer: elleve siffer i en fil ser ut
+    # som et ekte nummer uansett hvor syntetisk det er ment å være, og
+    # den som leser repoet kjenner ikke opprinnelsen.
+    #
+    # Fasiten sa derfor `['12345678910', '12345678910']` — den
+    # dokumenterte plassholderen, TO ganger, for både fnr og konto. Den
+    # ble aldri fylt ut, og hver kjøring meldte fire manglende verdier
+    # for noe dokumentet aldri inneholdt. Det den EGENTLIG ville si var
+    # «bunken gjelder to personer, og begge skal finnes».
+    for sti_uttrykk, antall in (fasit.get("felter_antall") or {}).items():
+        faktisk = hent_sti(data, sti_uttrykk)
+        if not isinstance(faktisk, list):
+            vist = "(mangler)" if faktisk is MANGLER else repr(faktisk)
+            feilet.append("%s: ventet en liste med %d, fikk %s"
+                          % (sti_uttrykk, antall, vist))
+            utfall.append((sti_uttrykk, "mangler"))
+        elif len(faktisk) == antall:
+            bestatt.append("%s har %d" % (sti_uttrykk, antall))
+            utfall.append((sti_uttrykk, "riktig"))
+        elif len(faktisk) < antall:
+            feilet.append("%s: MANGLER — ventet %d, fant %d"
+                          % (sti_uttrykk, antall, len(faktisk)))
+            utfall.append((sti_uttrykk, "mangler"))
+        else:
+            # Flere enn ventet er en PÅSTAND for mye: noe er lest som en
+            # identifikator uten å være det.
+            feilet.append("%s: GALT — ventet %d, fant %d (%r)"
+                          % (sti_uttrykk, antall, len(faktisk), faktisk))
+            utfall.append((sti_uttrykk, "galt"))
 
     tekst = ""
     for kandidat in ("tekst", "raatekst"):
@@ -189,8 +243,36 @@ def kjor_ett(fasit: dict) -> dict:
     treg = tak is not None and brukt > tak
 
     return {"bestatt": bestatt, "feilet": feilet, "sekunder": brukt,
-            "treg": treg, "tak": tak,
+            "treg": treg, "tak": tak, "utfall": utfall,
             "svakheter": fasit.get("kjent_svakhet") or {}}
+
+
+def presisjon_og_recall(utfall) -> dict:
+    """{feltsti: {riktig, mangler, galt, presisjon, recall}} (R146).
+
+        presisjon = riktig / (riktig + galt)
+                    «når jeg svarer, hvor ofte har jeg rett?»
+        recall    = riktig / (riktig + galt + mangler)
+                    «hvor mye av det som fantes, fikk jeg tak i?»
+
+    Presisjon er `None` når feltet aldri ble besvart — «0 av 0 riktige»
+    er ikke 0 %, det er fravær av data. Å skrive 0.0 der ville felt et
+    felt vi ikke har målt.
+
+    Regnes PER FELT med vilje. `fodselsnummer` og `kontornavn` har helt
+    ulike risikoprofiler, og et snitt over dem forteller ingenting om
+    noen av dem."""
+    per_felt = {}
+    for sti_uttrykk, hva in utfall:
+        rad = per_felt.setdefault(sti_uttrykk,
+                                  {"riktig": 0, "mangler": 0, "galt": 0})
+        rad[hva] += 1
+    for rad in per_felt.values():
+        svart = rad["riktig"] + rad["galt"]
+        alt = svart + rad["mangler"]
+        rad["presisjon"] = (rad["riktig"] / svart) if svart else None
+        rad["recall"] = (rad["riktig"] / alt) if alt else None
+    return per_felt
 
 
 def main() -> int:
@@ -218,6 +300,7 @@ def main() -> int:
 
     sum_bestatt = sum_feilet = 0
     hoppet, svakheter = [], []
+    alle_utfall = []
 
     for navn, fasit in fasiter:
         res = kjor_ett(fasit)
@@ -232,6 +315,7 @@ def main() -> int:
         b, f = len(res["bestatt"]), len(res["feilet"])
         sum_bestatt += b
         sum_feilet += f
+        alle_utfall.extend(res.get("utfall") or [])
         merke = "OK " if f == 0 else "AVVIK"
         tid = "%.1fs" % res["sekunder"]
         if res["sekunder"] < 0.2:
@@ -250,6 +334,39 @@ def main() -> int:
     if total:
         print("  RESULTAT: %d av %d sjekker bestått (%.0f %%)"
               % (sum_bestatt, total, 100 * sum_bestatt / total))
+
+    # R146: presisjon/recall PER FELT. Den samlede prosenten over sier
+    # ingenting om HVILKEN feil vi har — og et korpus kan gå fra ti
+    # tomme felter til ti GALE verdier uten at tallet rører seg.
+    per_felt = presisjon_og_recall(alle_utfall)
+    if per_felt:
+        galt_totalt = sum(r["galt"] for r in per_felt.values())
+        mangler_totalt = sum(r["mangler"] for r in per_felt.values())
+        print("\n  UTFALL: %d riktige · %d MANGLER · %d GALE"
+              % (sum(r["riktig"] for r in per_felt.values()),
+                 mangler_totalt, galt_totalt))
+        print("          (et tomt felt fyller en saksbehandler selv —")
+        print("           en gal verdi bygger hen et vedtak på)")
+        print("\n  %-42s %6s %6s %5s %5s %5s"
+              % ("felt", "presis", "recall", "rett", "mngl", "galt"))
+        print("  " + "-" * 66)
+
+        def _sorter(rad):
+            # verst først: gale verdier, så manglende
+            return (-rad[1]["galt"], -rad[1]["mangler"], rad[0])
+
+        for sti_uttrykk, rad in sorted(per_felt.items(), key=_sorter):
+            p = "  —  " if rad["presisjon"] is None else "%5.2f" % rad["presisjon"]
+            r = "  —  " if rad["recall"] is None else "%5.2f" % rad["recall"]
+            merke = ""
+            if rad["galt"]:
+                merke = "  ← GALE VERDIER"
+            print("  %-42s %6s %6s %5d %5d %5d%s"
+                  % (sti_uttrykk[:42], p, r,
+                     rad["riktig"], rad["mangler"], rad["galt"], merke))
+        if galt_totalt:
+            print("\n  %d GALE VERDIER — det er den alvorlige kategorien."
+                  % galt_totalt)
     for linje in hoppet:
         print("  hoppet over: %s" % linje)
 

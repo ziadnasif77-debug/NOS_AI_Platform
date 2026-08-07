@@ -7,7 +7,7 @@
     "felter.felter.saksnummer": "4417820",
     "felter.felter.postnummer": "0607",
     "felter.felter.totalbelop": 4812.0,
-    "felter.felter.forfallsdato": "24.06.2026",
+    "felter.felter.forfallsdato": "2026-06-24",
     "felter.felter.kid": "1002345678911",
     "felter.felter.organisasjonsnummer": "889000007",
     "felter.dokumentdato.periode.flere_dokumenter": true,
@@ -17,14 +17,6 @@
     "strekkoder.1.side": 10
   },
   "felter_maa_inneholde": {
-    "struktur.identifikatorer.fodselsnummer": [
-      "12345678910",
-      "12345678910"
-    ],
-    "struktur.identifikatorer.kontonummer": [
-      "12345678910",
-      "12345678910"
-    ],
     "struktur.kontakt.telefoner": [
       "41288903"
     ]
@@ -42,5 +34,9 @@
     "checkbokser": "Avkryssingsbokser er ikke tekst og fanges ikke av OCR — «☒ Ja» kan bli lest som noe annet eller forsvinne. Egen boksdetektor er planlagt (docs/plan_nye_evner.md)."
   },
   "maks_sekunder": 120,
-  "merknad_dokumentdato": "Bunken inneholder 6+ daterte dokumenter — det finnes ikke ETT riktig dokumentdato-svar. Fasiten krever derfor at systemet deklarerer flere_dokumenter=true (med spenn og advarsel i svaret), i stedet for å låse en enkeltdato."
+  "merknad_dokumentdato": "Bunken inneholder 6+ daterte dokumenter — det finnes ikke ETT riktig dokumentdato-svar. Fasiten krever derfor at systemet deklarerer flere_dokumenter=true (med spenn og advarsel i svaret), i stedet for å låse en enkeltdato.",
+  "felter_antall": {
+    "struktur.identifikatorer.fodselsnummer": 2,
+    "struktur.identifikatorer.kontonummer": 2
+  }
 }
