@@ -48,6 +48,37 @@ def lag_fnr(nummer: int = 0) -> str:
     raise AssertionError(f"fant ikke gyldig test-fnr nr. {nummer}")
 
 
+def lag_fnr_fodt(dag: int, maaned: int, aar: int, nummer: int = 0) -> str:
+    """Et gyldig fødselsnummer med en BESTEMT fødselsdato.
+
+    `lag_fnr` hardkoder 01.01.1990, så alle numrene derfra har SAMME
+    fødselsdato. Det holder til å skille to personer, men ikke til å
+    vise hvem en avledet fødselsdato tilhører — da ser riktig og galt
+    svar likt ut, og testen beviser ingenting (R139).
+
+    Århundret velges av INDIVIDSIFRENE, ikke av årstallet. Regelen
+    speiles her — ikke importeres fra koden som testes — av samme grunn
+    som sjekksummene regnes ut i denne fila: ellers kunne en feil i
+    implementasjonen bekrefte seg selv gjennom testdataene."""
+    if 2000 <= aar <= 2039:
+        omraade = range(500, 1000)
+    elif 1900 <= aar <= 1999:
+        omraade = range(100, 500)
+    else:
+        raise AssertionError(
+            f"året {aar} dekkes ikke av den forenklede århundreregelen")
+    aa = aar % 100
+    funnet = []
+    for individ in omraade:
+        fnr = _fnr_fra(f"{dag:02d}{maaned:02d}{aa:02d}{individ:03d}")
+        if fnr:
+            funnet.append(fnr)
+            if len(funnet) > nummer:
+                return funnet[nummer]
+    raise AssertionError(
+        f"fant ikke gyldig test-fnr født {dag:02d}.{maaned:02d}.{aar}")
+
+
 def lag_kontonummer(nummer: int = 0) -> str:
     """Et gyldig kontonummer (11 siffer, mod11 på siste siffer) som IKKE
     også består fødselsnummerkontrollen — ellers ville testen ikke kunne

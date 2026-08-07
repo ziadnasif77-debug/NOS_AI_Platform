@@ -164,27 +164,35 @@ def til_norsk(dato_iso):
 
 
 def finn_dato(tekst: str):
-    """Første gyldige dato — numeriske formater og «12. januar 2020».
-    Normaliseres til ISO 8601 (se `iso`)."""
-    for treff in re.finditer(
-            r"(?<!\d)(\d{1,2})[./](\d{1,2})[./](\d{4})(?!\d)", tekst):
-        d, m, y = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
-        if _gyldig_dato(d, m, y):
-            return iso(d, m, y)
-    for treff in re.finditer(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)", tekst):
-        y, m, d = int(treff.group(1)), int(treff.group(2)), int(treff.group(3))
-        if _gyldig_dato(d, m, y):
-            return iso(d, m, y)
-    maaneder = "|".join(_MAANEDER)
-    for treff in re.finditer(
-        rf"(?<!\d)(\d{{1,2}})[.\s]+({maaneder})[.\s]+(\d{{4}})(?!\d)",
-        tekst, re.IGNORECASE
-    ):
-        d = int(treff.group(1))
-        m = _MAANEDER[treff.group(2).lower()]
-        y = int(treff.group(3))
-        if _gyldig_dato(d, m, y):
-            return iso(d, m, y)
+    """Første gyldige dato i teksten, som ISO 8601 (se `iso`).
+
+    R138: denne hadde sin EGEN kopi av datogrammatikken, og den var
+    strengt svakere enn `_alle_datotreff`. Målt på tolv skrivemåter
+    leste de to funksjonene fire ULIKT — alle fire til denne funksjonens
+    ugunst:
+
+        «12 March 2021»    engelske månedsnavn      → fant ingenting
+        «March 12, 2021»   engelsk, måned først     → fant ingenting
+        «12.03 . 2021»     OCR-mellomrom (R61)      → fant ingenting
+
+    Følgen var at samme dato, i samme dokument, ble funnet av ett felt
+    og MISTET av et annet — avhengig bare av hvilken kodevei som leste
+    den. `saksfelter._merket_dato` går hit, så `arbeid.startdato` og
+    `okonomi.utbetalingsdato` sto null på datoer resten av systemet
+    leste fint. R61-fiksene for OCR ble gjort i den ene grammatikken og
+    ikke i den andre — nettopp feilmåten to grammatikker har.
+
+    Nå deler de detektor. Én ting holdes bevisst utenfor: datoer med
+    TOSIFRET år, der århundret er antatt. `_alle_datotreff` merker dem
+    med `aar_antatt`, men denne funksjonen returnerer en bar streng, og
+    kallerne hennes (`okonomi.utbetalingsdato`, `arbeid.startdato`,
+    skjemautfyllingen) har ingen plass å si «århundret er gjettet». Å
+    slippe dem gjennom her ville gjort en gjetning om til et faktum på
+    veien ut. Det er et VALG, ikke en glipp — og det er den eneste
+    forskjellen som er igjen."""
+    for _, _, _, dato, aar_antatt in _alle_datotreff(tekst or ""):
+        if not aar_antatt:
+            return dato
     return None
 
 
@@ -1044,29 +1052,46 @@ def klassifiser_datoer(tekst: str, maks: int = 200) -> list:
             "aar_antatt": aar_antatt,
         })
 
-    # 5) Fødselsdato avledet fra gyldig fødselsnummer
-    fnr = finn_fodselsnummer(tekst)
-    if fnr:
+    # 5) Fødselsdato avledet fra gyldig fødselsnummer — ÉN per nummer.
+    #
+    # R139: her sto `finn_fodselsnummer(tekst)`, som gir det FØRSTE
+    # fnr-gyldige tallet i teksten. Nevner dokumentet flere personer,
+    # var det ofte ikke parten: målt på «Lege: <A>» over «Opplysninger
+    # om: Ola / Fodselsnummer: <B>» ga lista LEGENS fødselsdato, mens
+    # `part.fodselsdato` ga partens. To ulike fødselsdatoer i samme
+    # svar — og de øvrige personenes ble stilltiende droppet, uten at
+    # lista sa fra at den var avkortet.
+    #
+    # Hvem nummeret TILHØRER kan ikke avgjøres her: eier-etikettene bor
+    # i `dokumentprofil.finn_dokument_eier`, som importerer denne fila.
+    # Løsningen er derfor ikke å gjette bedre, men å slutte å velge:
+    # hver person får sin oppføring, og `raatekst` (de seks første
+    # sifrene, maskert) knytter hver av dem til sitt nummer.
+    for fnr in finn_alle_fodselsnummer(tekst):
         d, m, aar = fodselsdato_av_fnr(fnr) or (None, None, None)
-        if d and _gyldig_dato(d, m, aar):
-            resultater.append({
-                "dato": iso(d, m, aar),
-                "raatekst": fnr[:6] + "*****",
-                "type": "fodselsdato_fra_fnr",
-                "etikett": None,
-                "begrunnelse": ("avledet fra de seks første sifrene i et "
-                                "mod11-gyldig fødselsnummer "
-                                "(forenklet århundreregel)"),
-                "side": None,
-                "kontekst": "fødselsnummer i dokumentet (maskert)",
-                "i_lopende_tekst": False,
-                # Samme nøkler som hver andre oppføring (R119). Denne
-                # manglet «aar_antatt» — og den legges SIST, så en vakt
-                # som bare inspiserte listas FØRSTE element kunne aldri
-                # se det. Århundret er utledet av fødselsnummerets egen
-                # regel, ikke antatt av oss, så verdien er False.
-                "aar_antatt": False,
-            })
+        if not d or not _gyldig_dato(d, m, aar):
+            continue
+        resultater.append({
+            "dato": iso(d, m, aar),
+            "raatekst": fnr[:6] + "*****",
+            "type": "fodselsdato_fra_fnr",
+            "etikett": None,
+            "begrunnelse": ("avledet fra de seks første sifrene i et "
+                            "mod11-gyldig fødselsnummer (forenklet "
+                            "århundreregel). Sier IKKE hvem nummeret "
+                            "tilhører — dokumentets part står i "
+                            "«part.fodselsdato», de øvrige i "
+                            "«andre_fodselsnummer»"),
+            "side": None,
+            "kontekst": "fødselsnummer i dokumentet (maskert)",
+            "i_lopende_tekst": False,
+            # Samme nøkler som hver andre oppføring (R119). Denne
+            # manglet «aar_antatt» — og den legges SIST, så en vakt
+            # som bare inspiserte listas FØRSTE element kunne aldri
+            # se det. Århundret er utledet av fødselsnummerets egen
+            # regel, ikke antatt av oss, så verdien er False.
+            "aar_antatt": False,
+        })
     return resultater
 
 

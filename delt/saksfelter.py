@@ -93,15 +93,33 @@ def _merket_belop(tekst: str, etiketter: str):
     return None
 
 
+# Så mye tekst etter etiketten som en dato kan tenkes å oppta. Nok til
+# «12. desember 2026» med OCR-mellomrom, kort nok til at neste setnings
+# dato ikke sniker seg inn.
+_DATOROM = 32
+
+
 def _merket_dato(tekst: str, etiketter: str):
     """Datoen som står rett etter en etikett, normalisert til ISO 8601
-    av den vanlige datoparseren."""
+    av den vanlige datoparseren.
+
+    R138: her sto et TREDJE datomønster, som skulle fange datoen før
+    den ble sendt videre til parseren. Det var strengere enn parseren
+    selv, så den avgjorde i praksis hvilke former feltet forsto — og
+    den forsto færre. Målt sto `okonomi.utbetalingsdato` null på
+    «Utbetalingsdato: 25.03 . 2026» (OCR-mellomrom, som R61 nettopp
+    fikset i hoveddetektoren) fordi mønsteret her krevde siffer rett
+    etter skilletegnet.
+
+    Nå finner denne bare ETIKETTEN, og lar `finn_dato` lese det som
+    står etter. Det er den ene detektoren som avgjør hvilke skrivemåter
+    som forstås, og et OCR-fiks der virker med én gang overalt."""
     treff = re.search(
-        r"(?:" + etiketter + r")" + _ORDSLUTT + _BINDEORD
-        + r"\s*[:.\-]?\s*([0-9]{1,2}[.\-/ ][0-9]{1,2}"
-        r"[.\-/ ][0-9]{2,4}|[0-9]{1,2}\.?\s+\w+\s+[0-9]{4})",
+        r"(?:" + etiketter + r")" + _ORDSLUTT + _BINDEORD + r"\s*[:.\-]?\s*",
         tekst or "", re.IGNORECASE)
-    return finn_dato(treff.group(1)) if treff else None
+    if not treff:
+        return None
+    return finn_dato((tekst or "")[treff.end():treff.end() + _DATOROM])
 
 
 # ------------------------------------------------------------------ #
