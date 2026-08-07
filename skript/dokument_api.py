@@ -103,6 +103,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                finn_alle_organisasjonsnummer,
                                finn_alle_telefoner, finn_dato,
                                finn_dokumentdato, finn_koder_med_kontekst,
+                               finn_mistenkt_usladdet, finn_sladdeomraader,
                                felter_flatt, flett_mal,
                                identifikatortyper_i_mal, klassifiser_datoer,
                                refererte_felt, sett_dato_roller,
@@ -4512,6 +4513,28 @@ class Handler(BaseHTTPRequestHandler):
                 "sjekksumkontrollen ikke slår til, og et nummer kan bli "
                 "stående usladdet. Kontroller resultatet manuelt.")
 
+        # HULLET, GJORT MASKINLESBART.
+        #
+        # Målt: et dokument med fem MERKEDE identifikatorer der fire
+        # feilet sjekksummen ga `ok: true`, `advarsler: []` og et `funn`
+        # som bare listet de to som faktisk ble fjernet. Hvert
+        # maskinlesbart felt så like friskt ut som på et rent dokument.
+        # Eneste måte å oppdage lekkasjen på var å lese teksten selv —
+        # altså gjøre sladdingen om igjen for å kontrollere sladdingen.
+        #
+        # Advarselen om dette fantes, men lå bak `if ktx.ocr_brukt:`. På
+        # et tekstlags-PDF er ikke OCR årsaken — en skrivefeil eller et
+        # utenlandsk format er nok — og da kom det ingen advarsel i det
+        # hele tatt.
+        mistenkt = finn_mistenkt_usladdet(
+            ktx.tekst, finn_sladdeomraader(ktx.tekst, typer))
+        fullstendig = not mistenkt and not ktx.ocr_brukt
+        if mistenkt:
+            advarsler.append(
+                f"{len(mistenkt)} identifikator(er) står MERKET i "
+                f"dokumentet, men besto ikke kontrollsifferet og ble "
+                f"derfor IKKE sladdet — se «mistenkt_usladdet».")
+
         return self._svar(200, {
             "ok": True, "filnavn": filnavn,
             "sladdet_tekst": sladdet,
@@ -4519,6 +4542,15 @@ class Handler(BaseHTTPRequestHandler):
             "funn": [{"type": t, "antall": antall_per_type[t]}
                      for t in SLADD_TYPER if t in antall_per_type],
             "antall_sladdet": sum(antall_per_type.values()),
+            # «funn» teller hva som BLE FJERNET. Det sier ingenting om
+            # hva som ble MISSET — og forskjellen er hele poenget med
+            # de to feltene under.
+            "mistenkt_usladdet": mistenkt,
+            # Den ene boolen en robot kan rute på: false betyr «send
+            # dette til manuell kontroll». Den er false både når noe
+            # merket sto igjen, og når teksten kom fra OCR — der ett
+            # feillest siffer er nok til at kontrollen ikke slår til.
+            "sladding_fullstendig": fullstendig,
             "typer_valgt": typer or list(SLADD_TYPER),
             # Den FULLE lista over hva sladdingen ikke fjerner. Sto
             # tidligere bare «navn, adresser», og en klient som

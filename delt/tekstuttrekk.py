@@ -1658,6 +1658,74 @@ SLADD_TYPER = ("fodselsnummer", "kontonummer", "organisasjonsnummer",
                "kid", "telefon", "epost")
 
 
+# Etikett + tallet som følger. Brukes til å finne kandidater som er
+# TYDELIG merket, men som ikke består kontrollsifferet — og derfor blir
+# stående usladdet.
+_MERKEDE_KANDIDATER = (
+    ("kontonummer", r"(?i)\bkonto(?:nummer|nr\.?)?[.:\s]*"),
+    ("fodselsnummer",
+     r"(?i)\b(?:f(?:ø|oe?)dselsnummer|fnr|personnummer|d-?nummer)[.:\s]*"),
+    ("organisasjonsnummer",
+     r"(?i)\b(?:organisasjonsnummer|orgnr\.?|org\.?\s*nr\.?)[.:\s]*"),
+    ("kid", _KID_ETIKETT),
+)
+
+
+def finn_mistenkt_usladdet(tekst: str, omraader=None) -> list:
+    """Identifikatorer som er TYDELIG merket, men ikke ble sladdet.
+
+    Dette er hullet i sladdingen, gjort maskinlesbart. `sladd_tekst`
+    fjerner bare det den kan BEVISE — mod11 for fødselsnummer, konto og
+    orgnr, mod10/11 for KID. Består ikke kontrollsifferet, emitteres
+    ingen område, og etiketten ved siden av blir aldri konsultert.
+
+    Målt: et dokument med fem merkede identifikatorer der fire feilet
+    sjekksummen ga `ok: true`, `advarsler: []` og et `funn` som bare
+    listet de to som FAKTISK ble fjernet. Hvert maskinlesbart felt så
+    like friskt ut som på et rent dokument — den eneste måten å oppdage
+    lekkasjen på var å lese teksten selv, altså å gjøre sladdingen om
+    igjen.
+
+    Et treff her betyr ikke at nummeret er ekte: det kan være en
+    skrivefeil, et utenlandsk format, eller en OCR-feillesning. Men det
+    betyr at noe som SER ut som en identifikator står igjen — og det er
+    klienten som må avgjøre hva den gjør med det.
+
+    `omraader` er sladdeområdene som alt er funnet; treff som ligger
+    inne i dem er allerede fjernet og tas ikke med."""
+    sladdet = [(s, e) for s, e, _ in (omraader or [])]
+
+    def er_sladdet(start, slutt):
+        return any(s <= start and slutt <= e for s, e in sladdet)
+
+    ut = []
+    for type_, etikett in _MERKEDE_KANDIDATER:
+        for treff in re.finditer(etikett + r"((?:\d[ .-]?){4,30}\d)", tekst):
+            start, slutt = treff.start(1), treff.end(1)
+            if er_sladdet(start, slutt):
+                continue
+            kompakt = re.sub(r"[ .-]", "", treff.group(1))
+            gyldig = {
+                "kontonummer": er_gyldig_kontonummer,
+                "fodselsnummer": er_gyldig_fnr,
+                "organisasjonsnummer": er_gyldig_orgnr,
+                "kid": er_gyldig_kid,
+            }[type_]
+            if gyldig(kompakt):
+                continue          # gyldig og usladdet ⇒ typen var valgt bort
+            ut.append({
+                "type": type_,
+                "etikett": treff.group(0)[:len(treff.group(0))
+                                          - len(treff.group(1))].strip(),
+                "posisjon": start,
+                "lengde": len(kompakt),
+                "grunn": ("feil_lengde" if len(kompakt) not in (9, 11)
+                          and type_ != "kid" else "kontrollsiffer_feilet"),
+            })
+    ut.sort(key=lambda p: p["posisjon"])
+    return ut
+
+
 def finn_sladdeomraader(tekst: str, typer=None) -> list:
     """Tegnområder som skal sladdes: [(start, slutt, type), …], sortert
     og uten overlapp.
