@@ -3752,10 +3752,32 @@ hva som ble ignorert og hvilke felt endepunktet kjenner.</p>
 </div>
 """
 
+# Swagger UI leveres fra nav-mappa, ikke fra et CDN (R136, CLAUDE.md §1).
+# Filnavn → Content-Type. Lista er BÅDE hvitelista ruteren slår opp i og
+# fasiten for hva `skript/hent_swagger.py` skal legge på plass.
+_STATISKE_FILER = {
+    "swagger-ui.css": "text/css; charset=utf-8",
+    "swagger-ui-bundle.js": "application/javascript; charset=utf-8",
+}
+SWAGGERMAPPE = os.path.join(ROT, "data", "swagger")
+
+_SWAGGER_MANGLER = """
+<div class="veiledning"><section class="advarsel">
+<h2>Swagger UI er ikke hentet inn</h2>
+<p>Endepunktlista under vises av Swagger UI, og filene den trenger
+ligger ikke i <code>data/swagger/</code>. Hent dem én gang, fra
+nav-mappa:</p>
+<pre>python skript/hent_swagger.py</pre>
+<p>Veiledningen lenger ned på siden virker uansett — den er en del av
+denne siden og trenger ingenting utenfra. Det samme gjør
+<code>GET /openapi.json</code>, som er hele spesifikasjonen i maskinlesbar
+form.</p>
+</section></div>"""
+
 _SWAGGER_HTML = """<!DOCTYPE html>
 <html lang="no"><head><meta charset="utf-8">
 <title>NAV dokument-API — dokumentasjon</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+<link rel="stylesheet" href="/statisk/swagger-ui.css">
 <style>
 /* Følger Swagger UI sitt formspråk: samme bredde (.wrapper = 1460px),
    samme skriftstakk, samme kortflate med kant og skygge som
@@ -3800,10 +3822,17 @@ _SWAGGER_HTML = """<!DOCTYPE html>
 }
 </style>
 </head><body>
+__MANGLER__
 <div id="swagger-ui"></div>
 __VEILEDNING__
-<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script src="/statisk/swagger-ui-bundle.js"></script>
 <script>
+// Uten denne vakten kaster siden en ReferenceError i konsollen når
+// bundelen mangler, og en operatør ser en tom side uten forklaring —
+// nøyaktig det CDN-en gjorde på en server uten internett.
+if (typeof SwaggerUIBundle === "undefined") {
+  document.getElementById("swagger-ui").innerHTML = "";
+} else {
 // defaultModelsExpandDepth: 0 viser «Schemas»-seksjonen under endepunkt-
 // lista med hver modell sammenslått. -1 (som før) skjuler den helt — da
 // fantes svarmodellene bare i koden, og en integrator måtte kalle API-et
@@ -3819,8 +3848,27 @@ SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui",
                      k.click();
                    }
                  }});
+}
 </script>
 </body></html>""".replace("__VEILEDNING__", _ENDEPUNKTGUIDE_HTML)
+
+
+def _swagger_side() -> str:
+    """Dokumentasjonssiden, med et ÆRLIG varsel når Swagger UI mangler.
+
+    Før lastet siden stilark og bundel fra `cdn.jsdelivr.net`. På en
+    server uten utgående internett — som er hele poenget med at
+    prosjektet skal kunne kopieres til «en hvilken som helst server»
+    (CLAUDE.md §1) — forsvant da HELE endepunktlista, mens siden
+    fortsatt svarte 200. Det som manglet var det siden finnes for, og
+    ingenting sa fra.
+
+    Sjekken gjøres per forespørsel, ikke ved oppstart: da virker siden
+    med én gang etter at `hent_swagger.py` er kjørt, uten omstart."""
+    mangler = [n for n in _STATISKE_FILER
+               if not os.path.exists(os.path.join(SWAGGERMAPPE, n))]
+    return _SWAGGER_HTML.replace("__MANGLER__",
+                                 _SWAGGER_MANGLER if mangler else "")
 
 
 # ------------------------------------------------------------------ #
@@ -4025,6 +4073,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _statisk(self, filnavn: str):
+        """Serverer Swagger UI fra nav-mappa (R136).
+
+        `filnavn` kommer ALDRI fra klienten som en sti — ruteren slår
+        opp i `_STATISKE_FILER`, som er en fast liste på to navn. Da
+        finnes ikke stitraversering som feilklasse her; den er stengt
+        ved konstruksjon, ikke ved en sjekk noen kan glemme å skrive."""
+        sti = os.path.join(SWAGGERMAPPE, filnavn)
+        try:
+            with open(sti, "rb") as f:
+                innhold = f.read()
+        except OSError:
+            # 404 og ikke 500: fila mangler fordi ingen har hentet den,
+            # ikke fordi serveren er i stykker. Teksten sier hvordan.
+            return self._svar(404, {
+                "ok": False,
+                "feil": (f"«{filnavn}» er ikke hentet inn ennå. Kjør "
+                         f"«python skript/hent_swagger.py» i nav-mappa.")})
+        self.send_response(200)
+        self.send_header("Content-Type", _STATISKE_FILER[filnavn])
+        self.send_header("Content-Length", str(len(innhold)))
+        # Filene er låst til én versjon og endres bare av hentskriptet,
+        # så nettleseren kan trygt beholde dem. Uten dette lastes 1,4 MB
+        # på nytt hver gang noen åpner dokumentasjonen.
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(innhold)
+
     # Metodene serveren IKKE støtter. Uten disse svarte
     # BaseHTTPRequestHandler «501 Unsupported method» i HTML — uten
     # `ok`, uten `feil`, uten `uuid`, og uten X-Correlation-ID-header.
@@ -4172,7 +4248,15 @@ class Handler(BaseHTTPRequestHandler):
                 "resultat": okt["resultat"] if okt["status"] == "ferdig" else None,
                 "feil": okt.get("feil")})
         if sti in ("/dokumentasjon", "/docs"):
-            return self._html(_SWAGGER_HTML)
+            return self._html(_swagger_side())
+        if sti.startswith("/statisk/"):
+            navn = sti[len("/statisk/"):]
+            if navn in _STATISKE_FILER:
+                return self._statisk(navn)
+            return self._svar(404, {
+                "ok": False,
+                "feil": (f"Ukjent statisk fil «{navn}». Serveren leverer "
+                         f"bare: {', '.join(sorted(_STATISKE_FILER))}.")})
         if sti in ("", "/hjelp"):
             return self._svar(200, {
                 "tjeneste": "NAV dokument-API (generelt)",

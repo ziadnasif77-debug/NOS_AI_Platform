@@ -19,7 +19,15 @@ import dokument_api as api
 
 # Ruter som med vilje står utenfor spekken: selve dokumentasjonen og
 # spesifikasjonen. De beskriver API-et, de er ikke en del av det.
-UTENFOR_SPEKKEN = {"/openapi", "/dokumentasjon"}
+#
+# «/statisk/» hører i samme kategori og av samme grunn: den leverer
+# stilarket og JavaScript-bundelen som `/dokumentasjon` består av, etter
+# at de ble hentet inn fra et CDN til nav-mappa (R136). Å føre den opp i
+# spekken ville fortalt en integrator at det finnes et endepunkt å kalle
+# — det gjør det ikke. Lista over hva den leverer står i
+# `_STATISKE_FILER`, og test_portabilitet.py vokter både den og at ingen
+# side ber om noe fra en annen maskin.
+UTENFOR_SPEKKEN = {"/openapi", "/dokumentasjon", "/statisk/"}
 
 
 def _ruter_i_koden() -> set:

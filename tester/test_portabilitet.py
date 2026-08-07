@@ -200,3 +200,88 @@ def test_offline_flyten_bruker_prosjektmappa_ikke_brukerprofilen():
                 encoding="utf-8").read()
     assert 'ROT / ".EasyOCR"' in pakk, \
         "pakk_for_offline må lete i nav/.EasyOCR først"
+
+
+# ---------- ingenting hentes fra internett ved kjøring (R136) ----------
+def test_ingen_eksterne_ressurser_i_sidene_serveren_leverer():
+    """CLAUDE.md §1, den strengeste varianten: en side serveren sender
+    ut skal ikke be nettleseren hente noe fra en annen maskin.
+
+    Funnet: `/dokumentasjon` lastet stilark OG JavaScript-bundelen fra
+    `cdn.jsdelivr.net`. På en server uten utgående internett — som er
+    hele poenget med at mappa skal kunne kopieres «til en hvilken som
+    helst server» — forsvant HELE endepunktlista. Siden svarte 200, og
+    det som manglet var det siden finnes for.
+
+    Måles på det som FAKTISK sendes, ikke på kildekoden: en URL kan
+    settes sammen av biter, og da fanger ikke et grep i fila den."""
+    import re
+    import sys
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import dokument_api as api
+
+    sider = {"/dokumentasjon": api._swagger_side()}
+    ekstern = re.compile(r'(?:src|href)\s*=\s*["\']\s*(https?:)?//', re.I)
+    for navn, html in sider.items():
+        treff = ekstern.findall(html)
+        assert not treff, (
+            f"{navn} henter {len(treff)} ressurs(er) fra en annen maskin — "
+            f"på en server uten internett vises de ikke")
+
+
+def test_swagger_leveres_fra_nav_mappa():
+    import sys
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import dokument_api as api
+    assert api.SWAGGERMAPPE.startswith(ROT), api.SWAGGERMAPPE
+    assert set(api._STATISKE_FILER) == {"swagger-ui.css",
+                                        "swagger-ui-bundle.js"}
+    for navn in api._STATISKE_FILER:
+        assert f"/statisk/{navn}" in api._swagger_side()
+
+
+def test_siden_sier_fra_naar_swagger_mangler_i_stedet_for_aa_bli_tom():
+    """Det CDN-en ALDRI gjorde: si hva som mangler. Uten internett fikk
+    man en tom side og en ReferenceError i konsollen."""
+    import sys
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import dokument_api as api
+
+    ekte = api.SWAGGERMAPPE
+    api.SWAGGERMAPPE = os.path.join(ROT, "data", "finnes-ikke")
+    try:
+        side = api._swagger_side()
+    finally:
+        api.SWAGGERMAPPE = ekte
+    assert "Swagger UI er ikke hentet inn" in side
+    assert "python skript/hent_swagger.py" in side
+    # og guiden skal fortsatt være der — den trenger ingenting utenfra
+    assert "veiledning" in side
+
+
+def test_hentskriptet_skriver_bare_inne_i_nav():
+    import sys
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import hent_swagger
+    assert hent_swagger.MAPPE.startswith(ROT), hent_swagger.MAPPE
+    assert set(hent_swagger.FILER) == {"swagger-ui.css",
+                                       "swagger-ui-bundle.js"}
+    # låst versjon, ikke en bevegelig peker: to kopier av nav-mappa skal
+    # ikke kunne ende med ulik Swagger uten at noen har endret noe
+    assert hent_swagger.STANDARDVERSJON[0].isdigit()
+    assert "@5/" not in hent_swagger._url(hent_swagger.STANDARDVERSJON, "x")
+
+
+def test_den_statiske_ruta_har_ingen_sti_fra_klienten():
+    """Stitraversering er stengt ved KONSTRUKSJON: ruteren slår navnet
+    opp i en fast liste før den kaller `_statisk`, så det finnes ingen
+    vei fra en klientstreng til en filsti."""
+    import inspect
+    import sys
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import dokument_api as api
+    kilde = inspect.getsource(api.Handler._do_get_intern
+                              if hasattr(api.Handler, "_do_get_intern")
+                              else api.Handler.do_GET)
+    assert "_STATISKE_FILER" in kilde, (
+        "ruteren må sjekke navnet mot hvitelista FØR _statisk kalles")
