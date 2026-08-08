@@ -39,6 +39,9 @@ os.environ.setdefault("LABEL_STUDIO_BASE_DATA_DIR",
 os.environ.setdefault("PYTHONNOUSERSITE", "1")
 
 MINSTE_LENGDE = 8
+# Prefiks på svarlinja, så kalleren finner den blant
+# eventuelle biblioteksadvarsler.
+SVARMERKE = "SVAR: "
 
 
 def sett(e_post: str, passord: str) -> tuple:
@@ -49,10 +52,16 @@ def sett(e_post: str, passord: str) -> tuple:
         return False, (f"Passordet må være minst {MINSTE_LENGDE} tegn. "
                        f"Du skrev {len(passord)}.")
     try:
+        # Label Studios egne innstillinger importerer `core.…` som en
+        # TOPPNIVÅ-pakke, ikke som `label_studio.core.…`. Uten pakkens
+        # egen mappe på sys.path gir django.setup() «No module named
+        # core» — en feil som ser ut som en manglende installasjon, men
+        # bare er feil søkesti (R178).
         import django
-        os.environ.setdefault(
-            "DJANGO_SETTINGS_MODULE",
-            "label_studio.core.settings.label_studio")
+        import label_studio
+        sys.path.insert(0, label_studio.__path__[0])
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE",
+                              "core.settings.label_studio")
         django.setup()
         from django.contrib.auth import get_user_model
     except Exception as exc:                       # noqa: bred med vilje
@@ -95,7 +104,12 @@ def main() -> int:
     # ligge i en levende variabel resten av prosessens levetid.
     passord = "x" * len(passord)
     del passord
-    print(melding, file=sys.stdout if ok else sys.stderr)
+    # ALLTID pa stdout, med et fast merke (R178). Stderr er ikke vår
+    # alene: importerte biblioteker skriver advarsler dit — målt ble
+    # «RequestsDependencyWarning: urllib3 …» det første kontrollpanelet
+    # viste i feildialogen, mens den ekte grunnen lå under. Et merke gir
+    # kalleren en linje den kan plukke ut med sikkerhet.
+    print(SVARMERKE + melding)
     return 0 if ok else 1
 
 

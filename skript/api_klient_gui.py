@@ -1330,29 +1330,24 @@ class KontrollPanel:
         }
 
     def _nullstill_ls_passord(self):
-        """Åpner passordnullstilling for en Label Studio-bruker.
+        """Dialog for å bytte passord på en Label Studio-bruker.
 
-        PASSORDET GÅR ALDRI GJENNOM DENNE PROSESSEN. Panelet gjør bare
-        HVEM-delen: leser brukerlista fra basen og lar deg velge. Selve
-        HEMMELIGHETEN skrives inn i et eget konsollvindu, rett til Label
-        Studios egen `reset_password` som spør med `getpass`.
+        HVORDAN HEMMELIGHETEN HÅNDTERES
+        Feltene er `show="•"`, og verdien leses RETT fra widgeten med
+        `.get()` — ikke gjennom en `StringVar`, som ville lagt den i
+        Tcl-tolkerens variabeltabell der vi ikke kan slette den. Rett
+        etter bruk overskrives og tømmes feltene.
 
-        Det er et bevisst skille. Et passordfelt her ville lagt
-        hemmeligheten i denne prosessens minne, i Tkinters
-        strengvariabler og potensielt i en feilmelding — og GUI-et er
-        nettopp den delen som logger mest. Konsollveien har ingen av
-        delene: verdien går fra tastaturet rett inn i Django-hasheren,
-        aldri via kommandolinja (der den ville havnet i skallhistorikk
-        og i prosesslista for enhver som kjører `tasklist`)."""
-        import subprocess
+        Verdien sendes til `sett_ls_passord.py` gjennom en PIPE
+        (stdin). Aldri som argument: `--password <verdi>` ville stått i
+        prosesslista, synlig for enhver som kjører `tasklist` mens
+        kommandoen går, og i skallhistorikken. Aldri til en fil.
+
+        Underprosessen er nødvendig fordi passordet må hashes med
+        Djangos egen hasher for at Label Studio skal godta det — og å
+        laste Django inn i dette vinduet ville tatt sekunder og kunne
+        henge GUI-et."""
         import tkinter.messagebox as mb
-        import tkinter.simpledialog as sd
-
-        skript = PROSJEKT_ROT / "skript" / "nullstill_ls_passord.py"
-        if not skript.is_file():
-            mb.showerror("Mangler skript",
-                         f"Fant ikke {skript}")
-            return
 
         brukere = self._ls_brukere()
         if brukere is None:
@@ -1364,40 +1359,141 @@ class KontrollPanel:
                 "Er Label Studio startet minst én gang fra denne mappa?")
             return
 
-        if len(brukere) == 1:
-            bruker = brukere[0]
-        else:
-            bruker = sd.askstring(
-                "Nullstill passord",
-                "Hvilken bruker?\n\n" + "\n".join(f"  · {b}" for b in brukere),
-                initialvalue=brukere[0], parent=self.rot)
-            if not bruker:
-                return
-            bruker = bruker.strip()
-            if bruker not in brukere:
-                mb.showerror("Ukjent bruker",
-                             f"«{bruker}» finnes ikke i basen.")
-                return
+        vindu = tk.Toplevel(self.rot)
+        vindu.title("Bytt passord — Label Studio")
+        vindu.configure(bg=BG_HOVED)
+        vindu.resizable(False, False)
+        vindu.transient(self.rot)
+        vindu.grab_set()
 
-        # Eget konsollvindu: der, og BARE der, skrives passordet.
+        ramme = tk.Frame(vindu, bg=BG_HOVED)
+        ramme.pack(fill="both", expand=True, padx=16, pady=14)
+
+        tk.Label(ramme, text="Konto", bg=BG_HOVED, fg=FG_DEMPET,
+                 anchor="w", font=("Segoe UI", 9)).pack(fill="x")
+        valgt = tk.StringVar(value=brukere[0])
+        if len(brukere) == 1:
+            tk.Label(ramme, text=brukere[0], bg=BG_INNDATA, fg=FG_TEKST,
+                     anchor="w", padx=8, pady=5,
+                     font=("Segoe UI", 10)).pack(fill="x", pady=(2, 10))
+        else:
+            meny = tk.OptionMenu(ramme, valgt, *brukere)
+            meny.configure(bg=BG_INNDATA, fg=FG_TEKST, relief="flat",
+                           highlightthickness=0, anchor="w",
+                           activebackground=BG_KNAPP_AKTIV,
+                           activeforeground=FG_TEKST,
+                           font=("Segoe UI", 10))
+            meny["menu"].configure(bg=BG_INNDATA, fg=FG_TEKST,
+                                   activebackground=AKSENT,
+                                   activeforeground="white")
+            meny.pack(fill="x", pady=(2, 10))
+
+        def _passordfelt(merkelapp):
+            tk.Label(ramme, text=merkelapp, bg=BG_HOVED, fg=FG_DEMPET,
+                     anchor="w", font=("Segoe UI", 9)).pack(fill="x")
+            # INGEN textvariable: verdien skal bare finnes i widgeten,
+            # så den kan tømmes etterpå.
+            felt = tk.Entry(ramme, show="•", bg=BG_INNDATA,
+                            fg=FG_TEKST, insertbackground=FG_TEKST,
+                            relief="flat", highlightthickness=1,
+                            highlightbackground=BG_PANEL,
+                            highlightcolor=AKSENT, font=("Segoe UI", 11))
+            felt.pack(fill="x", ipady=4, pady=(2, 10))
+            return felt
+
+        felt_ny = _passordfelt("Nytt passord (minst 8 tegn)")
+        felt_bekreft = _passordfelt("Gjenta passordet")
+        felt_ny.focus_set()
+
+        status = tk.Label(ramme, text="", bg=BG_HOVED, fg=ROD,
+                          anchor="w", justify="left", wraplength=340,
+                          font=("Segoe UI", 9))
+        status.pack(fill="x", pady=(0, 8))
+
+        knapper = tk.Frame(ramme, bg=BG_HOVED)
+        knapper.pack(fill="x")
+
+        def _toem():
+            for f in (felt_ny, felt_bekreft):
+                f.delete(0, tk.END)
+
+        def _lukk():
+            _toem()
+            vindu.grab_release()
+            vindu.destroy()
+
+        def _lagre():
+            nytt = felt_ny.get()
+            bekreft = felt_bekreft.get()
+            if nytt != bekreft:
+                status.configure(text="De to passordene er ikke like.",
+                                 fg=ROD)
+                felt_bekreft.delete(0, tk.END)
+                felt_bekreft.focus_set()
+                return
+            if len(nytt) < 8:
+                status.configure(
+                    text=f"Passordet må være minst 8 tegn. Du skrev "
+                         f"{len(nytt)}.", fg=ROD)
+                return
+            status.configure(text="Lagrer …", fg=FG_DEMPET)
+            vindu.update_idletasks()
+            ok, melding = self._skriv_ls_passord(valgt.get(), nytt)
+            # Uansett utfall: tøm feltene med én gang.
+            nytt = bekreft = ""
+            _toem()
+            if ok:
+                _lukk()
+                mb.showinfo("Passordet er endret", melding)
+            else:
+                status.configure(text=melding, fg=ROD)
+                felt_ny.focus_set()
+
+        tk.Button(knapper, text="Lagre", command=_lagre, bg=GRONN,
+                  fg="white", activebackground=GRONN_AKTIV,
+                  activeforeground="white", relief="flat",
+                  highlightthickness=0, padx=18, pady=5,
+                  font=("Segoe UI", 10, "bold")).pack(side="right")
+        tema_knapp(knapper, "Avbryt", _lukk).pack(side="right", padx=(0, 8))
+
+        vindu.bind("<Return>", lambda _e: _lagre())
+        vindu.bind("<Escape>", lambda _e: _lukk())
+        vindu.protocol("WM_DELETE_WINDOW", _lukk)
+
+    def _skriv_ls_passord(self, e_post, passord):
+        """Sender passordet til settemodulen gjennom en PIPE.
+
+        Returnerer (ok, melding). Meldingen inneholder ALDRI passordet —
+        heller ikke ved feil, der det er lettest å la det slippe med."""
+        import subprocess
+
+        skript = PROSJEKT_ROT / "skript" / "sett_ls_passord.py"
+        if not skript.is_file():
+            return False, f"Fant ikke {skript}"
         try:
-            subprocess.Popen(
+            kjoring = subprocess.run(
                 [str(PROSJEKT_ROT / ".pyruntime" / "python.exe"),
-                 str(skript), bruker],
+                 str(skript), e_post],
                 cwd=str(PROSJEKT_ROT),
-                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+                input=passord + "\n",
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=120,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:
+            return False, ("Tidsavbrudd. Kjører Label Studio? Stopp den "
+                           "og prøv igjen.")
         except OSError as exc:
-            mb.showerror("Kunne ikke starte",
-                         f"{type(exc).__name__}: {exc}")
-            return
-        mb.showinfo(
-            "Skriv det nye passordet i konsollvinduet",
-            f"Bruker: {bruker}\n\n"
-            "Et konsollvindu er åpnet. Skriv det nye passordet der — "
-            "det vises ikke mens du skriver, og passerer aldri gjennom "
-            "kontrollpanelet.\n\n"
-            "Får du «database is locked»: stopp Label Studio først, "
-            "prøv igjen, og start den etterpå.")
+            return False, f"Kunne ikke starte: {type(exc).__name__}"
+        # Plukk svarlinja på merket. Stderr er full av biblioteks-
+        # advarsler («RequestsDependencyWarning: urllib3 …»), og de
+        # havnet i feildialogen mens den ekte grunnen lå under (R178).
+        for linje in (kjoring.stdout or "").splitlines():
+            if linje.startswith("SVAR: "):
+                return kjoring.returncode == 0, linje[len("SVAR: "):]
+        if kjoring.returncode == 0:
+            return True, "Passordet er endret."
+        return False, ("Ukjent feil ved lagring. Se "
+                       "data/logger for detaljer.")
 
     def _ls_brukere(self):
         """Brukerlista, lest direkte fra basen (kun lesing).
