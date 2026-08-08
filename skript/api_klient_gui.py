@@ -13,9 +13,8 @@ statusverdier og feilkoder er VERIFISERT mot serverkoden, ikke gjettet:
   - Dokument     POST /dokument       ETT kall med brytere (felter/struktur/
                                       svar/skjema/korriger) — leses én gang
   - Spør         POST /spor           fil og/eller spørsmål → svar
-  - Fyll skjema  POST /dokument  skjema_mal → utfylte felter
-  - Analyser     POST /dokument  felter=ja → deterministisk felt-/datoanalyse
-  - Uttrekk      POST /dokument  struktur=ja → strukturert uttrekk
+                                      Felter, struktur og skjemautfylling
+                                      er brytere HER — ikke egne faner (R181)
   - Storjobb     POST /jobb m.fl.     bakgrunnsbehandling av store skanninger,
                                       med automatisk statusoppfølging
   - Serverinfo   GET /hjelp, /openapi.json og lenke til /dokumentasjon
@@ -237,9 +236,6 @@ FANER = [
     ("dokument", "Dokument"),
     ("operasjoner", "Operasjoner"),
     ("spor", "Spør"),
-    ("fyll_skjema", "Fyll skjema"),
-    ("analyser", "Analyser"),
-    ("uttrekk", "Uttrekk"),
     ("jobb", "Storjobb"),
     ("info", "Serverinfo"),
 ]
@@ -579,20 +575,8 @@ class ApiKlient:
             ut[del_] = innhold
         return ut
 
-    def analyser(self, pdf_sti: Path):
-        """Det gamle /analyser: felter + datoer, deterministisk."""
-        return self._pakk_ut(
-            self.dokument_samlet(pdf_sti, {"felter": "ja"}), "felter")
-
-    def uttrekk(self, pdf_sti: Path):
-        """Det gamle /uttrekk: komplett strukturert JSON."""
-        return self._pakk_ut(
-            self.dokument_samlet(pdf_sti, {"struktur": "ja", "felter": "nei"}),
-            "struktur")
-
     def send_fil(self, endepunkt: str, pdf_sti: Path):
-        """Bare en fil inn. Brukes nå av /jobb; /analyser og /uttrekk har
-        egne metoder som går via /dokument."""
+        """Bare en fil inn. Brukes av /jobb."""
         with open(pdf_sti, "rb") as fil:
             return self._post(
                 endepunkt,
@@ -3361,9 +3345,6 @@ class DokumentKlientApp:
         self._bygg_dokument_fane(self._fane_rammer["dokument"])
         self._bygg_operasjoner_fane(self._fane_rammer["operasjoner"])
         self._bygg_spor_fane(self._fane_rammer["spor"])
-        self._bygg_fyll_skjema_fane(self._fane_rammer["fyll_skjema"])
-        self._bygg_analyser_fane(self._fane_rammer["analyser"])
-        self._bygg_uttrekk_fane(self._fane_rammer["uttrekk"])
         self._bygg_jobb_fane(self._fane_rammer["jobb"])
         self._bygg_info_fane(self._fane_rammer["info"])
 
@@ -4023,233 +4004,26 @@ class DokumentKlientApp:
             panel.sett_svar(data["feil"])
         else:
             panel.sett_svar("Serveren returnerte ikke noe svar.")
-
     # ======================================================================
-    # Fane: Fyll skjema — går via POST /dokument med skjema_mal.
-    # Ruta /fyll_skjema er FJERNET fra serveren (R157); navnet her er
-    # bare fanens (R180).
+    # FJERNET: fanene «Fyll skjema», «Analyser» og «Uttrekk» (R181)
+    #
+    # De gjorde nøyaktig det «Dokument»-fanen gjør med avkrysningsbokser,
+    # og gikk alle tre via POST /dokument internt — rutene /fyll_skjema,
+    # /analyser og /uttrekk ble fjernet fra serveren i R157.
+    #
+    # Navnene var det egentlige problemet: tre faner oppkalt etter dører
+    # som ikke finnes lærer en ny leser en modell serveren ikke har.
+    # Samme feilklasse som flytskjemaet hadde (R175).
+    #
+    # Alt de kunne, kan «Dokument»:
+    #     Analyser     -> kryss av «Felter + datoer»
+    #     Uttrekk      -> kryss av «Strukturert uttrekk»
+    #     Fyll skjema  -> kryss av «Fyll JSON-mal» + lim inn malen
+    #
+    # Og bedre: «Dokument» tar dem i ETT kall, så dokumentet leses én
+    # gang. De tre fanene tvang tre separate opplastinger av samme fil.
     # ======================================================================
-    def _bygg_fyll_skjema_fane(self, forelder):
-        pad = {"padx": 12, "pady": 6}
-        self.fyll_valgt_fil: str | None = None
 
-        filramme = tema_rammefelt(forelder, "Dokument å fylle fra (påkrevd)")
-        filramme.pack(fill="x", **pad)
-        filrad = tk.Frame(filramme, bg=BG_PANEL)
-        filrad.pack(fill="x", padx=8, pady=8)
-        self.fyll_fil_etikett = tk.Label(
-            filrad, text="Ingen fil valgt", fg=FG_DEMPET, bg=BG_PANEL, anchor="w"
-        )
-        self.fyll_fil_etikett.pack(side="left", fill="x", expand=True)
-        tema_knapp(
-            filrad, "Bla gjennom ...",
-            lambda: self._velg_fil_til(self.fyll_fil_etikett, self._sett_fyll_fil),
-        ).pack(side="right")
-
-        skjemaramme = tema_rammefelt(
-            forelder, "JSON-mal (skjema) — lim inn malen som skal fylles ut"
-        )
-        skjemaramme.pack(fill="both", **pad)
-        skjemahode = tk.Frame(skjemaramme, bg=BG_PANEL)
-        skjemahode.pack(fill="x", padx=8, pady=(8, 0))
-        tk.Label(
-            skjemahode, text="Usikker på formatet? Prøv:",
-            fg=FG_DEMPET, bg=BG_PANEL, anchor="w",
-        ).pack(side="left")
-        tema_knapp(skjemahode, "Sett inn eksempel", self._sett_inn_skjemaeksempel).pack(side="right")
-        self.skjema_tekst = tema_tekstfelt(
-            skjemaramme, wrap="word", font=("Consolas", 10), height=6
-        )
-        self.skjema_tekst.pack(fill="both", expand=True, padx=8, pady=8)
-        bind_utklippstavle(self.rot, self.skjema_tekst)
-
-        self.fyll_motor_var = tk.StringVar(value="modell")
-        self._bygg_motorvelger(forelder, self.fyll_motor_var)
-
-        primaerknapp(forelder, "Fyll skjema", self._send_fyll_skjema).pack(fill="x", **pad)
-
-        self.fyll_panel = SvarPanel(forelder, self.rot, etikett="Utfylt resultat")
-
-    def _sett_fyll_fil(self, sti):
-        self.fyll_valgt_fil = sti
-
-    def _sett_inn_skjemaeksempel(self):
-        naavaerende = self.skjema_tekst.get("1.0", "end").strip()
-        if naavaerende and not messagebox.askyesno(
-            "Erstatte malen?", "Dette erstatter det som står i skjemafeltet nå. Fortsette?"
-        ):
-            return
-        # felter/auto flettes fra {feltnavn}-plassholdere; modell fyller
-        # tomme verdier. Sett inn eksempelet som passer valgt motor.
-        motor = getattr(self, "fyll_motor_var", None)
-        flett = motor is not None and motor.get() in ("felter", "auto")
-        self.skjema_tekst.delete("1.0", "end")
-        self.skjema_tekst.insert("1.0",
-                                 EKSEMPEL_SKJEMA_FLETT if flett else EKSEMPEL_SKJEMA)
-
-    def _send_fyll_skjema(self):
-        if not self._sjekk_valgt_fil(self.fyll_valgt_fil):
-            return
-        skjema = self.skjema_tekst.get("1.0", "end").strip()
-        if not skjema:
-            messagebox.showwarning("Merk", "Lim inn en JSON-mal i skjemafeltet først.")
-            return
-        # Fang ugyldig JSON lokalt — sparer en serverrunde og gir en
-        # feilmelding som peker på nøyaktig hvor malen er ødelagt.
-        try:
-            json.loads(skjema)
-        except json.JSONDecodeError as exc:
-            messagebox.showerror("Ugyldig JSON", f"Malen er ikke gyldig JSON: {exc}")
-            return
-        if not self._oppdater_klient():
-            return
-
-        kilde_sti = self.fyll_valgt_fil
-        panel = self.fyll_panel
-        panel.nullstill("Klargjør filen ...")
-
-        def formatter(data):
-            # Selve skjemaet øverst (det brukeren ba om), deretter hele
-            # svaret — så både nytte og full sporbarhet er synlig.
-            deler = []
-            if isinstance(data.get("skjema"), dict):
-                motor = data.get("motor")
-                deler.append("Utfylt skjema"
-                             + (f" (motor: {motor})" if motor else "") + ":")
-                deler.append(formater_json(data["skjema"]))
-                if data.get("kilde_per_felt"):
-                    deler.append("Kilde per felt: "
-                                 + ", ".join(f"{k}={v}" for k, v
-                                             in data["kilde_per_felt"].items()))
-                if data.get("ukjente_felter"):
-                    deler.append("Fant ikke (regelen): "
-                                 + ", ".join(data["ukjente_felter"]))
-                deler.append("")
-                deler.append("Fullt svar (JSON):")
-            deler.append(formater_json(data))
-            return "\n".join(deler)
-
-        motor = self.fyll_motor_var.get()
-        self._kjor_foresporsel(
-            panel,
-            self._fil_foresporsel(
-                kilde_sti,
-                lambda pdf: self.klient.fyll_skjema(pdf, skjema, skjema_motor=motor)),
-            self._standard_suksess(panel, "Skjema utfylt", formatter),
-        )
-
-    # ======================================================================
-    # Fane: Analyser — går via POST /dokument med felter=ja.
-    # Ruta /analyser er FJERNET fra serveren (R157).
-    # ======================================================================
-    def _bygg_analyser_fane(self, forelder):
-        pad = {"padx": 12, "pady": 6}
-        self.analyser_valgt_fil: str | None = None
-
-        filramme = tema_rammefelt(forelder, "Dokument å analysere (påkrevd)")
-        filramme.pack(fill="x", **pad)
-        filrad = tk.Frame(filramme, bg=BG_PANEL)
-        filrad.pack(fill="x", padx=8, pady=8)
-        self.analyser_fil_etikett = tk.Label(
-            filrad, text="Ingen fil valgt", fg=FG_DEMPET, bg=BG_PANEL, anchor="w"
-        )
-        self.analyser_fil_etikett.pack(side="left", fill="x", expand=True)
-        tema_knapp(
-            filrad, "Bla gjennom ...",
-            lambda: self._velg_fil_til(self.analyser_fil_etikett, self._sett_analyser_fil),
-        ).pack(side="right")
-
-        tk.Label(
-            forelder,
-            text="Deterministisk analyse: felter, alle datoer (med begrunnelse), "
-                 "strekkoder/QR, håndskriftdeteksjon og full tekst — uten fritt modellsvar.",
-            fg=FG_DEMPET, bg=BG_HOVED, anchor="w", wraplength=700, justify="left",
-        ).pack(fill="x", padx=12)
-
-        primaerknapp(forelder, "Analyser", self._send_analyser).pack(fill="x", **pad)
-
-        self.analyser_panel = SvarPanel(forelder, self.rot, etikett="Analyse")
-
-    def _sett_analyser_fil(self, sti):
-        self.analyser_valgt_fil = sti
-
-    def _send_analyser(self):
-        if not self._sjekk_valgt_fil(self.analyser_valgt_fil):
-            return
-        if not self._oppdater_klient():
-            return
-
-        panel = self.analyser_panel
-        panel.nullstill("Klargjør filen ...")
-
-        def formatter(data):
-            linjer = []
-            felter = data.get("felter")
-            if isinstance(felter, dict) and felter:
-                linjer.append("Felter:")
-                for navn, verdi in felter.items():
-                    linjer.append(f"  {navn}: {verdi}")
-                linjer.append("")
-            linjer.append("Fullt svar (JSON):")
-            linjer.append(formater_json(data))
-            return "\n".join(linjer)
-
-        self._kjor_foresporsel(
-            panel,
-            self._fil_foresporsel(self.analyser_valgt_fil,
-                                  lambda pdf: self.klient.analyser(pdf)),
-            self._standard_suksess(panel, "Analyse fullført", formatter),
-        )
-
-    # ======================================================================
-    # Fane: Uttrekk — går via POST /dokument med struktur=ja.
-    # Ruta /uttrekk er FJERNET fra serveren (R157).
-    # ======================================================================
-    def _bygg_uttrekk_fane(self, forelder):
-        pad = {"padx": 12, "pady": 6}
-        self.uttrekk_valgt_fil: str | None = None
-
-        filramme = tema_rammefelt(forelder, "Dokument å trekke ut fra (påkrevd)")
-        filramme.pack(fill="x", **pad)
-        filrad = tk.Frame(filramme, bg=BG_PANEL)
-        filrad.pack(fill="x", padx=8, pady=8)
-        self.uttrekk_fil_etikett = tk.Label(
-            filrad, text="Ingen fil valgt", fg=FG_DEMPET, bg=BG_PANEL, anchor="w"
-        )
-        self.uttrekk_fil_etikett.pack(side="left", fill="x", expand=True)
-        tema_knapp(
-            filrad, "Bla gjennom ...",
-            lambda: self._velg_fil_til(self.uttrekk_fil_etikett, self._sett_uttrekk_fil),
-        ).pack(side="right")
-
-        tk.Label(
-            forelder,
-            text="Komplett strukturert uttrekk med fast skjema: alle nøkler er alltid "
-                 "med, og identifikatorer er kontrollsiffer-validert.",
-            fg=FG_DEMPET, bg=BG_HOVED, anchor="w", wraplength=700, justify="left",
-        ).pack(fill="x", padx=12)
-
-        primaerknapp(forelder, "Trekk ut", self._send_uttrekk).pack(fill="x", **pad)
-
-        self.uttrekk_panel = SvarPanel(forelder, self.rot, etikett="Uttrekk")
-
-    def _sett_uttrekk_fil(self, sti):
-        self.uttrekk_valgt_fil = sti
-
-    def _send_uttrekk(self):
-        if not self._sjekk_valgt_fil(self.uttrekk_valgt_fil):
-            return
-        if not self._oppdater_klient():
-            return
-
-        panel = self.uttrekk_panel
-        panel.nullstill("Klargjør filen ...")
-        self._kjor_foresporsel(
-            panel,
-            self._fil_foresporsel(self.uttrekk_valgt_fil,
-                                  lambda pdf: self.klient.uttrekk(pdf)),
-            self._standard_suksess(panel, "Uttrekk fullført"),
-        )
 
     # ======================================================================
     # Fane: Storjobb (/jobb-flyten) — store skannede dokumenter behandlet i
