@@ -386,7 +386,26 @@ _kapasitet_port = _Kapasitetsport()
 # uten dem her ville v2 og operasjonsressursen gått utenom
 # kapasitetsporten, og serveren kunne overlastes gjennom en dør mens
 # den andre var stengt.
-_TUNGE_STIER = ("/spor", "/dokument", "/dokument/operasjoner", "/sladd")
+# Stier som tar en kapasitetsplass. `/forhandssjekk` manglet — og den
+# RASTERER opptil ti sider i OCR-oppløsning for å vurdere lesbarheten.
+# Målt: 634 byte inn ga 199 MB rastret bilde, og seks samtidige gikk
+# gjennom med `i_arbeid: 0`. Navnet lover «sjekk», men arbeidet er tungt
+# (R161).
+_TUNGE_STIER = ("/spor", "/dokument", "/dokument/operasjoner", "/sladd",
+                "/forhandssjekk")
+
+# Hvor lenge en opplasting får bruke på å KOMME FRAM. Skilt fra
+# SOCKET_TIDSAVBRUDD_S, som dekker hele forespørselen inkludert OCR.
+KROPP_FRIST_S = float(os.environ.get("KROPP_FRIST_S", "30"))
+
+# Tak på antall multipart-deler. Et ekte kall har tre-fire.
+MAKS_MULTIPART_DELER = int(os.environ.get("MAKS_MULTIPART_DELER", "64"))
+
+# Tak på hvor mye TEKST en fil får pakkes ut til. CSV og XLSX hadde et
+# linjetak; TXT og DOCX hadde ingenting. Målt: en 311 kB .docx pakket ut
+# til 198 MB tekst (1:657) og 443 MB RSS — og teksten går deretter
+# gjennom hver eneste uttrekksfunksjon (R161).
+MAKS_UTPAKKET_BYTES = int(os.environ.get("MAKS_UTPAKKET_MB", "25")) * 1024 * 1024
 _rate_lock = threading.Lock()
 _rate_teller = {}   # klient-ip -> [vindu_minutt, antall]
 
@@ -735,7 +754,21 @@ def _parse_multipart(body: bytes, content_type: str):
         return None, None, tekstfelter
     skille = ("--" + boundary).encode()
     filnavn, filbytes = None, None
-    for del_ in body.split(skille):
+    # TAK PÅ ANTALL DELER (R161). `split` uten grense bygger én
+    # listeoppføring per treff, og en kropp som bare er skilletegn gir
+    # millioner av dem. Målt: 200 MB gyldig formede smådeler = 3,6
+    # millioner deler og 55,7 sekunder CPU — inne i en kapasitetsplass,
+    # og gulvet er to plasser. To slike forespørsler stanser altså alle
+    # de tunge rutene i et minutt, fornybart.
+    #
+    # Et ekte kall har tre-fire deler (fil + noen brytere). Taket er satt
+    # høyt nok til at ingen reell klient merker det.
+    deler = body.split(skille, MAKS_MULTIPART_DELER + 1)
+    if len(deler) > MAKS_MULTIPART_DELER + 1:
+        raise ValueError(
+            f"For mange multipart-deler (tak {MAKS_MULTIPART_DELER}). "
+            f"Et vanlig kall har tre-fire.")
+    for del_ in deler:
         # Hoder skilles fra innhold av en TOM LINJE. RFC krever CRLF, men
         # enkelte klienter sender bare LF — godtar vi ikke begge, hoppes
         # hele delen over.
@@ -772,6 +805,23 @@ BILDE_TYPER = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
 MAKS_TABELL_LINJER = 1000
 
 
+def _tekst_med_tak(tekst: str):
+    """(slag, tekst) — eller (None, feilmelding) hvis den er for stor.
+
+    CSV og XLSX hadde `MAKS_TABELL_LINJER`; TXT og DOCX hadde ingenting.
+    Det er ikke en bevisst forskjell, det er et hull: en 311 kB .docx
+    pakket ut til 198 MB tekst (1:657) og 443 MB RSS — og teksten går
+    deretter gjennom hver eneste uttrekksfunksjon, hver med sitt eget
+    regexpass. Taket gjelder BYTES, ikke linjer, for det er bytene som
+    koster (R161)."""
+    if len(tekst) > MAKS_UTPAKKET_BYTES:
+        return None, (
+            f"Filen pakkes ut til {len(tekst) // 1024 // 1024} MB tekst — "
+            f"over grensen på {MAKS_UTPAKKET_BYTES // 1024 // 1024} MB. "
+            f"Del dokumentet, eller hev MAKS_UTPAKKET_MB.")
+    return "tekst", tekst
+
+
 def normaliser_fil(filnavn: str, data: bytes):
     """Gjør enhver støttet filtype om til noe resten av API-et forstår.
 
@@ -791,7 +841,7 @@ def normaliser_fil(filnavn: str, data: bytes):
         bilde_doc.close()
         return "pdf", pdf
     if lav.endswith(".txt"):
-        return "tekst", data.decode("utf-8", "replace")
+        return _tekst_med_tak(data.decode("utf-8", "replace"))
     if lav.endswith(".docx"):
         import io as _io
         from docx import Document
@@ -800,7 +850,7 @@ def normaliser_fil(filnavn: str, data: bytes):
         for tabell in dok.tables:
             for rad in tabell.rows:
                 deler.append(" | ".join(c.text for c in rad.cells))
-        return "tekst", "\n".join(d for d in deler if d.strip())
+        return _tekst_med_tak("\n".join(d for d in deler if d.strip()))
     if lav.endswith(".csv"):
         import csv as _csv
         import io as _io
@@ -821,7 +871,7 @@ def normaliser_fil(filnavn: str, data: bytes):
             if len(linjer) >= MAKS_TABELL_LINJER:
                 linjer.append("[Avkortet: filen har flere rader]")
                 break
-        return "tekst", "\n".join(linjer)
+        return _tekst_med_tak("\n".join(linjer))
     if lav.endswith((".xlsx", ".xlsm")):
         import io as _io
         from openpyxl import load_workbook
@@ -839,7 +889,7 @@ def normaliser_fil(filnavn: str, data: bytes):
                 linjer.append("[Avkortet: arbeidsboken har flere rader]")
                 break
         bok.close()
-        return "tekst", "\n".join(linjer)
+        return _tekst_med_tak("\n".join(linjer))
     return None, ("Filtypen støttes ikke. Støttet: PDF, "
                   "bilder (JPG/PNG/TIFF/BMP/WEBP), DOCX, XLSX/XLSM, CSV, TXT")
 
@@ -6043,11 +6093,62 @@ class Handler(BaseHTTPRequestHandler):
                          f"(grense {MAKS_SAMTIDIGE_MB} MB). Prøv igjen om litt, "
                          "eller bruk POST /jobb for store dokumenter."),
             }, hoder={"Retry-After": "20"})
+        # EGEN FRIST FOR KROPPEN (R161). Køplassen tas før kroppen leses,
+        # og det er riktig av minnehensyn — kommentaren over er målt. Men
+        # da avgjør leseTIDEN hvor lenge en plass kan holdes, og
+        # sokkeltidsavbruddet på 120 s er ment for hele forespørselen,
+        # inkludert OCR. Målt: to tilkoblinger som oppgir en stor
+        # Content-Length og så ikke sender noe, fyller begge plassene i
+        # to minutter — for rundt 300 byte, fornybart. En ekte klient
+        # fikk TimeoutError.
+        #
+        # Å SENDE er ikke det samme som å BEHANDLE: en opplasting som
+        # ikke leverer en byte på et halvt minutt er ikke treg, den er
+        # borte. Fristen settes bare rundt lesingen, så et stort, ekte
+        # dokument som strømmer inn får all tiden det trenger.
+        gammel_frist = None
+        try:
+            gammel_frist = self.connection.gettimeout()
+            self.connection.settimeout(KROPP_FRIST_S)
+        except OSError:
+            pass
         try:
             body = self.rfile.read(lengde) if lengde else b""
+        except (socket.timeout, TimeoutError):
+            return self._svar(408, {
+                "ok": False,
+                "feil": (f"Kroppen kom ikke fram innen {KROPP_FRIST_S} "
+                         f"sekunder. Forbindelsen ble stående uten å sende "
+                         f"data — send filen på nytt."),
+            })
         finally:
             with _i_flukt_las:
                 _i_flukt_bytes["n"] -= lengde
+            try:
+                self.connection.settimeout(gammel_frist)
+            except OSError:
+                pass
+        # KOM ALT FRAM? (R161) `read(n)` lover ikke n bytes. Lukker
+        # klienten pent midtveis — mobilnett som faller ut, en robot som
+        # avbryter — returnerer den kort UTEN unntak. Kommentaren ved
+        # sokkeltidsavbruddet sier at hullet er lukket, og det stemmer
+        # bare for klienten som blir TAUS; den som lukker rent slipper
+        # forbi. Målt: read(1000) ga 12 byte på 0,000 s, uten unntak.
+        #
+        # Konsekvensen er ikke en feilmelding, den er et SVAR: en halv
+        # PDF som PyMuPDF stort sett åpner, OCR på de sidene som kom, og
+        # 200 med felter fra et halvt dokument. Bryter R24 — enhver
+        # avkorting skal meldes.
+        if lengde and len(body) != lengde:
+            return self._svar(400, {
+                "ok": False,
+                "feil": (f"Avkortet opplasting: Content-Length lovet "
+                         f"{lengde} byte, men {len(body)} kom fram. "
+                         f"Forbindelsen brøt sannsynligvis — send filen "
+                         f"på nytt."),
+                "felter_feil": [{"pointer": "/Content-Length",
+                                 "message": "kroppen er kortere enn oppgitt"}],
+            })
         ct = self.headers.get("Content-Type", "")
 
         # Diagnose: /ekko svarer med NØYAKTIG hva klienten sendte (rå

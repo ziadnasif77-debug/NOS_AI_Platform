@@ -1197,8 +1197,27 @@ def finn_telefon(tekst: str):
     return None
 
 
+# E-postmonsteret, kompilert og med LENGDEGRENSER (R162).
+#
+# `[\w.+-]+@...` er kvadratisk: `` gir et startpunkt ved HVER
+# overgang inne i et sammenhengende `[\w.+-]`-lop, og `[\w.+-]+` sluker
+# hele lopet for den sporer tilbake og leter etter en `@` som ikke
+# finnes. En lang linje med bindestrekseparerte tall — et referansefelt
+# eller en tabellrad OCR leser som en linje — er nettopp et slikt lop.
+#
+# Malt: 10 000 tegn 0,39 s -> 20 000 1,48 s -> 40 000 6,13 s -> 80 000
+# 31,63 s. Firedobling per dobling. `strukturert_uttrekk` pa samme
+# inndata: 32,20 s, med MAKS_BYTES pa 200 MB og ingen tekstgrense.
+#
+# Det negative tilbakeblikket gir ETT startpunkt per lop i stedet for
+# ett per tegn, og lengdetakene gjor tilbakesporingen konstant. Tallene
+# folger RFC 5321: 64 tegn lokaldel, 63 per etikett.
+_EPOST = re.compile(
+    r"(?<![\w.+-])[\w.+-]{1,64}@[\w-]{1,63}\.[\w.]{2,24}(?![\w.-])")
+
+
 def finn_epost(tekst: str):
-    treff = re.search(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst)
+    treff = re.search(_EPOST, tekst)
     return treff.group(0) if treff else None
 
 
@@ -1256,7 +1275,17 @@ def finn_postnummer_sted(tekst: str):
 # mellom stolene fordi «.00» hverken er en tregruppe (tusenskille krever
 # tre sifre) eller et komma. Funnet på en ekte Thon-kvittering der belop
 # ble 0.0 mens totalen sto to ganger som «6380.00 NOK».
-_BELOP_TALL = r"\d+(?:[ .][\dOo]{3})*(?:[.,]\d{2}|,-)?"
+# Tusengruppene er BUNDET (R162). `(?:[ .][\dOo]{3})*` er grådig, og
+# mønsteret etter den (`kr`/`kroner`/`NOK`) kan feile — da spores det
+# tilbake gruppe for gruppe, fra hvert eneste startpunkt. Målt: 1600
+# tregrupper på én linje (6,4 kB, en helt vanlig OCR-lest tabellrad)
+# ga 0,43 s i `finn_belop`; 32 kB ga 10,6 s. Med «kr» på slutten —
+# altså uten tilbakesporing — tok samme inndata 0,0002 s. Det er
+# beviset på at det er tilbakesporing og ikke skanning.
+#
+# Et norsk beløp har aldri åtte tusengrupper. Taket koster ingenting
+# reelt og gjør tilbakesporingen konstant.
+_BELOP_TALL = r"\d+(?:[ .][\dOo]{3}){0,7}(?:[.,]\d{2}|,-)?"
 
 # Beløp der valutaordet står ETTER tallet: «12 500 kroner», «15 000 kr»,
 # «500 NOK». Dette er den vanligste skrivemåten i norske vedtaksbrev, og
@@ -1313,9 +1342,18 @@ def finn_belop(tekst: str):
     hadde alt dette alternativet; finn_belop manglet det, så
     strukturert felt-uttrekk («felter.belop») mistet beløpet stille på
     denne kvitteringslayouten selv om selve teksten inneholdt det."""
+    # `{1,7}`, ikke `+` (R162). Denne grenen var den kvadratiske: en
+    # grådig, UBUNDET tusengruppe fulgt av et OBLIGATORISK desimalanker
+    # som feiler på en lang tallrekke uten komma. Da spores det tilbake
+    # gruppe for gruppe — fra hvert eneste startpunkt i linja.
+    #
+    # Å binde `_BELOP_TALL` alene holdt ikke: målingen min sa 0,43 s →
+    # 0,071 s og jeg leste det som løst. Vekstfaktoren sa noe annet —
+    # fortsatt 4× per dobling, altså fortsatt kvadratisk. Det er derfor
+    # vakten måler VEKST og ikke absolutt tid.
     treff = re.search(
         r"(?:kr\.?|NOK)\s?(" + _BELOP_TALL + r")|"
-        r"\b([\d]{1,3}(?:[ .]\d{3})+(?:,\d{2}|,-))|"
+        r"\b([\d]{1,3}(?:[ .]\d{3}){1,7}(?:,\d{2}|,-))|"
         r"\b(\d{1,6},\d{2})\b|"
         + _BELOP_ETTER,
         tekst, re.IGNORECASE,
@@ -1841,7 +1879,7 @@ def finn_alle_telefoner(tekst: str) -> list:
 
 
 def finn_alle_eposter(tekst: str) -> list:
-    return _unike(re.findall(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst))
+    return _unike(re.findall(_EPOST, tekst))
 
 
 # ------------------------------------------------------------------ #
@@ -1961,7 +1999,7 @@ def finn_sladdeomraader(tekst: str, typer=None) -> list:
         for start, slutt, _ in _telefon_treff(tekst):
             funn.append((start, slutt, "telefon"))
     if "epost" in valgte:
-        for treff in re.finditer(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b", tekst):
+        for treff in re.finditer(_EPOST, tekst):
             funn.append((treff.start(), treff.end(), "epost"))
 
     # Fjern overlapp: først i teksten vinner; ved samme start den lengste
