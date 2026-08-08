@@ -10,3 +10,9 @@ Makefile text eol=lf
 # LF-bare linjer inne i parentesblokker ("'X' is not recognized ...").
 *.bat text eol=crlf
 *.vbs text eol=crlf
+# PowerShell manglet her (R173). At .ps1-filene kommer riktig ut i dag
+# skyldes bare at ÉN maskin har core.autocrlf=true — en utvikler med et
+# annet oppsett ville fått LF, og PowerShell tåler det dårlig i
+# here-strings og i `switch`-blokker. En regel som virker på grunn av en
+# lokal innstilling er ikke en regel.
+*.ps1 text eol=crlf

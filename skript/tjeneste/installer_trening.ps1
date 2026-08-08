@@ -41,6 +41,38 @@ $innst    = New-ScheduledTaskSettingsSet `
 Register-ScheduledTask -TaskName $navn -Action $handling -Trigger $utloser `
     -Principal $prinsipp -Settings $innst -Force | Out-Null
 
+# ---------------------------------------------------------------------
+#  Oppbevaringsfristen — EGEN jobb (R173)
+# ---------------------------------------------------------------------
+#  Rydderutinen fantes, men ingen kjorte den: her ble bare
+#  treningsjobben registrert, og kjor_trening.bat kaller ikke ryddingen.
+#  En oppbevaringspolicy ingen utforer er ikke en policy — og README
+#  presenterte den som en GDPR-egenskap ved systemet.
+#
+#  Egen jobb, ikke et steg i treningen: oppbevaring skal handheves selv
+#  om treningen hopper over, feiler eller slas av.
+$navnRydd = "NAV-Oppbevaring-ukentlig"
+$wrapperRydd = Join-Path $PSScriptRoot "kjor_oppbevaring.bat"
+
+if (Test-Path $wrapperRydd) {
+    # To timer for treningen: bildene som er forfalt skal vaere borte
+    # for treningslopet leser arkivet.
+    $naarRydd = $naar.AddHours(-2)
+    $handlingRydd = New-ScheduledTaskAction -Execute "cmd.exe" `
+        -Argument ('/c "{0}"' -f $wrapperRydd) -WorkingDirectory $rot
+    $utloserRydd  = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $Dag -At $naarRydd
+    $innstRydd    = New-ScheduledTaskSettingsSet `
+        -StartWhenAvailable -WakeToRun `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    Register-ScheduledTask -TaskName $navnRydd -Action $handlingRydd `
+        -Trigger $utloserRydd -Principal $prinsipp -Settings $innstRydd -Force | Out-Null
+    Write-Host ""
+    Write-Host "  Planlagt: $navnRydd - hver $Dag kl. $($naarRydd.ToString('HH:mm'))"
+    Write-Host "            (handhever oppbevaringsfristen paa data/gjennomgang)"
+} else {
+    Write-Warning "Fant ikke $wrapperRydd - oppbevaringsfristen blir IKKE handhevet."
+}
+
 Write-Host ""
 Write-Host "  Planlagt: $navn - hver $Dag kl. $Klokke"
 Write-Host ""

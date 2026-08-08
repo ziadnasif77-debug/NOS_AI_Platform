@@ -12,6 +12,8 @@ korreksjoner»-utløser i koden (den påstanden var aldri implementert).
 """
 import os
 import json
+import shutil
+
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -33,6 +35,47 @@ FINJUSTERING_STI = os.environ.get("FINJUSTERING_STI", "./data/finjustering")
 # tilbake til den faktiske filstien, ellers får finjuster.py en URL den
 # ikke kan åpne → trente før på blanke bilder (R-fiks 2026-07-20).
 GJENNOMGANG_STI = os.environ.get("GJENNOMGANG_STI", "./data/gjennomgang")
+
+
+def _arkivmappe() -> Path:
+    return Path(FINJUSTERING_STI) / "bilder"
+
+
+def _arkiver_bilde(kilde: str, oppgave_id) -> str:
+    """Kopierer treningsbildet INN i korreksjonsarkivet.
+
+    `data/gjennomgang/` er en KØ med oppbevaringsfrist (30 dager,
+    `rydd_gjennomgang.py`). `data/finjustering/` er dokumentert som
+    permanent. Et arkiv som PEKER inn i køen er derfor tomt den dagen
+    fristen faktisk håndheves — og `finjuster.py` stopper med
+    FileNotFoundError på hver eneste kjøring etterpå, fordi de ødelagte
+    oppføringene ligger i et arkiv som aldri ryddes (R170).
+
+    De to policyene kan ikke begge være sanne om samme fil. Arkivet
+    eier nå sine egne bilder, og køen kan tømmes uten å røre dem."""
+    if not kilde or not os.path.isfile(kilde):
+        return kilde or ""
+    mappe = _arkivmappe()
+    mappe.mkdir(parents=True, exist_ok=True)
+    maal = mappe / f"oppgave_{oppgave_id}{Path(kilde).suffix or '.png'}"
+    if not maal.exists():
+        shutil.copy2(kilde, maal)
+    return str(maal)
+
+
+def _kildenokkel(oppgave: dict) -> str:
+    """Hvilket dokument rettingen stammer fra.
+
+    Uten en slik nøkkel kan ingen finne igjen hvilke rader i arkivet
+    som gjelder en bestemt person — og da er retten til sletting (GDPR
+    art. 17) ikke teknisk mulig å oppfylle, uansett hva en policy sier.
+    Se `skript/slett_person.py`."""
+    data = oppgave.get("data") or {}
+    for felt in ("fil_id", "dokument_id", "filnavn", "kilde"):
+        if data.get(felt):
+            return str(data[felt])
+    bilde = data.get("bilde") or ""
+    return Path(bilde).stem if bilde else ""
 
 
 def _lokal_bildesti(bilde_url: str) -> str:
@@ -135,13 +178,34 @@ def konverter_til_trocr_format(oppgave: dict) -> dict | None:
     for resultat in resultater:
         if resultat.get("type") == "textarea":
             korrekt_tekst = resultat.get("value", {}).get("text", [""])[0]
+            # En tom retting er ikke en fasit. Den ville blitt et
+            # treningspar «bilde → ingenting», og modellen lærer da å
+            # svare tomt på nettopp de vanskelige bildene.
+            if not (korrekt_tekst or "").strip():
+                return None
             bilde_url = oppgave.get("data", {}).get("bilde", "")
+            oppgave_id = oppgave.get("id")
             return {
-                "fil_sti": _lokal_bildesti(bilde_url),
+                # ARKIVET EIER SITT EGET BILDE (R170). Her sto stien inn
+                # i `data/gjennomgang/bilder/` — en KØ med
+                # oppbevaringsfrist. Arkivet er dokumentert som
+                # permanent («slettes aldri automatisk»), så de to
+                # motsier hverandre: den dagen oppbevaringsfristen
+                # faktisk håndheves, forsvinner bildene arkivet peker
+                # på, og `finjuster.py` stopper med FileNotFoundError —
+                # hver uke, for alltid, fordi de ødelagte oppføringene
+                # ligger i et arkiv som aldri ryddes.
+                "fil_sti": _arkiver_bilde(_lokal_bildesti(bilde_url),
+                                          oppgave_id),
                 "tekst": korrekt_tekst,
-                "oppgave_id": oppgave.get("id"),
+                "oppgave_id": oppgave_id,
                 "annotert_av": annotering.get("completed_by"),
                 "tidsstempel": datetime.now().isoformat(),
+                # Nøkkelen tilbake til dokumentet rettingen kom fra.
+                # Uten den kan ingen finne igjen hva som gjelder hvem —
+                # og da er retten til sletting (GDPR art. 17) ikke
+                # teknisk mulig å oppfylle (R170).
+                "kilde_dokument": _kildenokkel(oppgave),
             }
     return None
 
@@ -160,6 +224,52 @@ def _allerede_klargjorte_ider() -> set:
         except (OSError, ValueError):
             continue
     return ider
+
+
+def _slett_oppgaver(oppgave_ider: list, trocr_fil: str) -> int:
+    """Sletter oppgavene i Label Studio ETTER at rettingen er arkivert.
+
+    VERIFISERER FØRST. Å slette kilden fordi vi TROR vi skrev arkivet
+    er den ene rekkefølgen som kan miste data for godt: feiler
+    skrivingen, står vi igjen uten både retting og oppgave. Fila leses
+    derfor tilbake og id-ene sammenlignes før noe slettes.
+
+    `AVSLAA_SLETTING=1` slår det av — for den som vil beholde oppgavene
+    i Label Studio en stund til. Da vokser basen, og det er et VALG,
+    ikke en glipp: uten sletting er `label_studio.sqlite3` et permanent
+    arkiv over råtekst fra hvert dokument som ble lest dårlig (R171)."""
+    if os.environ.get("AVSLAA_SLETTING") == "1":
+        print("  (AVSLAA_SLETTING=1 — oppgavene blir stående i Label Studio)")
+        return 0
+    try:
+        arkivert = {r.get("oppgave_id")
+                    for r in json.loads(
+                        Path(trocr_fil).read_text(encoding="utf-8"))}
+    except (OSError, ValueError) as exc:
+        print(f"  ADVARSEL: kunne ikke lese tilbake {trocr_fil} "
+              f"({type(exc).__name__}) — sletter INGENTING", file=sys.stderr)
+        return 0
+
+    slettet = 0
+    for oid in oppgave_ider:
+        if oid not in arkivert:
+            print(f"  ADVARSEL: oppgave {oid} står ikke i arkivet — "
+                  f"beholdes i Label Studio", file=sys.stderr)
+            continue
+        try:
+            svar = requests.delete(
+                f"{LABEL_STUDIO_URL}/api/tasks/{oid}",
+                headers={"Authorization": f"Token {LABEL_STUDIO_API_KEY}"},
+                timeout=30)
+            if svar.status_code in (200, 204):
+                slettet += 1
+            else:
+                print(f"  ADVARSEL: kunne ikke slette oppgave {oid} "
+                      f"(HTTP {svar.status_code})", file=sys.stderr)
+        except requests.RequestException as exc:
+            print(f"  ADVARSEL: sletting av oppgave {oid} feilet "
+                  f"({type(exc).__name__})", file=sys.stderr)
+    return slettet
 
 
 def eksporter():
@@ -202,6 +312,22 @@ def eksporter():
         with open(trocr_fil, "w", encoding="utf-8") as f:
             json.dump(trocr_data, f, ensure_ascii=False, indent=2)
         print(f"\nTrOCR-treningsdata: {len(trocr_data)} eksempler -> {trocr_fil}")
+        # SLETT OPPGAVENE I LABEL STUDIO — men FØRST nå, når rettingen
+        # ligger trygt i arkivet med sitt eget bilde (R171).
+        #
+        # Ingenting slettet dem før: det fantes ikke ett eneste
+        # `requests.delete` i hele prosjektet. Basen
+        # `data/label-studio/label_studio.sqlite3` beholdt dermed
+        # råteksten fra HVERT dokument som noen gang ble lest dårlig,
+        # sammen med navn, dato og ytelse — for alltid, uten policy.
+        #
+        # Rekkefølgen er hele vernet: skriv arkivet, verifiser at det
+        # kan leses tilbake, SÅ slett kilden. Motsatt vei mister vi
+        # rettingen hvis skrivingen feiler.
+        slettet = _slett_oppgaver([r["oppgave_id"] for r in trocr_data],
+                                  trocr_fil)
+        print(f"Slettet {slettet} av {len(trocr_data)} oppgaver i "
+              f"Label Studio (råteksten blir ikke liggende igjen)")
 
     print(f"\nTotalt eksportert: {len(trocr_data)} korreksjoner")
     print("Kjor 'make finjuster' for a starte modelltrening.")
