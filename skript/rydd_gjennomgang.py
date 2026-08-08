@@ -37,23 +37,30 @@ kunne dermed kjøre i månedsvis, skrive «ville slettet: …» hver uke, og
 ingen hadde noe å varsle på.
 
 Vindu: OPPBEVARING_DAGER (standard 30). Dette er en GOVERNANCE-beslutning
-(§6.4), ikke en teknisk default — sett din egen policy. Vinduet bør være
-lengre enn den vanlige gjennomgangs-turnarounden, ellers kan et bilde
-slettes mens en oppgave fortsatt venter på korreksjon.
+(§6.4), ikke en teknisk default — sett din egen policy.
 
-HVA DETTE IKKE GJØR
-Sletting av selve Label Studio-oppgavene er et separat, LS-status-
-avhengig steg. Det er IKKE implementert, og det står her fordi
-alternativet er å la lesere tro at det er dekket: oppgavene bærer rå
-tekst fra dokumentet og lever i `data/label-studio/` uten
-oppbevaringsvindu.
+ET ULEST BILDE ER IKKE ET GAMMELT BILDE (R179)
+Peker en UANNOTERT Label Studio-oppgave på bildet, skånes det uansett
+alder. Et dokument havner i køen nettopp fordi hverken OCR eller
+modellen klarte å lese det — det er de vanskeligste sidene, de eneste
+som kan lære modellen noe den ikke alt kan. Slettes bildet før et
+menneske rakk å rette det, står oppgaven igjen og peker på en fil som
+ikke finnes: den ansatte åpner den, ser ingenting, og korreksjonen er
+tapt. I STILLHET — ingen feilmelding, ingen logglinje.
 
-Og korreksjonsarkivet (`data/finjustering/trocr_*.json`) PEKER inn i
-mappa dette skriptet tømmer. Kjøres slettingen, mister treningsløkka
-bildene den refererer til. Den avhengigheten må avklares før
-`--slett` settes i drift — se `data/finjustering/README.md`.
+Er Label Studio-basen utilgjengelig, slettes INGENTING. Å ikke vite er
+ikke det samme som å vite at det er trygt.
+
+TO AVHENGIGHETER SOM ER LØST
+Korreksjonsarkivet PEKTE tidligere inn i mappa dette skriptet tømmer.
+Siden R170 kopierer eksporten bildet INN i `data/finjustering/bilder/`,
+så arkivet eier sine egne filer og køen kan tømmes uten å røre dem.
+Og selve Label Studio-oppgavene slettes nå etter vellykket eksport
+(R171) — de bærer rå dokumenttekst og hadde ingen oppbevaringsgrense.
 """
+import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -78,14 +85,69 @@ ROT = Path(__file__).resolve().parent.parent
 GJENNOMGANG_STI = os.environ.get("GJENNOMGANG_STI",
                                  str(ROT / "data" / "gjennomgang"))
 OPPBEVARING_DAGER = int(os.environ.get("OPPBEVARING_DAGER", "30"))
+# Label Studio-basen leses (skrivebeskyttet) for å finne ut hvilke
+# bilder som fortsatt venter på retting — de skal aldri slettes,
+# uansett alder (R179).
+LABEL_STUDIO_DATA = os.environ.get(
+    "LABEL_STUDIO_BASE_DATA_DIR", str(ROT / "data" / "label-studio"))
 
 
-def finn_gamle(mappe: Path, maks_alder_dager: int, naa: float) -> list:
-    """Filer i mappe som er eldre enn vinduet (etter endringstid)."""
+def venter_paa_retting() -> set:
+    """Bildefilnavn som en UANNOTERT Label Studio-oppgave peker på.
+
+    DISSE SKAL ALDRI SLETTES, uansett alder (R179).
+
+    Et dokument havner i køen nettopp fordi hverken OCR eller modellen
+    klarte å lese det. Det er de vanskeligste sidene — de eneste som
+    kan lære modellen noe den ikke alt kan. Sletter oppbevaringen
+    bildet før et menneske rakk å rette det, står oppgaven igjen i
+    Label Studio og peker på en fil som ikke finnes: den ansatte åpner
+    den, ser ingenting, og korreksjonen er tapt for godt.
+
+    Verre: den er tapt i STILLHET. Ingen feilmelding, ingen logglinje —
+    bare en oppgave som ikke lar seg gjøre.
+
+    Er basen utilgjengelig, returneres None. Da SLETTER vi ingenting:
+    å ikke vite er ikke det samme som å vite at det er trygt."""
+    base = Path(LABEL_STUDIO_DATA) / "label_studio.sqlite3"
+    if not base.is_file():
+        return set()          # ingen Label Studio i bruk — ingen å vente på
+    try:
+        kobling = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+        try:
+            rader = kobling.execute(
+                "SELECT t.data FROM task t WHERE NOT EXISTS "
+                "(SELECT 1 FROM task_completion a WHERE a.task_id = t.id)"
+            ).fetchall()
+        finally:
+            kobling.close()
+    except sqlite3.Error as exc:
+        print(f"  Kunne ikke lese Label Studio-basen ({type(exc).__name__}) "
+              f"— sletter INGENTING.", file=sys.stderr)
+        return None
+
+    venter = set()
+    for (data,) in rader:
+        try:
+            url = (json.loads(data) or {}).get("bilde") or ""
+        except (ValueError, TypeError):
+            continue
+        if url:
+            venter.add(Path(url.split("?d=")[-1]).name)
+    return venter
+
+
+def finn_gamle(mappe: Path, maks_alder_dager: int, naa: float,
+               skaanet: set = None) -> list:
+    """Filer i mappe som er eldre enn vinduet (etter endringstid).
+
+    `skaanet` er filnavn som skal stå uansett alder — se
+    `venter_paa_retting`."""
     grense = naa - maks_alder_dager * 86400
+    skaanet = skaanet or set()
     gamle = []
     for p in mappe.glob("*"):
-        if not p.is_file():
+        if not p.is_file() or p.name in skaanet:
             continue
         try:
             if p.stat().st_mtime < grense:
@@ -109,12 +171,24 @@ def rydd(slett: bool, naa: float = None) -> dict:
         return {"funnet": 0, "slettet": 0, "torrkjoring": not slett,
                 "mappe_mangler": True}
 
-    gamle = finn_gamle(bilder, OPPBEVARING_DAGER, naa)
+    # SPØR LABEL STUDIO FØRST (R179). Et bilde en uannotert oppgave
+    # peker på er ikke «gammelt» — det er ULEST, og korreksjonen er
+    # ikke hentet ut ennå.
+    venter = venter_paa_retting()
+    if venter is None:
+        return {"funnet": 0, "slettet": 0, "torrkjoring": not slett,
+                "mappe_mangler": False, "base_utilgjengelig": True}
+
+    gamle = finn_gamle(bilder, OPPBEVARING_DAGER, naa, skaanet=venter)
     total_mb = sum(p.stat().st_size for p in gamle if p.exists()) / 1e6
     print(f"{len(gamle)} filer eldre enn {OPPBEVARING_DAGER} dager "
           f"({total_mb:.1f} MB) i {bilder}")
+    if venter:
+        print(f"  {len(venter)} bilde(r) skånet: venter fortsatt på "
+              f"retting i Label Studio")
     svar = {"funnet": len(gamle), "slettet": 0, "torrkjoring": not slett,
-            "mappe_mangler": False}
+            "mappe_mangler": False, "skaanet": len(venter),
+            "base_utilgjengelig": False}
     if not gamle:
         return svar
 

@@ -208,3 +208,101 @@ def test_prosjektet_har_i_det_hele_tatt_en_sletting():
     dårlig — for alltid, uten policy."""
     import inspect
     assert "requests.delete" in inspect.getsource(eks)
+
+
+# ------------------------------------------------------------------ #
+#  Et ULEST bilde er ikke et gammelt bilde (R179)                     #
+# ------------------------------------------------------------------ #
+#
+# Et dokument havner i gjennomgangskøen nettopp fordi hverken OCR eller
+# modellen klarte å lese det. Det er de vanskeligste sidene — de eneste
+# som kan lære modellen noe den ikke alt kan.
+#
+# Sletter oppbevaringen bildet før et menneske rakk å rette det, står
+# oppgaven igjen i Label Studio og peker på en fil som ikke finnes. Den
+# ansatte åpner den, ser ingenting, og korreksjonen er tapt for godt —
+# i STILLHET. Ingen feilmelding, ingen logglinje.
+#
+# Målt da dette ble skrevet: 7 uannoterte oppgaver i køen, den eldste
+# 12,7 dager gammel. Med den ukentlige ryddejobben (R173) og et vindu på
+# 30 dager ville alle sju forsvunnet innen 17 dager.
+
+import sqlite3
+
+import rydd_gjennomgang as rydd
+
+
+def _base(mappe, oppgaver):
+    """En minimal Label Studio-base. `oppgaver` = [(bildenavn, antall
+    annoteringer)]."""
+    sti = mappe / "label_studio.sqlite3"
+    k = sqlite3.connect(str(sti))
+    k.execute("CREATE TABLE task (id INTEGER PRIMARY KEY, data TEXT)")
+    k.execute("CREATE TABLE task_completion (id INTEGER PRIMARY KEY, "
+              "task_id INTEGER)")
+    for i, (navn, ant) in enumerate(oppgaver, start=1):
+        k.execute("INSERT INTO task VALUES (?, ?)",
+                  (i, json.dumps(
+                      {"bilde": f"/data/local-files/?d=bilder/{navn}"})))
+        for _ in range(ant):
+            k.execute("INSERT INTO task_completion (task_id) VALUES (?)", (i,))
+    k.commit()
+    k.close()
+    return sti
+
+
+@pytest.fixture
+def koe(tmp_path, monkeypatch):
+    """En kø med to GAMLE bilder: ett urettet, ett ferdig rettet."""
+    bilder = tmp_path / "gjennomgang" / "bilder"
+    bilder.mkdir(parents=True)
+    gammel = 1_600_000_000          # langt tilbake
+    for navn in ("urettet.png", "rettet.png"):
+        f = bilder / navn
+        f.write_bytes(b"PNG")
+        os.utime(f, (gammel, gammel))
+    ls = tmp_path / "label-studio"
+    ls.mkdir()
+    _base(ls, [("urettet.png", 0), ("rettet.png", 1)])
+    monkeypatch.setattr(rydd, "GJENNOMGANG_STI",
+                        str(tmp_path / "gjennomgang"))
+    monkeypatch.setattr(rydd, "LABEL_STUDIO_DATA", str(ls))
+    return bilder
+
+
+def test_uannotert_bilde_skaanes_uansett_alder(koe):
+    """Kjernen. Bildet er ti år gammelt og skal LIKEVEL stå."""
+    svar = rydd.rydd(slett=True)
+    assert (koe / "urettet.png").exists(), (
+        "bildet ble slettet mens en oppgave fortsatt ventet på retting")
+    assert svar["skaanet"] == 1
+
+
+def test_ferdig_rettet_bilde_slettes(koe):
+    """Speilet: uten dette ville vakten vært grønn om ryddingen sluttet
+    å slette noe som helst."""
+    rydd.rydd(slett=True)
+    assert not (koe / "rettet.png").exists()
+
+
+def test_utilgjengelig_base_stopper_ALL_sletting(koe, monkeypatch):
+    """Å ikke vite er ikke det samme som å vite at det er trygt."""
+    monkeypatch.setattr(rydd, "venter_paa_retting", lambda: None)
+    svar = rydd.rydd(slett=True)
+    assert svar["base_utilgjengelig"] is True
+    assert svar["slettet"] == 0
+    assert (koe / "rettet.png").exists()
+
+
+def test_uten_label_studio_ryddes_som_for(tmp_path, monkeypatch):
+    """Kjører du uten Label Studio, er det ingen å vente på — da skal
+    oppbevaringen virke helt normalt."""
+    bilder = tmp_path / "gjennomgang" / "bilder"
+    bilder.mkdir(parents=True)
+    f = bilder / "gammel.png"
+    f.write_bytes(b"PNG")
+    os.utime(f, (1_600_000_000, 1_600_000_000))
+    monkeypatch.setattr(rydd, "GJENNOMGANG_STI",
+                        str(tmp_path / "gjennomgang"))
+    monkeypatch.setattr(rydd, "LABEL_STUDIO_DATA", str(tmp_path / "finnes-ikke"))
+    assert rydd.rydd(slett=True)["slettet"] == 1

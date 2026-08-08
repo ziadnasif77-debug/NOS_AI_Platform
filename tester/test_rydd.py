@@ -30,6 +30,13 @@ ROT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _last(monkeypatch, tmp, dager=30):
     monkeypatch.setenv("GJENNOMGANG_STI", str(tmp))
     monkeypatch.setenv("OPPBEVARING_DAGER", str(dager))
+    # ISOLER LABEL STUDIO-BASEN (R179). Ryddingen spør nå basen om
+    # hvilke bilder som venter på retting. Uten dette leste testene den
+    # EKTE basen på maskinen — og «skaanet» ble 7 her og 0 hos neste
+    # utvikler. Samme feilklasse som «1557 passed var bare sant på én
+    # maskin» (R174), bare i miniatyr.
+    monkeypatch.setenv("LABEL_STUDIO_BASE_DATA_DIR",
+                       str(tmp / "ingen-label-studio"))
     import rydd_gjennomgang
     importlib.reload(rydd_gjennomgang)
     return rydd_gjennomgang
@@ -84,12 +91,19 @@ def test_torrkjoring_og_ekte_sletting_gir_ULIKE_svar(monkeypatch, tmp_path):
     for i in range(3):
         _lag_bilde(bilder, f"gammel{i}.png", 40)
 
+    # Bare nøklene denne testen HANDLER om. En eksakt ordbok-likhet
+    # gjorde at hvert nye felt i svaret brakk testen uten at noe var
+    # galt — og et rødt lys som ikke betyr noe blir slått av (R179).
+    def _kjerne(d):
+        return {k: d[k] for k in
+                ("funnet", "slettet", "torrkjoring", "mappe_mangler")}
+
     torr = r.rydd(slett=False)
-    assert torr == {"funnet": 3, "slettet": 0, "torrkjoring": True,
-                    "mappe_mangler": False}
+    assert _kjerne(torr) == {"funnet": 3, "slettet": 0, "torrkjoring": True,
+                             "mappe_mangler": False}
     ekte = r.rydd(slett=True)
-    assert ekte == {"funnet": 3, "slettet": 3, "torrkjoring": False,
-                    "mappe_mangler": False}
+    assert _kjerne(ekte) == {"funnet": 3, "slettet": 3, "torrkjoring": False,
+                             "mappe_mangler": False}
     assert torr != ekte
 
 
