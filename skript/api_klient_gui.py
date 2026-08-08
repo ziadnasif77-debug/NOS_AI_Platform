@@ -1763,22 +1763,24 @@ class KontrollPanel:
 # ==========================================================================
 FLYT_NODER = [
     # (nokkel, tittel, undertekst, farge, x, y, bredde, hoyde)
-    ("inn", "1 · Dokument inn", "PDF / bilde / Word / Excel", CYAN, 30, 14, 310, 58),
+    ("inn", "1 · Dokument inn", "PDF · bilde · Word · Excel · CSV · tekst", CYAN, 30, 14, 310, 58),
     ("lese", "2 · Lesing", "tekstlag · OCR · Doc-UFCN + norhand for håndskrift", BLAA, 30, 98, 310, 58),
     ("uttrekk", "3 · Deterministisk uttrekk", "datoer · beløp · ID (mod 11) · tallvakt", GRONN, 30, 182, 310, 58),
     ("borealis", "4 · Borealis (LLM)", "spørsmål/svar på GPU — tallvakt-beskyttet", LILLA, 30, 266, 310, 58),
     ("svar", "5 · Ærlig svar ut", "advarsel · avvik · kilde · versjon", GRONN, 30, 350, 310, 58),
     ("labelstudio", "6 · Label Studio", "menneske retter dårlig lesing", ROSA, 430, 98, 280, 58),
     ("trening", "7 · Finjustering", "norhand trenes på korreksjonene", ORANSJE, 430, 210, 280, 58),
-    ("port", "8 · Kvalitetsport", "CER-test → promoter eller rull tilbake", GUL, 430, 322, 280, 58),
+    ("port", "8 · Kvalitetsport", "CER + konfidensintervall → fire utfall", GUL, 430, 322, 280, 58),
 ]
 
 FLYT_DETALJER = {
     "inn": "UiPath, GUI-klienten eller ren HTTP laster opp dokumentet. Endepunkter: "
            "/dokument (SAMLET: ett kall med brytere for felter/struktur/svar/skjema/"
-           "korriger — dokumentet leses én gang), /spor (spørsmål), /analyser, "
-           "/uttrekk, /fyll_skjema og /jobb for store skanninger i bakgrunnen. "
-           "Bilder og Office-filer konverteres til PDF.",
+           "korriger — dokumentet leses én gang), /dokument/operasjoner (samme, som "
+           "liste), /spor (spørsmål), /sladd (fjern identifikatorer fra teksten), "
+           "/forhandssjekk, /innsyn og /jobb for store skanninger i bakgrunnen. "
+           "Bilder og Office-filer konverteres til PDF; CSV og ren tekst leses "
+           "direkte.",
     "lese": "Har PDF-en tekstlag, leses det direkte (raskt og eksakt). Skannede sider "
             "går til regionbasert OCR: EasyOCR/RapidOCR for trykt tekst, norhand "
             "(TrOCR, Nasjonalbiblioteket) for norsk håndskrift, pyzbar for strekkoder. "
@@ -1787,28 +1789,41 @@ FLYT_DETALJER = {
             "med høyest målt konfidens vinner. Målt gevinst på løkkeskrift: 22 → 88 %.",
     "uttrekk": "delt/tekstuttrekk.py finner datoer, beløp og identifikatorer "
                "deterministisk, med kontrollsiffer-validering (mod 11). Tallvakten "
-               "garanterer at hvert tall i svaret står ordrett i dokumentet. "
-               "For /analyser og /uttrekk går svaret RETT ut herfra — uten LLM "
-               "(den grønne snarveien).",
+               "sjekker hvert tall på TRE siffer eller mer mot dokumentet — kortere "
+               "tall (sidetall, «to vedlegg») ville gitt så mange falske treff at "
+               "vakten ble ubrukelig. Ber du ikke om svar fra modellen, går "
+               "resultatet RETT ut herfra — uten LLM (den grønne snarveien).",
     "borealis": "Spørsmål besvares av Borealis 4B (GGUF via llama.cpp på CUDA). "
                 "Modellen får OCR-teksten + spørsmålet; tallvakt og kodevalidering "
                 "stopper hallusinerte tall før de når svaret. Et rent spørsmål "
                 "uten fil hopper hit direkte (den lilla stiplede snarveien) og "
                 "merkes ærlig med uten_dokument.",
     "svar": "Svaret deklarerer ærlig hva som skjedde: advarsel, avvik, uten_dokument, "
-            "kilde og versjonsstempel (api/prompt/regler). Alle kall logges i "
-            "tilgangsloggen med rate-begrensning.",
+            "kilde og versjonsstempel (api/prompt/modell). Ble noe holdt tilbake av "
+            "profil=sammendrag, står det navngitt i «utelatt» — ingenting forsvinner "
+            "i stillhet. Alle kall logges i tilgangsloggen med rate-begrensning.",
     "labelstudio": "Leses et dokument dårlig (lav konfidens, håndskrift eller tomt), "
                    "sendes det automatisk til Label Studio — med OCR-boksene "
                    "FORHÅNDSMERKET på bildet og teksten forhåndsutfylt, så den "
                    "ansatte bare retter feilene. Samme dokument sendes aldri to "
-                   "ganger. Best-effort: API-et virker fint uten Label Studio.",
+                   "ganger. Etter at rettingen er hentet ut og arkivert, SLETTES "
+                   "oppgaven i Label Studio — råteksten blir ikke liggende igjen. "
+                   "Best-effort: API-et virker fint uten Label Studio.",
     "trening": "skript/finjuster.py trener norhand videre på de menneskerettede "
-               "eksemplene (eksportert fra Label Studio). Kjøres periodisk via "
-               "Prefect-flyten — serveren stoppes først så GPU-en er ledig.",
+               "eksemplene (eksportert fra Label Studio, med bildene kopiert inn i "
+               "arkivet så oppbevaringsfristen på gjennomgangskøen ikke river dem "
+               "bort). Kjøres av den planlagte Windows-oppgaven "
+               "NAV-Trening-ukentlig — serveren stoppes først så GPU-en er ledig. "
+               "(Prefect-flyten finnes som et alternativ, men er ikke det som "
+               "kjører til vanlig.)",
     "port": "valider_modell.py måler CER for kandidatmodellen mot dagens modell på et "
-            "kontrollsett. Bedre → promoteres til modeller/norhand. Dårligere → "
-            "rulles tilbake. Omstart laster den nye modellen — sløyfen er sluttet.",
+            "kontrollsett, med 95 %-konfidensintervall — to punkttall kan ikke "
+            "skilles på et lite sett. FIRE utfall: bedre → promoteres til "
+            "modeller/norhand · dårligere → rulles tilbake · ikke_skillbar → "
+            "ingenting skjer, live blir stående · ingen_live_modell. "
+            "MERK: kontrollsettet data/validering/norhand.json finnes ikke ennå, "
+            "så porten har aldri kjørt mot en ekte modell. Den feiler LUKKET — "
+            "uten sett promoteres ingenting.",
     "_slutt": "Sløyfen er sluttet: den forbedrede modellen leser neste dokument bedre — "
               "og slik blir systemet gradvis skarpere helt av seg selv.",
 }
@@ -1904,14 +1919,17 @@ class FlytskjemaPanel:
                               fill=ROSA, font=("Segoe UI", 8, "italic"))
 
         # -- de tre alternative stiene (uten disse mangler ekte flyt) --
-        # A) deterministisk: /analyser og /uttrekk hopper OVER Borealis
+        # A) deterministisk: uten spørsmål hopper svaret OVER Borealis.
+        # Etiketten navnga /analyser og /uttrekk — ruter som ble FJERNET
+        # (R157). Et kart som peker på dører som ikke finnes, sender
+        # neste integrator på leting etter noe som aldri var der.
         xu1, yu1, xu2, yu2 = rekt["uttrekk"]
         xs1, ys1, xs2, ys2 = rekt["svar"]
         midt_u, midt_s = (yu1 + yu2) // 2, (ys1 + ys2) // 2
         c.create_line(xu2, midt_u, 400, midt_u, 400, midt_s, xs2, midt_s,
                       fill=GRONN, width=2, arrow=tk.LAST, arrowshape=(10, 12, 5))
         c.create_text(409, (midt_u + midt_s) // 2, angle=90,
-                      text="uten LLM: /analyser · /uttrekk · /dokument",
+                      text="uten LLM: /dokument uten spørsmål · /sladd",
                       fill=GRONN, font=("Segoe UI", 8, "italic"))
         # B) rent spørsmål UTEN fil: rett fra inn til Borealis
         xi1, yi1, xi2, yi2 = rekt["inn"]
