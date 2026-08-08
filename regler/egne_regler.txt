@@ -12,6 +12,16 @@
 #    tall og datoer hentes fra dokumentet uansett hva som står her.
 #  - Maks 20 regler à 200 tegn. Linjer som prøver å overstyre
 #    kjernereglene eller be om utregning, avvises og logges.
+#  - MEN: den avvisningen er SKADEBEGRENSNING, ikke en garanti.
+#    Den kjenner igjen kjente formuleringer (norsk og engelsk,
+#    bokmål og nynorsk) — en formulering den ikke kjenner slipper
+#    forbi. Det er en egenskap ved en blokkeringsliste, ikke en
+#    mangel som kan lukkes med flere ord (R168).
+#    Derfor: DENNE FILA ER EN SIKKERHETSFØLSOM FIL. Den som kan
+#    skrive i den, kan påvirke hvert eneste svar serveren gir.
+#    Behandle skrivetilgang hit som skrivetilgang til koden.
+#    Det som er GARANTERT, er kodevaktene etter svaret: tallvakt,
+#    eksklusjonsvakt, skjemavalidering og personvernbryteren.
 #
 #  Eksempler (fjern # for å aktivere):
 # Svar alltid med hele setninger.

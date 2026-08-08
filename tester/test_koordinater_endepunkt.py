@@ -112,3 +112,78 @@ def test_koordinater_er_dokumentert_i_openapi():
     egenskaper = dok["requestBody"]["content"]["multipart/form-data"][
         "schema"]["properties"]
     assert "koordinater" in egenskaper
+
+
+# ------------------------------------------------------------------ #
+#  Boksene gjelder et bilde klienten ikke har fått (R167)              #
+# ------------------------------------------------------------------ #
+#
+# `koordinatrom` het «forbehandlet_bilde_piksler», og dokumentasjonen
+# sa at sidedimensjonene følger med «så en utheving kan skaleres
+# riktig». Det er sant for `pdf_punkter` og for OCR-sider som IKKE ble
+# geometrisk rettet — ikke ellers.
+#
+# Målt: 3 graders skjevhetsretting flytter et punkt opptil 31,6 piksler,
+# og forskyvningen avhenger av HVOR punktet ligger. Perspektivretting
+# endrer i tillegg dimensjonene (1400×1100 → 1183×864). Ingen ensartet
+# skalering retter det opp — og klienten fikk aldri vite det.
+#
+# `bildekvalitet` gjorde det verre: den var side 1s rapport for HELE
+# dokumentet, så en klient som ville regne selv hadde ikke engang
+# vinkelen for side 2.
+
+from delt.koordinater import koordinater_for_sider
+
+
+def _side(nr, skjev=0.0, perspektiv=False):
+    return {"side": nr, "bredde": 800, "hoyde": 1000, "regioner": [],
+            "forbehandling": {"skjevhet_grader": skjev,
+                              "perspektiv_rettet": perspektiv}}
+
+
+def test_urort_side_kan_kartlegges():
+    svar = koordinater_for_sider([_side(1)], "forbehandlet_bilde_piksler")
+    assert svar["kan_kartlegges_til_original"] is True
+    assert svar["sider"][0]["kan_kartlegges_til_original"] is True
+
+
+def test_skjevhetsrettet_side_kan_IKKE_kartlegges():
+    svar = koordinater_for_sider([_side(1, skjev=-3.0)],
+                                 "forbehandlet_bilde_piksler")
+    assert svar["kan_kartlegges_til_original"] is False
+    assert svar["sider"][0]["skjevhet_grader"] == -3.0
+
+
+def test_perspektivrettet_side_kan_IKKE_kartlegges():
+    svar = koordinater_for_sider([_side(1, perspektiv=True)],
+                                 "forbehandlet_bilde_piksler")
+    assert svar["kan_kartlegges_til_original"] is False
+
+
+def test_en_rettet_side_smitter_paa_hele_svaret():
+    """Dokumentflagget er en OG av sidene: kan én side ikke kartlegges,
+    kan ikke klienten tegne uten å se etter per side."""
+    svar = koordinater_for_sider([_side(1), _side(2, skjev=-3.0)],
+                                 "forbehandlet_bilde_piksler")
+    assert svar["kan_kartlegges_til_original"] is False
+    assert svar["sider"][0]["kan_kartlegges_til_original"] is True
+    assert svar["sider"][1]["kan_kartlegges_til_original"] is False
+
+
+def test_vinkelen_oppgis_PER_SIDE():
+    """`bildekvalitet` bar side 1s tall for hele dokumentet. En side 3
+    som er skjev 4 grader ble meldt som 0.0."""
+    svar = koordinater_for_sider(
+        [_side(1), _side(2, skjev=-4.0), _side(3)],
+        "forbehandlet_bilde_piksler")
+    assert [s["skjevhet_grader"] for s in svar["sider"]] == [0.0, -4.0, 0.0]
+
+
+def test_dokumentasjonen_sier_det_ogsaa():
+    """Feltet hjelper ikke hvis dokumentet fortsatt lover det motsatte."""
+    import os
+    rot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tekst = open(os.path.join(rot, "docs", "endepunkter.md"),
+                 encoding="utf-8").read()
+    assert "kan_kartlegges_til_original" in tekst
+    assert "31,6" in tekst, "målingen som viser hvorfor, mangler"

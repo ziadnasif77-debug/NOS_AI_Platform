@@ -69,10 +69,42 @@ def koordinater_for_sider(sider: list, koordinatrom: str,
     på om siden ble vurdert."""
     ut_sider = []
     antall = 0
+    kartleggbart = True
     for s in sider:
         funn = funn_paa_side(s["regioner"], typer)
         antall += len(funn)
+        # PER SIDE, og ÆRLIG om den kan regnes tilbake (R167).
+        #
+        # Boksene lever i det FORBEHANDLEDE bildet. Har siden vært
+        # gjennom perspektivretting eller skjevhetsretting, er det rommet
+        # ikke lenger en ren skalering av originalen — og
+        # dokumentasjonen sa at dimensjonene «følger med, så uthevingen
+        # kan skaleres riktig». Målt: 3 graders skjevhetsretting flytter
+        # et punkt opptil 31,6 piksler, og forskyvningen avhenger av HVOR
+        # punktet er. Ingen ensartet skalering retter det opp.
+        #
+        # Perspektivretting endrer i tillegg selve dimensjonene (målt:
+        # 1400×1100 → 1183×864), så «bredde/hoyde» blir det eneste sanne
+        # holdepunktet — og bare for det forbehandlede bildet.
+        #
+        # Vi skjuler ikke dette lenger. Klienten får VITE at boksene
+        # gjelder et bilde den ikke har, og hvilken transformasjon som
+        # skiller dem — så den kan velge: vise det forbehandlede bildet,
+        # regne selv, eller la være å utheve.
+        forb = s.get("forbehandling") or {}
+        rettet = bool(forb.get("perspektiv_rettet")
+                      or forb.get("skjevhet_grader"))
+        if rettet:
+            kartleggbart = False
         ut_sider.append({"side": s["side"], "bredde": s["bredde"],
-                         "hoyde": s["hoyde"], "funn": funn})
+                         "hoyde": s["hoyde"], "funn": funn,
+                         "skjevhet_grader": forb.get("skjevhet_grader", 0.0),
+                         "perspektiv_rettet": bool(
+                             forb.get("perspektiv_rettet")),
+                         "kan_kartlegges_til_original": not rettet})
     return {"koordinatrom": koordinatrom, "sider": ut_sider,
-            "antall_funn": antall}
+            "antall_funn": antall,
+            # Ett flagg for hele svaret: kan KLIENTEN tegne disse
+            # boksene på originalen sin uten å regne? `False` betyr at
+            # minst én side ble geometrisk rettet.
+            "kan_kartlegges_til_original": kartleggbart}

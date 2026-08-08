@@ -596,8 +596,18 @@ posisjon på siden:
 
 - **`koordinatrom` må leses:** OCR-dokumenter gir bokser i
   `forbehandlet_bilde_piksler` (perspektiv-/skjevhetsrettet bilde);
-  tekstlags-PDF-er gir `pdf_punkter` (72 per tomme). Sidedimensjonene
-  følger med i samme rom, så en utheving kan skaleres riktig.
+  tekstlags-PDF-er gir `pdf_punkter` (72 per tomme).
+- **`kan_kartlegges_til_original` må leses FØR du tegner.** Her sto det
+  tidligere at sidedimensjonene følger med «så en utheving kan skaleres
+  riktig». Det er sant for `pdf_punkter` og for OCR-sider som ikke ble
+  geometrisk rettet — men *ikke* ellers: skjevhetsretting og
+  perspektivretting er ikke skaleringer. Målt: 3 graders retting flytter
+  et punkt opptil **31,6 piksler**, og forskyvningen avhenger av hvor
+  punktet ligger; perspektivretting endrer i tillegg dimensjonene
+  (målt 1400×1100 → 1183×864). Ingen ensartet skalering retter det opp.
+  Er flagget `false`, gjelder boksene et bilde du ikke har fått — vis
+  det forbehandlede bildet, regn selv fra `skjevhet_grader` og
+  `perspektiv_rettet` (oppgitt **per side**), eller la være å utheve.
 - `bokser` er en liste: OCR kan dele et gruppert nummer over flere
   bokser.
 - Ren tekstopplasting har ingen sider — da er `koordinater` `null` og

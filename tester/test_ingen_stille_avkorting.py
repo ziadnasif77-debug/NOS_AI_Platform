@@ -94,3 +94,74 @@ def test_selvkontrollen_sammenligner_samme_grunnlag(monkeypatch):
                         lambda p, m: (promptene.append(p), ("ANNET", False))[1])
     api.korriger_borealis(LANG)
     assert len(promptene) == 2, "selvkontrollpasset kjørte ikke"
+
+
+# ------------------------------------------------------------------ #
+#  Håndskriftlesingen: tre tause utganger (R165)                       #
+# ------------------------------------------------------------------ #
+#
+# `_les_med_norhand` kunne slutte av tre grunner — antallstaket,
+# tidsbudsjettet og en modell som ikke svarer — og ALLE tre var tause.
+# Regionene beholdt EasyOCRs egen, lave lesing, og den gikk videre inn i
+# den flettede teksten som om den var det beste vi kunne få.
+#
+# Målt: 40 håndskriftkandidater på én side, 12 lest, 28 tilbake med
+# konfidens rundt 0,20 — og ikke ett felt i svaret sa at noe var
+# utelatt. Sidegjennomsnittet skjuler det: en side som ellers er godt
+# lest drar snittet opp. Filen advarer selv mot nettopp den fellen
+# («SIDEGJENNOMSNITT SKJULER LOKAL KATASTROFE») — anvendt på utløseren,
+# men ikke på rapporteringen.
+
+def _regioner(n):
+    return [{"boks": [0, 0, 1, 1], "tekst": "x", "easyocr_tekst": "x",
+             "easyocr_konfidens": 0.2, "konfidens": 0.2,
+             "motor": "easyocr"} for _ in range(n)]
+
+
+def test_alt_lest_gir_ingen_grunn(monkeypatch):
+    """Speilet først: leses alt, skal ingenting meldes."""
+    from delt import region_ocr as ro
+    monkeypatch.setattr(ro, "_norhand_les_batch",
+                        lambda u: [("x", 0.9)] * len(u))
+    ut = ro._les_med_norhand(_regioner(8), [(i, None) for i in range(8)])
+    assert ut["grunn"] is None and ut["ulest"] == 0
+
+
+def test_tidsbudsjettet_meldes(monkeypatch):
+    import time as _t
+    from delt import region_ocr as ro
+
+    def _tregt(u):
+        _t.sleep(ro.MAKS_NORHAND_SEKUNDER + 0.5)
+        return [("x", 0.9)] * len(u)
+
+    monkeypatch.setattr(ro, "_norhand_les_batch", _tregt)
+    ut = ro._les_med_norhand(_regioner(20), [(i, None) for i in range(20)])
+    assert ut["grunn"] == "tidsbudsjett"
+    assert ut["ulest"] > 0
+
+
+def test_utilgjengelig_modell_meldes(monkeypatch):
+    """Før: `return` uten et ord. Regionene sto igjen med trykk-lesingen
+    og svaret så komplett ut."""
+    from delt import region_ocr as ro
+
+    def _kast(u):
+        raise RuntimeError("modell nede")
+
+    monkeypatch.setattr(ro, "_norhand_les_batch", _kast)
+    ut = ro._les_med_norhand(_regioner(9), [(i, None) for i in range(9)])
+    assert ut["grunn"] == "modell_utilgjengelig"
+    assert ut["ulest"] == 9
+
+
+def test_antallstaket_telles_i_kallstedet():
+    """Den tredje utgangen ligger i `_ocr_side_intern`, ikke i
+    leseren — kandidater over taket samles aldri opp. Kildekontroll,
+    fordi tellingen skjer inne i en løkke over ekte bildedata."""
+    import inspect
+    from delt import region_ocr as ro
+    kilde = inspect.getsource(ro)
+    assert "hoppet_over[0] += 1" in kilde, (
+        "kandidater over antallstaket telles ikke")
+    assert '"antallstak"' in kilde, "antallstaket får ingen grunn-verdi"

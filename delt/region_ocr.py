@@ -118,6 +118,35 @@ def ledig_gpu_mb() -> float:
         return 0.0
 
 
+# Arbeidsbuffere EasyOCR fortsatt trenger PER SIDE etter at vektene er
+# lastet. Kravet i MINSTE_LEDIG_GPU_MB dekker begge deler ved lasting —
+# men når norhand spør ETTERPÅ, er vektene alt trukket fra det ledige,
+# mens bufferne ennå ikke er allokert. Uten dette påslaget så norhand et
+# «ledig» tall som EasyOCR allerede har lovet bort til seg selv (R166).
+EASYOCR_ARBEIDSBUFFER_MB = int(
+    os.environ.get("OCR_EASYOCR_ARBEIDSBUFFER_MB", "900"))
+
+
+def _gpu_budsjett_ok(krav_mb: float) -> bool:
+    """Er det plass til `krav_mb` NÅR alt annet er regnet med?
+
+    De to tersklene ble evaluert HVER FOR SEG og etter hverandre:
+    EasyOCR målte det ledige og tok sin del, så målte norhand det som
+    var igjen og tok sin. Ingen av dem regnet på summen, og ingen av dem
+    tok høyde for at llama.cpp allokerer compute-buffere DYNAMISK under
+    neste inferens. At det holdt i praksis var en egenskap ved tallene,
+    ikke ved konstruksjonen — og det er nettopp slike marginer som ga
+    det tause native krasjet 0xC0000005 (R166).
+
+    Regnestykket er nå ETT sted, og påslaget for en alt lastet EasyOCR
+    er eksplisitt."""
+    ledig = ledig_gpu_mb()
+    if ledig <= 0:
+        return False
+    reservert = EASYOCR_ARBEIDSBUFFER_MB if _easyocr["gpu"] else 0
+    return ledig >= krav_mb + reservert
+
+
 def frigjor_gpu() -> None:
     """Gir PyTorch sine ubrukte, hurtigbufrede blokker tilbake til
     driveren. Frigjør IKKE modellvekter (verken EasyOCRs eller
@@ -268,7 +297,8 @@ def _hent_norhand():
             # (800 MiB) ble den urettmessig dyttet til CPU etter at
             # EasyOCR alt hadde tatt sin del — og på CPU koster den 3,7 s
             # per region mot 0,3 s på GPU.
-            if torch.cuda.is_available() and ledig_gpu_mb() >= MINSTE_LEDIG_GPU_NORHAND_MB:
+            if (torch.cuda.is_available()
+                    and _gpu_budsjett_ok(MINSTE_LEDIG_GPU_NORHAND_MB)):
                 modell = modell.half().to("cuda")
                 enhet = "cuda"
         except Exception:
@@ -630,6 +660,9 @@ def _ocr_side_intern(bilde_np) -> dict:
     # én side. Uten taket vokser tiden ubegrenset med antall usikre
     # regioner — en dårlig skannet side kunne alene koste minutter.
     kandidater = []          # [(indeks i `regioner`, bildeutsnitt)]
+    # Regioner som VILLE vært kandidater, men falt utenfor antallstaket.
+    # Liste, ikke int, fordi den skrives inne i løkka (R165).
+    hoppet_over = [0]
     for punkter, tekst, konf in funn:
         xs = [p[0] for p in punkter]
         ys = [p[1] for p in punkter]
@@ -664,11 +697,16 @@ def _ocr_side_intern(bilde_np) -> dict:
         # den visuelle testen noe meningsfylt, for den bruker teksten).
         verdt_norhand = (region["skrift"] == "handskrift"
                          or konf < TERSKEL_OPPGITT)
-        if (konf < TERSKEL_TRYKT and stor_nok and verdt_norhand
-                and len(kandidater) < MAKS_NORHAND_PER_SIDE):
-            # R55: samles opp og leses samlet etter løkka i stedet for ett
-            # kall per region — se _norhand_les_batch.
-            kandidater.append((len(regioner), utsnitt))
+        if konf < TERSKEL_TRYKT and stor_nok and verdt_norhand:
+            if len(kandidater) < MAKS_NORHAND_PER_SIDE:
+                # R55: samles opp og leses samlet etter løkka i stedet for
+                # ett kall per region — se _norhand_les_batch.
+                kandidater.append((len(regioner), utsnitt))
+            else:
+                # Over antallstaket. Regionen beholder EasyOCRs lave
+                # lesing — og det MÅ meldes, ellers ser en avkortet side
+                # ut som en ferdig lest side (R165).
+                hoppet_over[0] += 1
 
         region["konfidens"] = round(float(region["konfidens"]), 3)
         regioner.append(region)
@@ -681,8 +719,16 @@ def _ocr_side_intern(bilde_np) -> dict:
                    "konfidens": r["konfidens"], "skrift": r.get("skrift", "")}
                   for r in regioner])
 
-    _les_med_norhand(regioner, kandidater)
-    resultat = {"tekst": flett_regioner(regioner), "regioner": regioner}
+    utelatt = _les_med_norhand(regioner, kandidater)
+    utelatt["ulest"] += hoppet_over[0]
+    utelatt["kandidater"] += hoppet_over[0]
+    if hoppet_over[0] and not utelatt["grunn"]:
+        utelatt["grunn"] = "antallstak"
+    resultat = {"tekst": flett_regioner(regioner), "regioner": regioner,
+                # `None` når alt ble lest — ikke en tom ordbok, så en
+                # klient kan skille «ingenting utelatt» fra «vi målte
+                # ikke» (R128).
+                "handskrift_avkortet": utelatt if utelatt["grunn"] else None}
     return _kanskje_ufcn_andrepass(bilde_np, resultat)
 
 
@@ -930,25 +976,44 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
     return {"tekst": flett_regioner(valgte), "regioner": valgte}
 
 
-def _les_med_norhand(regioner: list, kandidater: list) -> None:
+def _les_med_norhand(regioner: list, kandidater: list) -> dict:
     """Leser kandidatregionene med håndskriftmodellen og lar beste motor
     vinne hver region. Muterer `regioner` på plass.
 
     Kandidatene deles i porsjoner: da får tidstaket fortsatt virke (det
     sjekkes mellom porsjonene), samtidig som vi beholder det meste av
     gevinsten ved å lese flere regioner i samme modellkall.
+
+    RETURNERER HVA SOM IKKE BLE LEST (R165). Det er tre veier ut herfra
+    — tidsbudsjettet, en modell som ikke er tilgjengelig, og (i
+    kallstedet) antallstaket — og ALLE tre var tause. Regionene beholdt
+    da EasyOCRs egen, lave lesing, og den gikk videre inn i den flettede
+    teksten som om den var det beste vi kunne få.
+
+    Målt: 40 håndskriftkandidater på én side, 12 lest, **28 tilbake med
+    konfidens rundt 0,20** — og ikke ett felt i svaret sa at noe var
+    utelatt. Sidegjennomsnittet skjuler det: en side som ellers er godt
+    lest drar snittet opp, og det er nettopp den fellen filen selv
+    advarer mot lenger nede («SIDEGJENNOMSNITT SKJULER LOKAL
+    KATASTROFE») — anvendt på utløseren, men ikke på rapporteringen.
     """
+    utelatt = {"grunn": None, "ulest": 0, "kandidater": len(kandidater)}
     brukt = 0.0
     start = 0
     while start < len(kandidater):
         if brukt >= MAKS_NORHAND_SEKUNDER:
-            break              # budsjettet er brukt opp — resten står over
+            utelatt["grunn"] = "tidsbudsjett"
+            utelatt["ulest"] = len(kandidater) - start
+            break
         porsjon = kandidater[start:start + _norhand_porsjon()]
         t0 = time.perf_counter()
         try:
             svar = _norhand_les_batch([u for _, u in porsjon])
         except Exception:
-            return             # norhand utilgjengelig → behold EasyOCR
+            # norhand utilgjengelig → behold EasyOCR, men SI DET.
+            utelatt["grunn"] = "modell_utilgjengelig"
+            utelatt["ulest"] = len(kandidater) - start
+            return utelatt
         finally:
             brukt += time.perf_counter() - t0
         start += len(porsjon)
@@ -970,3 +1035,4 @@ def _les_med_norhand(regioner: list, kandidater: list) -> None:
             innsyn_hendelser.send(
                 "norhand_lest", boks=region["boks"], tekst=nh_tekst,
                 konfidens=round(nh_konf, 3), vant=vant)
+    return utelatt

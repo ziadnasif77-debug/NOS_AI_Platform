@@ -49,7 +49,14 @@ dokumentet.
    uansett hva som står i `egne_regler.txt` (R8.1).
 3. Koden avviser på forhånd linjer i `egne_regler.txt` som prøver å
    oppheve kjernereglene eller be om utregning — de logges som
-   `egne_regler: AVVIST (R8.1)`.
+   `egne_regler: AVVIST (R8.1)`. **Dette er skadebegrensning, ikke en
+   garanti:** avvisningen kjenner igjen kjente formuleringer, og en
+   formulering den ikke kjenner slipper forbi. Det følger av formen —
+   en blokkeringsliste kan ikke gjøres komplett. Målt: før filteret ble
+   utvidet slapp seks av åtte angrepslinjer gjennom, blant dem
+   engelske og nynorske varianter (R168). **Skrivetilgang til
+   `regler/` er derfor sikkerhetsfølsomt** — den som kan endre disse
+   filene, kan påvirke hvert eneste svar serveren gir.
 4. Etter at modellen har svart, kjører KODE-vaktene: tallvakt,
    eksklusjonsvakt, skjemavalidering. De kan overprøve modellen.
 
