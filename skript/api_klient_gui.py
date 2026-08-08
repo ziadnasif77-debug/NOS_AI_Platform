@@ -15,7 +15,7 @@ statusverdier og feilkoder er VERIFISERT mot serverkoden, ikke gjettet:
   - Spør         POST /spor           fil og/eller spørsmål → svar
   - Fyll skjema  POST /dokument  skjema_mal → utfylte felter
   - Analyser     POST /dokument  felter=ja → deterministisk felt-/datoanalyse
-  - Uttrekk      POST /uttrekk        fil → strukturert uttrekk med fast skjema
+  - Uttrekk      POST /dokument  struktur=ja → strukturert uttrekk
   - Storjobb     POST /jobb m.fl.     bakgrunnsbehandling av store skanninger,
                                       med automatisk statusoppfølging
   - Serverinfo   GET /hjelp, /openapi.json og lenke til /dokumentasjon
@@ -274,7 +274,8 @@ EKSEMPEL_SKJEMA_FLETT = """{
   "belop": "{belop}"
 }"""
 
-# De tre skjema-motorene, delt av /dokument og /fyll_skjema.
+# De tre skjema-motorene. Brukes av /dokument (bryteren skjema_mal)
+# — det gamle /fyll_skjema er fjernet fra serveren (R157).
 SKJEMA_MOTORER = [
     ("modell", "Modell — Borealis fyller alt (tregere, forstår fritekst)"),
     ("felter", "Felter — deterministisk {feltnavn} (raskt, uten modell)"),
@@ -1817,9 +1818,13 @@ class KontrollPanel:
                     return ("laster", "Borealis: laster ...")
                 if borealis == "feil":
                     # Terminal tilstand (ingen retry i serveren) — ikke lov
-                    # en lasting som aldri kommer: /analyser virker, /spor ikke.
+                    # en lasting som aldri kommer. Meldingen navnga
+                    # `/analyser`, en rute som ble FJERNET (R157): den som
+                    # leste den ville prøvd noe som gir 404 (R180).
                     return ("kjorer",
-                            "Borealis FEILET (se logg) — /spor er nede, /analyser virker")
+                            "Borealis FEILET (se logg) — spørsmål og "
+                            "skjemautfylling er nede. Felter, struktur og "
+                            "sladding virker som før.")
                 return ("kjorer", tjeneste["beskrivelse"])
             return ("kjorer", tjeneste["beskrivelse"])
         except requests.exceptions.RequestException:
@@ -4020,7 +4025,9 @@ class DokumentKlientApp:
             panel.sett_svar("Serveren returnerte ikke noe svar.")
 
     # ======================================================================
-    # Fane: Fyll skjema (/fyll_skjema)
+    # Fane: Fyll skjema — går via POST /dokument med skjema_mal.
+    # Ruta /fyll_skjema er FJERNET fra serveren (R157); navnet her er
+    # bare fanens (R180).
     # ======================================================================
     def _bygg_fyll_skjema_fane(self, forelder):
         pad = {"padx": 12, "pady": 6}
@@ -4132,7 +4139,8 @@ class DokumentKlientApp:
         )
 
     # ======================================================================
-    # Fane: Analyser (/analyser)
+    # Fane: Analyser — går via POST /dokument med felter=ja.
+    # Ruta /analyser er FJERNET fra serveren (R157).
     # ======================================================================
     def _bygg_analyser_fane(self, forelder):
         pad = {"padx": 12, "pady": 6}
@@ -4194,7 +4202,8 @@ class DokumentKlientApp:
         )
 
     # ======================================================================
-    # Fane: Uttrekk (/uttrekk)
+    # Fane: Uttrekk — går via POST /dokument med struktur=ja.
+    # Ruta /uttrekk er FJERNET fra serveren (R157).
     # ======================================================================
     def _bygg_uttrekk_fane(self, forelder):
         pad = {"padx": 12, "pady": 6}

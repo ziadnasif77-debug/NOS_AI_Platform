@@ -28,18 +28,36 @@ sys.path.insert(0, ROT)
 from delt import tekstuttrekk as tu
 
 
-def _tid(fn, *a):
-    t0 = time.perf_counter()
-    fn(*a)
-    return time.perf_counter() - t0
+def _tid(fn, arg, runder=5):
+    """BESTE av flere runder, ikke én måling.
+
+    En enkelt måling fanger opp alt annet maskinen gjorde i det
+    øyeblikket — en annen test, en virusskanner, GPU-en som våkner.
+    Beste tid er den som er minst forurenset; det er standard praksis
+    for mikrobenchmarks, og det er nettopp derfor: vi måler koden, ikke
+    belastningen.
+
+    Denne vakten var flaky uten det. Den falt én gang midt i en full
+    testkjøring der maskinen var travel — og en vakt som roper tilfeldig
+    blir slått av, ikke fikset (R180)."""
+    beste = float("inf")
+    for _ in range(runder):
+        t0 = time.perf_counter()
+        fn(arg)
+        beste = min(beste, time.perf_counter() - t0)
+    return beste
 
 
-def _vekst(fn, lag, n1, n2):
-    """Faktoren tiden vokser med når inndata dobles."""
-    t1 = _tid(fn, lag(n1))
-    t2 = _tid(fn, lag(n2))
-    # Gulv på 1 ms: under det måler vi klokkeoppløsning, ikke kode.
-    return t2 / max(t1, 0.001)
+def _vekst(fn, lag, n1, n2, runder=5):
+    """Faktoren tiden vokser med når inndata dobles.
+
+    Inndataene må være store nok til at t1 ligger godt over
+    klokkeoppløsningen. Med t1 = 0,7 ms ga litt støy en «vekst» på 4×
+    uten at noe var galt."""
+    t1 = _tid(fn, lag(n1), runder)
+    t2 = _tid(fn, lag(n2), runder)
+    # Gulv på 2 ms: under det måler vi klokke og støy, ikke kode.
+    return t2 / max(t1, 0.002)
 
 
 BINDESTREKER = lambda n: "1-" * n
@@ -58,7 +76,8 @@ def test_epostmonsteret_er_ikke_kvadratisk():
 
 def test_hele_uttrekket_er_ikke_kvadratisk():
     """Den som faktisk rammer en forespørsel."""
-    faktor = _vekst(tu.strukturert_uttrekk, BINDESTREKER, 20000, 40000)
+    faktor = _vekst(tu.strukturert_uttrekk, BINDESTREKER, 20000, 40000,
+                   runder=2)
     assert faktor < 3.0, f"strukturert_uttrekk vokste {faktor:.1f}× ved dobling"
 
 
@@ -66,7 +85,7 @@ def test_belopsmonsteret_er_ikke_kvadratisk():
     """`(?:[ .][\\dOo]{3})*` er grådig, og mønsteret etter den kan
     feile — da spores det tilbake gruppe for gruppe fra hvert
     startpunkt."""
-    faktor = _vekst(tu.finn_belop, TREGRUPPER, 1600, 3200)
+    faktor = _vekst(tu.finn_belop, TREGRUPPER, 6400, 12800, runder=3)
     assert faktor < 3.0, f"finn_belop vokste {faktor:.1f}× ved dobling"
 
 
