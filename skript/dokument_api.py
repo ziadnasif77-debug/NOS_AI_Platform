@@ -2143,6 +2143,26 @@ def _reparer_ocr_artefakter(tekst: str) -> str:
     return tekst
 
 
+# Hvor mye av dokumentet modellen ser i korrigeringsrunden. Var en naken
+# 3000-er inne i funksjonen, uten navn — og uten at noen fikk vite at
+# den fantes (R160).
+KORRIGER_MAKS_TEGN = int(os.environ.get("KORRIGER_MAKS_TEGN", "3000"))
+
+
+def _med_hale(rettet: str, hale: str) -> str:
+    """Legger den URØRTE resten tilbake, med et synlig skille.
+
+    Alternativet — å returnere bare den rettede delen — er nettopp det
+    som gjorde avkortingen usynlig: teksten så hel ut, den bare sluttet
+    midt i en setning. Målt: 27 383 tegn inn, 3 000 tegn ut, null
+    merker."""
+    if not hale:
+        return rettet
+    return (rettet + f"\n\n[KORRIGERINGEN DEKKER DE FØRSTE "
+            f"{KORRIGER_MAKS_TEGN} TEGNENE. Resten står urørt under — "
+            f"rå OCR-tekst.]\n" + hale)
+
+
 def korriger_borealis(ocr_tekst: str, regioner: list | None = None) -> str:
     """Retter OCR-feil ut fra SETNINGSSAMMENHENGEN, i TO pass:
     1) korreksjon — med kjente OCR-artefaktmønstre og (når vi har dem)
@@ -2151,10 +2171,21 @@ def korriger_borealis(ocr_tekst: str, regioner: list | None = None) -> str:
     2) selvkontroll — kandidaten sammenlignes med originalen setning for
        setning: oversette tegnfeil rettes, tillegg/omformuleringer rulles
        tilbake, sifferverdier må være identiske.
-    Rå OCR-tekst beholdes alltid ved siden av; dette er et lag OVER."""
+    Rå OCR-tekst beholdes alltid ved siden av; dette er et lag OVER.
+
+    RETTINGEN DEKKER DE FØRSTE `KORRIGER_MAKS_TEGN` TEGNENE (R160).
+    Modellen ser bare den delen, så den kan bare rette den delen. Før
+    dette sto avkortingen usagt, og `_linjevakt` gjorde den verre: den
+    sammenlignet det avkortede svaret med HELE originalen, fant ulikt
+    linjeantall, og returnerte kandidaten urørt. Vakten som skulle
+    stoppe omskriving, slapp altså avkortingen gjennom fordi den ikke
+    kjente den igjen. Nå er sammenligningsgrunnlaget det modellen
+    faktisk fikk se, og resten legges tilbake med et synlig skille."""
     # Pass 0 — deterministisk: mekaniske artefakter («#», «ł») fikses før
     # språkmodellen ser teksten (den nekter å røre dem selv med instruks).
     ocr_tekst = _reparer_ocr_artefakter(ocr_tekst)
+    del_tekst = ocr_tekst[:KORRIGER_MAKS_TEGN]
+    hale = ocr_tekst[KORRIGER_MAKS_TEGN:]
     usikre = [f"- «{(r.get('tekst') or '')[:60]}» (konfidens "
               f"{float(r.get('konfidens', 0)):.2f})"
               for r in (regioner or [])
@@ -2166,25 +2197,25 @@ def korriger_borealis(ocr_tekst: str, regioner: list | None = None) -> str:
                         + "\n".join(usikre[:12]) + "\n")
     prompt = prompter.hent("korriger.forste_pass",
                            usikre_blokk=usikre_blokk,
-                           ocr_tekst=ocr_tekst[:3000])
+                           ocr_tekst=del_tekst)
     forste, avkortet = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
     if avkortet:
         return forste + "\n[AVKORTET: nådde maksimal svarlengde]"
-    if forste.strip() == ocr_tekst.strip():
+    if forste.strip() == del_tekst.strip():
         # Pass 1 fant ingenting å rette — da finnes det heller ingenting å
         # selvkontrollere. Sparer et helt modellkall (flere sekunder) i
         # normaltilfellet der OCR-teksten alt er ren.
-        return forste.strip()
+        return _med_hale(forste.strip(), hale)
 
     # Pass 2 — selvkontroll («sjekk flere ganger»): fanger både tegnfeil
     # første pass overså og eventuelle påfunn den la til.
     kontroll = prompter.hent("korriger.selvkontroll",
-                             original=ocr_tekst[:3000],
-                             kandidat=forste[:3000])
+                             original=del_tekst,
+                             kandidat=forste[:KORRIGER_MAKS_TEGN])
     andre, avkortet2 = _borealis_generer(kontroll, MAKS_SVAR_TOKENS)
     if avkortet2 or len(andre.strip()) < len(forste.strip()) // 2:
         andre = forste         # kontrollpasset sporet av → behold første
-    return _linjevakt(ocr_tekst, andre)
+    return _med_hale(_linjevakt(del_tekst, andre), hale)
 
 
 _FUNKSJONSORD = {"er", "det", "og", "i", "på", "å", "en", "et", "som",
@@ -5727,9 +5758,14 @@ class Handler(BaseHTTPRequestHandler):
                 deler["svar"] = {"ok": False, "feil": tom_feil}
             else:
                 def _svar_del():
+                    # `ktx.strekkoder_lest` er hva som FAKTISK skjedde;
+                    # `les_strekkoder` er bare hva klienten ba om. På en
+                    # DOCX/TXT er det ingen bilder å skanne, så svaret ble
+                    # «ingen strekkoder funnet» om et dokument der vi
+                    # aldri så etter (R159).
                     kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
                                                handskrift, strekkoder,
-                                               les_strekkoder)
+                                               ktx.strekkoder_lest)
                     if kjerne["tom"]:
                         return {"ok": False, "feil": tom_feil}
                     advarsler.extend(kjerne["advarsler"])
@@ -6455,7 +6491,8 @@ class Handler(BaseHTTPRequestHandler):
             ))
 
         kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
-                                   handskrift, strekkoder, les_strekkoder)
+                                   handskrift, strekkoder,
+                                   skanning_kjorte)
         if kjerne["tom"]:
             # Det TOMME dokumentet var verst: 8 nøkler, og uten
             # «versjon» — stikk i strid med R39. En bunke med én blank
@@ -6861,12 +6898,24 @@ def _strekkodesvar(strekkoder: list, sideref=None, strekkoder_lest=True):
     """Deterministisk svar på et strekkodespørsmål, eller None hvis
     spørsmålet ikke kan besvares fra listen alene.
 
-    «strekkoder_lest=False» (klienten sendte strekkoder=nei) gir None:
-    en tom liste betyr da at vi ikke SÅ etter, ikke at det ikke finnes
-    noe — og «ingen funnet» ville vært en løgn."""
-    if not strekkoder_lest:
-        return None
+    «strekkoder_lest=False» betyr at skanningen ikke ble kjørt — enten
+    fordi klienten sendte `strekkoder=nei`, eller fordi dokumentet ikke
+    har bilder å skanne (DOCX, TXT, CSV). Da er en TOM liste ikke et
+    funn: den betyr at vi ikke SÅ etter, og «ingen funnet» ville vært en
+    løgn.
+
+    Men den sperrer bare PÅSTANDEN OM FRAVÆR. Ligger det faktisk koder i
+    lista, er de like sanne uansett hvorfor skanningen ikke ble kjørt —
+    og da er det den deterministiske dekoderen som svarer, ikke
+    modellen (R159).
+
+    Ble den ikke kjørt OG lista er tom, går spørsmålet videre til
+    modellen — som før. Teksten kan NEVNE strekkodeverdien med ord
+    («Strekkode: 1234567890»), og det er noe modellen faktisk kan finne.
+    Det er derfor None her ikke er en mangel, men et valg."""
     aktuelle = strekkoder
+    if not strekkoder_lest and not strekkoder:
+        return None
     if sideref is not None:
         aktuelle = [k for k in strekkoder if k.get("side") == sideref]
     if not aktuelle:
@@ -8063,8 +8112,12 @@ class SvarOperasjon(Operasjon):
             return {"type": "svar", "ok": False, "feil": _borealis_nede_feil()}
         if ktx.er_tom():
             return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
+        # `ktx.strekkoder_lest`, ikke standarden: uten den svarte
+        # operasjonsveien «Ingen strekkoder funnet» om et dokument som
+        # aldri ble skannet (R159).
         kjerne = svar_paa_sporsmal(ktx.tekst, self.sporsmal, ktx.ocr_brukt,
-                                   ktx.handskrift, ktx.strekkoder)
+                                   ktx.handskrift, ktx.strekkoder,
+                                   ktx.strekkoder_lest)
         if kjerne["tom"]:
             return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
         return {"type": "svar", "ok": True, "sporsmal": self.sporsmal,

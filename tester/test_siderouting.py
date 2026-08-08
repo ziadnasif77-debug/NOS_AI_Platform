@@ -247,11 +247,21 @@ def test_skanning_avslaatt_gir_ikke_ingen_funnet(monkeypatch):
 
 
 def test_strekkodesporsmal_virker_uten_borealis(monkeypatch):
+    """Et SKANNET dokument med koder svares av dekoderen, ikke modellen.
+
+    Testen brukte tidligere «bunke.txt» — og en tekstfil har ingen
+    bilder å skanne. Den grønne kjøringen bygget altså på at serveren
+    svarte «Ingen strekkoder funnet» om et dokument som aldri ble
+    skannet, stikk i strid med R128. Filtypen er nå «pdf», der
+    skanningen faktisk kjører, og påstanden er sann (R159)."""
     _forby_modell(monkeypatch)
     monkeypatch.setitem(api._borealis, "status", "nede")
     h, fanget = _fang_handler()
-    monkeypatch.setattr(api, "les_strekkoder_bytes", lambda *a, **kw: KODER)
-    h._dokument_samlet("bunke.txt", "tekst", BUNKE, None,
+    monkeypatch.setattr(api, "analyser_med_cache", lambda *a, **kw: {
+        "ok": True, "tekst": BUNKE, "ocr_brukt": True, "strekkoder": KODER,
+        "handskrift": [], "antall_sider": 3, "ocr_motorer": {},
+    })
+    h._dokument_samlet("bunke.pdf", "pdf", b"%PDF-1.4", None,
                        {"sporsmal": "hva er strekkoden?", "tekst": "nei",
                         "felter": "nei"}, True)
     assert fanget["kode"] == 200
@@ -413,3 +423,59 @@ def test_avkorting_meldes_i_rapporten():
     assert rapport["sider_skannet"] == 3
     assert rapport["sider_totalt"] == 8
     assert rapport["avkortet"] is True
+
+
+# ------------------------------------------------------------------ #
+#  «Vi så ikke etter» er ikke «det finnes ikke» (R159)                 #
+# ------------------------------------------------------------------ #
+#
+# `strekkoder_lest` sier om skanningen FAKTISK ble kjørt. Alle tre
+# kallstedene sendte i stedet FORESPØRSELEN (`les_strekkoder`) eller
+# ingenting i det hele tatt — og standardverdien er True.
+#
+# På en DOCX/TXT/CSV finnes det ingen bilder å skanne, så skanningen
+# kjører aldri. Svaret ble likevel «Ingen strekkoder eller QR-koder
+# funnet i dokumentet», med `tall_verifisert: true` og
+# `kilde: deterministisk` — mens `strekkoder: null` sto i SAMME svar.
+# To felt om samme faktum, med hvert sitt svar.
+
+def test_de_tre_kallstedene_sender_det_som_FAKTISK_skjedde():
+    """Kildekontroll på argumentet, fordi feilen var at det manglet.
+    `les_strekkoder` er hva klienten ba om; `strekkoder_lest` /
+    `skanning_kjorte` er hva som skjedde."""
+    import inspect
+    import re
+    kilde = inspect.getsource(api)
+    # Negativt tilbakeblikk på «def »: uten det matcher mønsteret
+    # DEFINISJONEN også, og vakten teller den som et kallsted.
+    ekte = re.findall(
+        r"(?<!def )svar_paa_sporsmal\((?:[^()]|\([^()]*\))*\)", kilde)
+    assert len(ekte) == 3, f"fant {len(ekte)} kallsteder, ventet 3"
+    for k in ekte:
+        flat = " ".join(k.split())
+        assert ("strekkoder_lest" in flat or "skanning_kjorte" in flat), (
+            f"kallstedet sender ikke det som faktisk skjedde: {flat[:90]}")
+        assert "les_strekkoder)" not in flat, (
+            f"kallstedet sender FORESPØRSELEN, ikke utfallet: {flat[:90]}")
+
+
+def test_uskannet_dokument_paastaar_ikke_fravaer():
+    """R128: `[]` er en PÅSTAND. Ble det aldri sett etter, kan vi ikke
+    si «ingen funnet»."""
+    assert api._strekkodesvar([], strekkoder_lest=False) is None
+
+
+def test_skannet_dokument_uten_koder_sier_det():
+    """Speilet. En vakt som bare krevde None ville vært grønn om
+    funksjonen sluttet å svare i det hele tatt."""
+    svar = api._strekkodesvar([], strekkoder_lest=True)
+    assert svar and "Ingen strekkoder" in svar
+
+
+def test_funne_koder_svares_selv_om_skanningen_ikke_ble_kjort():
+    """Flagget sperrer PÅSTANDEN OM FRAVÆR, ikke svaret. Ligger det
+    koder i lista, er de like sanne uansett hvorfor skanningen uteble —
+    og da er det dekoderen som svarer, ikke modellen."""
+    koder = [{"type": "QR", "side": 1, "verdi": "ABC123"}]
+    svar = api._strekkodesvar(koder, strekkoder_lest=False)
+    assert svar and "ABC123" in svar

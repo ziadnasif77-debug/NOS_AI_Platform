@@ -135,7 +135,15 @@ def test_svar_uten_borealis_gir_feil(ktx, monkeypatch):
 
 
 def test_svar_med_mocket_modell(ktx, borealis_klar, monkeypatch):
-    def _stub(tekst, sporsmal, ocr, hand, strek):
+    sett = {}
+
+    def _stub(tekst, sporsmal, ocr, hand, strek, strek_lest=True):
+        # `strek_lest` MÅ være med i signaturen: uten den ville stubben
+        # skjult at operasjonsveien glemte å sende den, og svarte
+        # «ingen strekkoder funnet» om et dokument som aldri ble
+        # skannet (R159). En attrapp som er mildere enn den ekte
+        # funksjonen, måler mindre enn den ser ut til.
+        sett["strek_lest"] = strek_lest
         return {"tom": False, "svar": "6380 kroner", "tall_verifisert": True,
                 "tolket_sporsmal": sporsmal, "svar_avkortet": False,
                 "advarsler": []}
@@ -144,6 +152,9 @@ def test_svar_med_mocket_modell(ktx, borealis_klar, monkeypatch):
     res = SvarOperasjon("Hva er beløpet?").utfor(ktx)
     assert res["ok"] is True
     assert res["svar"] == "6380 kroner"
+    assert sett["strek_lest"] == ktx.strekkoder_lest, (
+        "SvarOperasjon sendte ikke ktx.strekkoder_lest videre — da svarer "
+        "operasjonsveien «ingen strekkoder funnet» om et uskannet dokument")
 
 
 def test_korriger_uten_ocr_gir_feil(borealis_klar):
