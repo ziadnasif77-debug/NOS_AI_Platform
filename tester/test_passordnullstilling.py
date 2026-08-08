@@ -165,8 +165,19 @@ def test_skriptet_skriver_aldri_ut_et_passord(skript):
 # den. Denne testen MÅLER posisjonene i stedet for å stole på at koden
 # ser riktig ut.
 
+_MAALT = {}
+
+
 def _maal_kolonner():
-    """(kolonner, ekstraposisjon) — x for hver knapp, per rad."""
+    """(kolonner, ekstra, hoyder) — x per rad, og hoyden per knapp.
+
+    MÅLES ÉN GANG og bufres. Første versjon bygget et nytt Tk-vindu
+    per test, og da hendte det at ett av dem ikke fikk laget rota —
+    testen hoppet over med «ingen skjerm tilgjengelig». Et hopp som
+    kommer og går er verre enn et fast: kjøringen ser grønn ut, og
+    ingen legger merke til at vakten ikke målte noe den gangen."""
+    if _MAALT:
+        return _MAALT["kolonner"], _MAALT["ekstra"], _MAALT["hoyder"]
     tk = pytest.importorskip("tkinter")
     sys.path.insert(0, os.path.join(ROT, "skript"))
     import api_klient_gui as g
@@ -190,26 +201,27 @@ def _maal_kolonner():
         for tj in g.KONTROLL_TJENESTER:
             f._bygg_kort(ramme, tj)
         rot.update()
-        kolonner, ekstra = {}, {}
+        kolonner, ekstra, hoyder = {}, {}, {}
         for tj in g.KONTROLL_TJENESTER:
             rad = f._kort[tj["key"]]["rad"]
             for barn in rad.winfo_children():
                 for b in [barn] + list(barn.winfo_children()):
                     if isinstance(b, tk.Button):
-                        x = b.winfo_rootx()
-                        if b.cget("text") == "Passord":
+                        x, navn = b.winfo_rootx(), b.cget("text")
+                        hoyder.setdefault(navn, set()).add(b.winfo_height())
+                        if navn == "Passord":
                             ekstra[tj["key"]] = x
                         else:
-                            kolonner.setdefault(
-                                b.cget("text"), set()).add(x)
-        return kolonner, ekstra
+                            kolonner.setdefault(navn, set()).add(x)
+        _MAALT.update(kolonner=kolonner, ekstra=ekstra, hoyder=hoyder)
+        return kolonner, ekstra, hoyder
     finally:
         rot.destroy()
 
 
 def test_de_fire_faste_knappene_staar_i_samme_kolonne():
     """Selve målingen — ikke en vurdering av hvordan koden ser ut."""
-    kolonner, _ = _maal_kolonner()
+    kolonner, _, _h = _maal_kolonner()
     assert kolonner, "fant ingen knapper å måle"
     skjeve = {t: sorted(v) for t, v in kolonner.items() if len(v) > 1}
     assert not skjeve, (
@@ -219,12 +231,29 @@ def test_de_fire_faste_knappene_staar_i_samme_kolonne():
 def test_passordknappen_staar_TIL_HOYRE_for_de_faste():
     """Den gjør noe annet enn de fire — de styrer TJENESTEN, denne
     gjelder en BRUKER — og avstanden sier det uten at noe forklares."""
-    kolonner, ekstra = _maal_kolonner()
+    kolonner, ekstra, _h = _maal_kolonner()
     assert "label_studio" in ekstra, "passordknappen ble ikke funnet"
     lengst_til_hoyre = max(max(v) for v in kolonner.values())
     assert ekstra["label_studio"] > lengst_til_hoyre
 
 
 def test_bare_label_studio_har_ekstraknappen():
-    _, ekstra = _maal_kolonner()
+    _, ekstra, _h = _maal_kolonner()
     assert set(ekstra) == {"label_studio"}
+
+
+def test_alle_fem_knappene_er_like_hoye():
+    """Passordknappen ble først pakket med `fill="both"` og strakk seg
+    over hele rammehøyden — synlig større enn de andre. Plassen var
+    reservert for å få ting på linje, og gjorde det motsatte.
+
+    Målingen avdekket også en eldre skjevhet: Start/Stopp hadde
+    `pady=3` mens `tema_knapp` bruker 4, altså to piksler lavere enn
+    Åpne/Logg. Med fire knapper så ingen det; med fem ble det synlig
+    (R177)."""
+    _k, _e, hoyder = _maal_kolonner()
+    assert hoyder, "fant ingen knapper å måle"
+    alle = {h for v in hoyder.values() for h in v}
+    assert len(alle) == 1, (
+        f"knappene har ulik høyde: "
+        f"{ {n: sorted(v) for n, v in hoyder.items()} }")

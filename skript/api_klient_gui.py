@@ -1284,7 +1284,7 @@ class KontrollPanel:
             knapper, text="Start", command=lambda t=tjeneste: self._start_tjeneste(t),
             bg=GRONN, fg="white", activebackground=GRONN_AKTIV,
             activeforeground="white", relief="flat", highlightthickness=0,
-            padx=12, pady=3, font=("Segoe UI", 9, "bold"),
+            padx=12, pady=4, font=("Segoe UI", 9, "bold"),
             disabledforeground=_bland("#ffffff", BG_PANEL, 0.6),
         )
         start_knapp.pack(side="left", padx=(0, 4))
@@ -1292,7 +1292,7 @@ class KontrollPanel:
             knapper, text="Stopp", command=lambda t=tjeneste: self._stopp_tjeneste(t),
             bg=ROD, fg="white", activebackground=ROD_AKTIV,
             activeforeground="white", relief="flat", highlightthickness=0,
-            padx=12, pady=3, font=("Segoe UI", 9, "bold"),
+            padx=12, pady=4, font=("Segoe UI", 9, "bold"),
             disabledforeground=_bland("#ffffff", BG_PANEL, 0.6),
         )
         stopp_knapp.pack(side="left", padx=(0, 4))
@@ -1313,9 +1313,16 @@ class KontrollPanel:
         # TJENESTEN, denne gjelder en BRUKER — og avstanden sier det uten
         # at noe må forklares (R177).
         if tjeneste["key"] == "label_studio":
+            # `expand=True` UTEN `fill`: knappen sentreres i den
+            # reserverte plassen og beholder sin egen størrelse. Med
+            # `fill="both"` strakk den seg over hele rammehøyden og ble
+            # synlig større enn de fire andre — plassen var reservert
+            # for å få ting på linje, og gjorde det motsatte (R177).
+            #
+            # `font` og `pady` er de samme som Start/Stopp bruker, så
+            # alle fem knappene er like høye.
             tema_knapp(ekstra, "Passord",
-                       self._nullstill_ls_passord).pack(fill="both",
-                                                        expand=True)
+                       self._nullstill_ls_passord).pack(expand=True)
 
         self._kort[tjeneste["key"]] = {
             "dot": dot, "status_var": status_var, "rad": rad,
