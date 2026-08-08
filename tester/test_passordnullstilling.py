@@ -151,3 +151,80 @@ def test_skriptet_skriver_aldri_ut_et_passord(skript):
         uten_strenger = re.sub(r'"[^"]*"|\'[^\']*\'', "", s)
         assert "passord" not in uten_strenger.lower(), (
             f"et passord kan lekke ut i en utskrift: {s}")
+
+
+# ------------------------------------------------------------------ #
+#  Layoutet: én rad skal ikke skyve de andre ut av kolonnene (R177)   #
+# ------------------------------------------------------------------ #
+#
+# Da Label Studio fikk en femte knapp, ble den raden bredere — og siden
+# knapperaden er høyrestilt, skjøv den de fire faste knappene mot
+# venstre. Kolonnene sluttet å stå under hverandre.
+#
+# Plassen reserveres derfor på ALLE rader, tom hos dem som ikke bruker
+# den. Denne testen MÅLER posisjonene i stedet for å stole på at koden
+# ser riktig ut.
+
+def _maal_kolonner():
+    """(kolonner, ekstraposisjon) — x for hver knapp, per rad."""
+    tk = pytest.importorskip("tkinter")
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import api_klient_gui as g
+
+    try:
+        rot = tk.Tk()
+    except tk.TclError:
+        pytest.skip("ingen skjerm tilgjengelig")
+    rot.geometry("980x400")
+    ramme = tk.Frame(rot)
+    ramme.pack(fill="both", expand=True)
+
+    class Fake:
+        _kort = {}
+        _bygg_kort = g.KontrollPanel._bygg_kort
+        _start_tjeneste = _stopp_tjeneste = _aapne_tjeneste = _aapne_logg = \
+            _nullstill_ls_passord = staticmethod(lambda *a, **k: None)
+
+    f = Fake()
+    try:
+        for tj in g.KONTROLL_TJENESTER:
+            f._bygg_kort(ramme, tj)
+        rot.update()
+        kolonner, ekstra = {}, {}
+        for tj in g.KONTROLL_TJENESTER:
+            rad = f._kort[tj["key"]]["rad"]
+            for barn in rad.winfo_children():
+                for b in [barn] + list(barn.winfo_children()):
+                    if isinstance(b, tk.Button):
+                        x = b.winfo_rootx()
+                        if b.cget("text") == "Passord":
+                            ekstra[tj["key"]] = x
+                        else:
+                            kolonner.setdefault(
+                                b.cget("text"), set()).add(x)
+        return kolonner, ekstra
+    finally:
+        rot.destroy()
+
+
+def test_de_fire_faste_knappene_staar_i_samme_kolonne():
+    """Selve målingen — ikke en vurdering av hvordan koden ser ut."""
+    kolonner, _ = _maal_kolonner()
+    assert kolonner, "fant ingen knapper å måle"
+    skjeve = {t: sorted(v) for t, v in kolonner.items() if len(v) > 1}
+    assert not skjeve, (
+        f"disse knappene står ikke på linje på tvers av radene: {skjeve}")
+
+
+def test_passordknappen_staar_TIL_HOYRE_for_de_faste():
+    """Den gjør noe annet enn de fire — de styrer TJENESTEN, denne
+    gjelder en BRUKER — og avstanden sier det uten at noe forklares."""
+    kolonner, ekstra = _maal_kolonner()
+    assert "label_studio" in ekstra, "passordknappen ble ikke funnet"
+    lengst_til_hoyre = max(max(v) for v in kolonner.values())
+    assert ekstra["label_studio"] > lengst_til_hoyre
+
+
+def test_bare_label_studio_har_ekstraknappen():
+    _, ekstra = _maal_kolonner()
+    assert set(ekstra) == {"label_studio"}

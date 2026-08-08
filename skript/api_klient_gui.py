@@ -221,6 +221,13 @@ ROSA = "#ec4899"           # Label Studio
 ORANSJE = "#fb923c"        # tunnel + VRAM-graf
 LILLA = "#a855f7"          # RAM-graf
 
+# Bredden på den reserverte plassen ytterst til høyre i hvert
+# tjenestekort. Bare Label Studio bruker den (knappen «Passord»), men
+# plassen holdes av på ALLE rader — ellers blir den ene raden bredere
+# enn de andre og skyver de fire faste knappene ut av kolonnene (R177).
+# Målt for teksten «Passord» i Segoe UI 9 bold med padx 12.
+EKSTRAKNAPP_BREDDE = 84
+
 # Fanene i appen, i rekkefølge: (intern nøkkel, knappetekst)
 FANER = [
     ("kontroll", "Kontrollpanel"),
@@ -1255,8 +1262,24 @@ class KontrollPanel:
         tk.Label(tekstboks, textvariable=status_var, fg=FG_DEMPET, bg=BG_PANEL,
                  anchor="w", font=("Segoe UI", 9)).pack(fill="x")
 
+        # EKSTRAKNAPPEN FÅR SIN EGEN, RESERVERTE PLASS (R177).
+        #
+        # Da Label Studio fikk en femte knapp, ble den raden bredere enn
+        # de andre — og siden knapperaden er høyrestilt, skjøv den de
+        # fire faste knappene mot venstre. Kolonnene sluttet å stå under
+        # hverandre, og et panel der like knapper ikke ligger på linje
+        # ser ustelt ut selv når alt virker.
+        #
+        # Plassen reserveres på ALLE rader, tom hos dem som ikke bruker
+        # den. `pack_propagate(False)` er det som holder bredden fast —
+        # uten den krymper en tom ramme til null, og vi er tilbake til
+        # skjevheten.
+        ekstra = tk.Frame(rad, bg=BG_PANEL, width=EKSTRAKNAPP_BREDDE)
+        ekstra.pack(side="right", fill="y", padx=(0, 6), pady=4)
+        ekstra.pack_propagate(False)
+
         knapper = tk.Frame(rad, bg=BG_PANEL)
-        knapper.pack(side="right", padx=(4, 6), pady=4)
+        knapper.pack(side="right", padx=(4, 0), pady=4)
         start_knapp = tk.Button(
             knapper, text="Start", command=lambda t=tjeneste: self._start_tjeneste(t),
             bg=GRONN, fg="white", activebackground=GRONN_AKTIV,
@@ -1280,14 +1303,19 @@ class KontrollPanel:
             knapper, "Logg", lambda t=tjeneste: self._aapne_logg(t))
         logg_knapp.pack(side="left")
 
-        # Label Studio har egne brukerkontoer med passord — og en glemt
+        # Label Studio har egne brukerkontoer med passord — og et glemt
         # passord er den eneste feilen her som IKKE er et driftsproblem,
         # men et menneske som står låst ute. Knappen hører derfor hjemme
         # ved siden av tjenesten, ikke i et skript ingen finner (R176).
+        #
+        # Den bor i den reserverte plassen ytterst til høyre, ikke i
+        # knapperaden: den gjør noe annet enn de fire — de styrer
+        # TJENESTEN, denne gjelder en BRUKER — og avstanden sier det uten
+        # at noe må forklares (R177).
         if tjeneste["key"] == "label_studio":
-            tema_knapp(knapper, "Passord",
-                       self._nullstill_ls_passord).pack(side="left",
-                                                        padx=(4, 0))
+            tema_knapp(ekstra, "Passord",
+                       self._nullstill_ls_passord).pack(fill="both",
+                                                        expand=True)
 
         self._kort[tjeneste["key"]] = {
             "dot": dot, "status_var": status_var, "rad": rad,
