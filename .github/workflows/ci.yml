@@ -1,5 +1,16 @@
-# CI: enhetstester + integrasjonstester mot ekte Postgres/Redis
-# + validering av compose- og K8s-manifester.
+# CI: enhetstester for det LOKALE, portable dokument-API-et.
+#
+# Denne fila erstatter en som refererte til FIRE ting som ikke finnes:
+# skript/init_db.py, tester/test_integrasjon_lokal.py,
+# docker-compose.yml og k8s/. De ble slettet sammen med en gammel
+# Postgres/K8s-arkitektur, og CI-fila ble stående igjen rundt skjelettet.
+#
+# Verst var K8s-steget: `Path("k8s").glob()` på en mappe som ikke finnes
+# gir en TOM løkke, så steget printet «alle k8s-manifester er gyldig
+# YAML» og ble grønt uten å ha validert noe som helst. En garanti som
+# ikke finnes, men ser ut som den gjør (R164).
+#
+# Derfor sjekker steg 1 under at CI bare nevner filer som finnes.
 name: CI
 
 on:
@@ -9,29 +20,10 @@ on:
 
 jobs:
   tester:
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: nav
-          POSTGRES_PASSWORD: nav
-          POSTGRES_DB: nav_archive
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U nav"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    # Windows med vilje: prosjektet kjører native på Windows, og
+    # .bat-launcherne, kjernemutexen (R141) og EnServer er
+    # Windows-spesifikke. Grønn CI på Linux ville bevist feil ting.
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -40,37 +32,113 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Installer avhengigheter
+      # ---------------------------------------------------------------
+      #  1. CI får ikke nevne filer som ikke finnes
+      # ---------------------------------------------------------------
+      - name: CI nevner bare filer som finnes
+        shell: python
         run: |
-          pip install --quiet pytest pyyaml pydantic psycopg2-binary redis \
-            fastapi httpx python-multipart uvicorn requests \
-            opencv-python-headless numpy prometheus-client pymupdf "PyJWT[crypto]"
+          import pathlib, re, sys
+          ci = pathlib.Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+          stier = set(re.findall(r"(?:python|-m pytest)\s+([\w./\\-]+\.py)", ci))
+          stier |= set(re.findall(r"--ignore=([\w./\\-]+)", ci))
+          borte = sorted(s for s in stier if not pathlib.Path(s).exists())
+          if borte:
+              sys.exit(f"CI refererer til filer som ikke finnes: {borte}")
+          print(f"CI nevner {len(stier)} filer, og alle finnes")
 
+      # ---------------------------------------------------------------
+      #  2. Avhengigheter
+      # ---------------------------------------------------------------
+      # Bare det enhetstestene faktisk trenger. Hele krav_lokal.txt
+      # (torch+cu124, llama-cpp-python, easyocr) er GPU-hjul på flere GB
+      # som ingen GitHub-runner har kort til — og testene håner dem.
+      - name: Installer testavhengigheter
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet pytest pyyaml requests PyMuPDF numpy pillow opencv-python-headless
+
+      # ---------------------------------------------------------------
+      #  3. Enhetstestene — med hoppene SYNLIGE
+      # ---------------------------------------------------------------
+      # -rs: hvert eneste hopp skrives ut med grunn. Et hopp ingen ser er
+      # en garanti som ikke finnes, men ser ut som den gjør.
       - name: Enhetstester
-        run: python -m pytest tester/ -q --ignore=tester/test_integrasjon_lokal.py
+        run: python -m pytest tester/ -q -rs --junitxml=testresultat.xml
 
-      - name: Initialiser databaseskjema
-        env:
-          POSTGRES_URL: postgresql://nav:nav@localhost:5432/nav_archive
-        run: python skript/init_db.py
-
-      - name: Integrasjonstester (ekte Postgres + Redis)
-        env:
-          POSTGRES_URL: postgresql://nav:nav@localhost:5432/nav_archive
-          REDIS_URL: redis://localhost:6379/0
-          INTEGRASJONSTEST: "1"
-        run: python -m pytest tester/test_integrasjon_lokal.py -q
-
-      - name: Valider docker-compose
-        run: docker compose config -q
-
-      - name: Valider Kubernetes-manifester
+      # ---------------------------------------------------------------
+      #  4. HOPPBUDSJETT — det viktigste steget i fila
+      # ---------------------------------------------------------------
+      # Målt 2026-08-08: på en frisk klone hopper 28 tester over fordi de
+      # leser fra data/, som er gitignorert. På utviklermaskinen hopper
+      # NULL. «1482 passed» er altså bare sant ett sted.
+      #
+      # Budsjettet gjør tallet til en beslutning: stiger det, må noen ta
+      # stilling. Senk det etter hvert som data/lover/ spores i git.
+      - name: Hoppbudsjett
+        if: always()
+        shell: python
         run: |
-          python - <<'EOF'
-          import yaml
-          from pathlib import Path
-          for fil in sorted(Path("k8s").glob("*.yaml")):
-              for dok in yaml.safe_load_all(fil.read_text()):
-                  assert dok is not None, f"tomt dokument i {fil}"
-          print("alle k8s-manifester er gyldig YAML")
-          EOF
+          import sys, xml.etree.ElementTree as ET
+          BUDSJETT = 28          # senk dette, aldri hev det uten grunn
+          r = ET.parse("testresultat.xml").getroot()
+          s = r if r.tag == "testsuite" else r.find("testsuite")
+          hoppet, totalt = int(s.get("skipped", 0)), int(s.get("tests", 0))
+          print(f"{totalt} tester, {hoppet} hoppet over (budsjett {BUDSJETT})")
+          if hoppet > BUDSJETT:
+              sys.exit(f"FLERE HOPP ENN BUDSJETTERT: {hoppet} > {BUDSJETT}. "
+                       f"En test som hopper over vokter ingenting.")
+
+      # ---------------------------------------------------------------
+      #  5. Vaktene fra CLAUDE.md, hver for seg og navngitt
+      # ---------------------------------------------------------------
+      # Kjøres separat selv om de ligger i tester/: feiler §1 eller §4,
+      # skal det stå i stegnavnet, ikke drukne blant tusen prikker.
+      - name: "CLAUDE.md §4 — all prompttekst i regler/prompter.md"
+        run: python -m pytest tester/test_prompter_samlet.py -q
+
+      # MERK: portabilitetsvakten kan IKKE bli grønn på en runner der pip
+      # installerer til global site-packages — den måler nettopp at
+      # pakker lastes fra nav-mappa. Derfor rapporterer den, og blokkerer
+      # ikke. Den ekte kjøringen er på serveren, med .pyruntime.
+      - name: "CLAUDE.md §1 — portabilitet (rapporterer, blokkerer ikke)"
+        continue-on-error: true
+        run: python -m pytest tester/test_portabilitet.py -q -rs
+
+      - name: Kontraktsvakt (profilskjema + API-versjon)
+        run: python -m pytest tester/test_kontraktsvakt.py -q -rs
+
+      # ---------------------------------------------------------------
+      #  6. Linjeslutt: .bat, .vbs og .ps1 MÅ være CRLF
+      # ---------------------------------------------------------------
+      # cmd sin parser feiler på LF-bare linjer inne i parentesblokker.
+      # .gitattributes dekker .bat og .vbs, men IKKE .ps1 — at den siste
+      # kommer riktig ut i dag skyldes bare core.autocrlf på én maskin.
+      - name: Linjeslutt på launcherne
+        shell: python
+        run: |
+          import pathlib, sys
+          feil, sjekket = [], 0
+          for m in ("*.bat", "*.vbs", "*.ps1"):
+              for f in pathlib.Path(".").rglob(m):
+                  if any(d in f.parts for d in (".pyruntime", ".venv-prefect",
+                                                ".python", ".git")):
+                      continue
+                  sjekket += 1
+                  if f.read_bytes().replace(b"\r\n", b"").count(b"\n"):
+                      feil.append(str(f))
+          if feil:
+              sys.exit(f"Disse har LF-linjer og vil brekke cmd: {feil}")
+          # ANTALLET, ikke «alle». «alle er i orden» over NULL filer er
+          # nøyaktig løgnen K8s-steget fortalte. Et tall kan ikke lyve
+          # på den måten — 0 sjekket er synlig.
+          if sjekket == 0:
+              sys.exit("fant ingen launchere å sjekke — leter vi riktig sted?")
+          print(f"{sjekket} launchere sjekket, alle med CRLF")
+
+      - name: Last opp testresultat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testresultat
+          path: testresultat.xml

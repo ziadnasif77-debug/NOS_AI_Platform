@@ -299,6 +299,34 @@ def _norhand_les_batch(utsnitt_liste: list) -> list:
     prosessor, modell, enhet = _hent_norhand()
     bilder = [Image.fromarray(u).convert("RGB") for u in utsnitt_liste]
     piksler = prosessor(images=bilder, return_tensors="pt").pixel_values
+    # GPU-LÅSEN TAS HER, DER KORTET FAKTISK BRUKES (R163).
+    #
+    # `ocr_side` avgjør om låsen trengs ved å spørre `_paa_gpu()` FØR
+    # den kaller videre — men `_norhand["enhet"]` blir «cuda» først inne
+    # i `_hent_norhand`, som kalles herfra. Predikatet kom altså før
+    # årsaken. På den FØRSTE siden etter oppstart med et fullt kort var
+    # `_easyocr["gpu"]` False og `_norhand["enhet"]` None, så ingen lås
+    # ble tatt — og TrOCR kjørte på kortet samtidig med Borealis.
+    #
+    # Det er nøyaktig tilstanden låsen finnes for å hindre, og samme
+    # familie som det tause native krasjet 0xC0000005.
+    #
+    # Verst: feilen LEGER SEG SELV etter første side, fordi `_paa_gpu()`
+    # da svarer True. En test som leser to sider ser den aldri.
+    #
+    # `GPU_LAS` er en RLock, så gjeninntreden fra `ocr_side` er trygg.
+    if enhet == "cuda":
+        with GPU_LAS:
+            return _norhand_generer(prosessor, modell, piksler, utsnitt_liste)
+    return _norhand_generer(prosessor, modell, piksler, utsnitt_liste)
+
+
+def _norhand_generer(prosessor, modell, piksler, utsnitt_liste: list) -> list:
+    """Selve modellkallet. Skilt ut så GPU-låsen kan omslutte HELE
+    bruken av kortet — også flyttingen av tensorene dit."""
+    import torch
+
+    enhet = _norhand["enhet"]
     if enhet == "cuda":
         piksler = piksler.half().to("cuda")
     try:
@@ -308,8 +336,16 @@ def _norhand_les_batch(utsnitt_liste: list) -> list:
                 output_scores=True, return_dict_in_generate=True,
             )
     except torch.cuda.OutOfMemoryError:
-        # GPU full (Borealis + EasyOCR) → flytt norhand til CPU og prøv igjen
-        _norhand.update(modell=modell.float().to("cpu"), enhet="cpu")
+        # GPU full (Borealis + EasyOCR) → flytt norhand til CPU og prøv
+        # igjen. `.to("cpu")` FØR `.float()`: motsatt rekkefølge gjør
+        # vektene til fp32 mens de fortsatt ligger på kortet, altså
+        # DOBLER minnebruken i det øyeblikket vi er tomme for minne —
+        # og feiler da tilbakefallet som skulle redde oss (R163).
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        _norhand.update(modell=modell.to("cpu").float(), enhet="cpu")
         return _norhand_les_batch(utsnitt_liste)
 
     tekster = prosessor.batch_decode(ut.sequences, skip_special_tokens=True)
