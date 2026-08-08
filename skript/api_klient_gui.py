@@ -1280,10 +1280,118 @@ class KontrollPanel:
             knapper, "Logg", lambda t=tjeneste: self._aapne_logg(t))
         logg_knapp.pack(side="left")
 
+        # Label Studio har egne brukerkontoer med passord — og en glemt
+        # passord er den eneste feilen her som IKKE er et driftsproblem,
+        # men et menneske som står låst ute. Knappen hører derfor hjemme
+        # ved siden av tjenesten, ikke i et skript ingen finner (R176).
+        if tjeneste["key"] == "label_studio":
+            tema_knapp(knapper, "Passord",
+                       self._nullstill_ls_passord).pack(side="left",
+                                                        padx=(4, 0))
+
         self._kort[tjeneste["key"]] = {
             "dot": dot, "status_var": status_var, "rad": rad,
             "start": start_knapp, "stopp": stopp_knapp, "aapne": aapne_knapp,
         }
+
+    def _nullstill_ls_passord(self):
+        """Åpner passordnullstilling for en Label Studio-bruker.
+
+        PASSORDET GÅR ALDRI GJENNOM DENNE PROSESSEN. Panelet gjør bare
+        HVEM-delen: leser brukerlista fra basen og lar deg velge. Selve
+        HEMMELIGHETEN skrives inn i et eget konsollvindu, rett til Label
+        Studios egen `reset_password` som spør med `getpass`.
+
+        Det er et bevisst skille. Et passordfelt her ville lagt
+        hemmeligheten i denne prosessens minne, i Tkinters
+        strengvariabler og potensielt i en feilmelding — og GUI-et er
+        nettopp den delen som logger mest. Konsollveien har ingen av
+        delene: verdien går fra tastaturet rett inn i Django-hasheren,
+        aldri via kommandolinja (der den ville havnet i skallhistorikk
+        og i prosesslista for enhver som kjører `tasklist`)."""
+        import subprocess
+        import tkinter.messagebox as mb
+        import tkinter.simpledialog as sd
+
+        skript = PROSJEKT_ROT / "skript" / "nullstill_ls_passord.py"
+        if not skript.is_file():
+            mb.showerror("Mangler skript",
+                         f"Fant ikke {skript}")
+            return
+
+        brukere = self._ls_brukere()
+        if brukere is None:
+            return
+        if not brukere:
+            mb.showwarning(
+                "Ingen brukere",
+                "Fant ingen brukere i Label Studio-basen.\n\n"
+                "Er Label Studio startet minst én gang fra denne mappa?")
+            return
+
+        if len(brukere) == 1:
+            bruker = brukere[0]
+        else:
+            bruker = sd.askstring(
+                "Nullstill passord",
+                "Hvilken bruker?\n\n" + "\n".join(f"  · {b}" for b in brukere),
+                initialvalue=brukere[0], parent=self.rot)
+            if not bruker:
+                return
+            bruker = bruker.strip()
+            if bruker not in brukere:
+                mb.showerror("Ukjent bruker",
+                             f"«{bruker}» finnes ikke i basen.")
+                return
+
+        # Eget konsollvindu: der, og BARE der, skrives passordet.
+        try:
+            subprocess.Popen(
+                [str(PROSJEKT_ROT / ".pyruntime" / "python.exe"),
+                 str(skript), bruker],
+                cwd=str(PROSJEKT_ROT),
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        except OSError as exc:
+            mb.showerror("Kunne ikke starte",
+                         f"{type(exc).__name__}: {exc}")
+            return
+        mb.showinfo(
+            "Skriv det nye passordet i konsollvinduet",
+            f"Bruker: {bruker}\n\n"
+            "Et konsollvindu er åpnet. Skriv det nye passordet der — "
+            "det vises ikke mens du skriver, og passerer aldri gjennom "
+            "kontrollpanelet.\n\n"
+            "Får du «database is locked»: stopp Label Studio først, "
+            "prøv igjen, og start den etterpå.")
+
+    def _ls_brukere(self):
+        """Brukerlista, lest direkte fra basen (kun lesing).
+
+        Returnerer None hvis noe gikk galt — da er feilen alt vist."""
+        import sqlite3
+        import tkinter.messagebox as mb
+
+        base = (PROSJEKT_ROT / "data" / "label-studio"
+                / "label_studio.sqlite3")
+        if not base.is_file():
+            mb.showwarning(
+                "Fant ingen base",
+                f"Fant ingen Label Studio-database her:\n{base}\n\n"
+                "Start Label Studio én gang først.")
+            return None
+        try:
+            kobling = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+            try:
+                rader = kobling.execute(
+                    "SELECT email FROM htx_user WHERE is_active = 1 "
+                    "ORDER BY id").fetchall()
+            finally:
+                kobling.close()
+        except sqlite3.Error as exc:
+            mb.showerror("Kunne ikke lese basen",
+                         f"{type(exc).__name__}: {exc}")
+            return None
+        return [r[0] for r in rader if r[0]]
 
     def _bygg_tunnel_lenke(self, forelder):
         """Den offentlige lenken vises RETT UNDER tunnelkortet, i et felt
