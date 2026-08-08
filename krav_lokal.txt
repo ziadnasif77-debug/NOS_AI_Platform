@@ -38,3 +38,27 @@ beautifulsoup4==4.14.3
 
 # --- Test ---
 pytest==9.1.1
+
+# --- IKKE INSTALLERT HERFRA: treningsløkka (R174) ---
+#
+# `prefect` og `label-studio` er LEVENDE avhengigheter — de importeres av
+# skript/prefect_flyt.py og av send_til/eksporter_fra_label_studio.py —
+# men de står med vilje IKKE i lista over.
+#
+# Grunnen: `installer_offline.py` og `pakk_for_offline.py` leser NETTOPP
+# denne fila. Sto de her, ville hver frakoblede installasjon dratt med
+# seg Prefect og et helt Django-oppsett inn i .pyruntime, der de aldri
+# skal være. Prefect bor i sin egen `.venv-prefect`, og Label Studio
+# kjøres av `skript/kjor_label_studio.py` mot sin egen base.
+#
+# Men fraværet var TAUST, og det er feilen som rettes her: en frakoblet
+# server ble bygget UTEN treningsløkke — ingen kilde til korreksjoner og
+# ingen orkestrering — uten at noe sa fra. Nå står det.
+#
+#   prefect          -> .venv-prefect          (start_prefect.bat)
+#   label-studio     -> egen base under data/  (kjor_label_studio.py)
+#
+# Trenger du treningsløkka på en frakoblet maskin, må de to hentes
+# separat. Uten dem virker selve API-et helt normalt — bare læringen
+# stopper.
+
