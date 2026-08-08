@@ -69,18 +69,26 @@ jobs:
       # ---------------------------------------------------------------
       #  4. HOPPBUDSJETT — det viktigste steget i fila
       # ---------------------------------------------------------------
-      # Målt 2026-08-08: på en frisk klone hopper 28 tester over fordi de
-      # leser fra data/, som er gitignorert. På utviklermaskinen hopper
-      # NULL. «1482 passed» er altså bare sant ett sted.
-      #
       # Budsjettet gjør tallet til en beslutning: stiger det, må noen ta
-      # stilling. Senk det etter hvert som data/lover/ spores i git.
+      # stilling. Et hopp ingen ser er en garanti som ikke finnes.
+      #
+      # Målt på en frisk klone, før og etter at data/lover/ ble sporet:
+      #     før:  10 failed, 1301 passed, 28 skipped
+      #     etter: 0 failed, 1540 passed,  3 skipped
+      #
+      # De tre som står igjen er ekte og sier hvorfor: .env er en
+      # hemmelighet som ikke skal klones, korpusfila er ekte PDF-er, og
+      # .pyruntime ligger ikke i git. De kan ikke lukkes uten å legge
+      # noe i repoet som ikke hører hjemme der.
+      #
+      # 5, ikke 3: litt luft for en ny, ærlig grunn — men ikke nok til at
+      # et helt datasett kan forsvinne ubemerket.
       - name: Hoppbudsjett
         if: always()
         shell: python
         run: |
           import sys, xml.etree.ElementTree as ET
-          BUDSJETT = 28          # senk dette, aldri hev det uten grunn
+          BUDSJETT = 5           # senk dette, aldri hev det uten grunn
           r = ET.parse("testresultat.xml").getroot()
           s = r if r.tag == "testsuite" else r.find("testsuite")
           hoppet, totalt = int(s.get("skipped", 0)), int(s.get("tests", 0))
