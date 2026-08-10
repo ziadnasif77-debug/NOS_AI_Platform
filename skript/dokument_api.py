@@ -6587,10 +6587,20 @@ class Handler(BaseHTTPRequestHandler):
             handskrift = list(jobb.get("handskrift") or [])
             ocr_motorer = jobb.get("ocr_motorer") or None
             ocr_brukt = bool(ocr_motorer)
+            # Ble skanningen FAKTISK kjørt? Jobben ble lest for lengst, så
+            # bryteren på DENNE forespørselen sier ingenting om hva som
+            # skjedde den gangen. R118 forhåndsdeklarerer nøkkelen som
+            # None og tekstjobben lar den stå — None betyr «aldri
+            # skannet», en liste (også tom) betyr «skannet, fant ingen».
+            skanning_kjorte = jobb.get("strekkoder") is not None
         elif slag == "tekst":
             # DOCX/TXT: teksten er allerede hentet — ingen OCR/strekkoder
             tekst = innhold
             strekkoder = []
+            # Ingen bilder å skanne: dekoderen kalles aldri. Sier vi noe
+            # annet, blir svaret «ingen strekkoder funnet» om et dokument
+            # der vi aldri så etter (R159).
+            skanning_kjorte = False
         else:
             # Hele analysen (tekstlag/OCR/strekkoder) går gjennom cachen:
             # samme fil OCR-es aldri to ganger, og /spor deler nøyaktig
@@ -6608,6 +6618,9 @@ class Handler(BaseHTTPRequestHandler):
             ocr_motorer = a.get("ocr_motorer")
             ocr_brukt = a.get("ocr_brukt", False)
             fra_cache = a.get("fra_cache", False)
+            # PDF/bilde: dekoderen kjørte hvis — og bare hvis — klienten
+            # ba om den. Samme regnestykke som `_les_dokument` (R159).
+            skanning_kjorte = bool(les_strekkoder)
             if a.get("advarsel"):
                 advarsler.append(a["advarsel"])
 
