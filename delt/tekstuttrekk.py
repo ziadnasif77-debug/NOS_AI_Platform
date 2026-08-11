@@ -1450,10 +1450,7 @@ def finn_saksnummer(tekst: str):
     )
     if treff:
         return treff.group(1)
-    treff = re.search(r"\bNAV\s?(\d{2}-\d{2}\.\d{2})\b", tekst)
-    if treff:
-        return f"NAV {treff.group(1)}"
-    return None
+    return finn_skjemanummer(tekst)
 
 
 def finn_kontornavn(tekst: str):
@@ -1481,9 +1478,8 @@ def _uten_saertegn(tekst: str) -> str:
     return lav
 
 
-def finn_ytelse(tekst: str):
-    """Nøkkelordssøk mot den kanoniske ytelseslisten — sikrere enn å
-    gjette at enhver ORG-entitet er en ytelse.
+def _ytelsestreff(tekst: str) -> list:
+    """(start, slutt, navn) for hver ytelse som står i teksten.
 
     BEGGE sider normaliseres for æøå. Lista er skrevet uten særtegn, og
     dokumentene skriver «uføretrygd»: uten normaliseringen fant vi
@@ -1491,11 +1487,145 @@ def finn_ytelse(tekst: str):
     — fire av de viktigste ytelsene, og de falt stille bort som «ingen
     ytelse nevnt».
 
-    Lengste treff vinner, så «uførepensjon» ikke blir til «pensjon» og
-    «arbeidsavklaringspenger» ikke til «penger»."""
-    flat = _uten_saertegn(tekst)
-    treff = [y for y in NORSKE_YTELSER if _uten_saertegn(y) in flat]
-    return max(treff, key=len) if treff else None
+    Overlapp løses ved OMSLUTNING, ikke ved lengde: ligger et treff helt
+    inne i et annet, er det samme forekomst skrevet kortere («pensjon»
+    inne i «uførepensjon»), og det lange er det riktige. To ULIKE
+    ytelser nevnt hver for seg deler ingen tegn — der er begge sanne, og
+    lengden på ordet betyr ingenting."""
+    flat = _uten_saertegn(tekst or "")
+    raa = []
+    for ytelse in NORSKE_YTELSER:
+        navn = _uten_saertegn(ytelse)
+        i = flat.find(navn)
+        while i >= 0:
+            raa.append((i, i + len(navn), ytelse))
+            i = flat.find(navn, i + 1)
+    return sorted(t for t in raa
+                  if not any(a[0] <= t[0] and t[1] <= a[1]
+                             and (a[1] - a[0]) > (t[1] - t[0]) for a in raa))
+
+
+# Blanketter som er GENERISKE: samme skjema brukes til flere ytelser, og
+# derfor ramser de opp ytelser uten at noen av dem er sakens tema. En
+# legeerklæring kan følge en søknad om sykepenger, AAP, uføretrygd eller
+# pleiepenger — teksten sier hvilke den KAN brukes til, ikke hvilken
+# saken gjelder. Her skal koden la være å svare i stedet for å gjette.
+GENERISKE_BLANKETTER = {"legeerklaring", "egenerklaring"}
+
+# Blankettnummeret slik det står trykt: «NAV 04-01.03». Ett sted, brukt
+# både av `finn_saksnummer` (som svakeste saksbevis) og av ytelsesvalget
+# (som STERKESTE ytelsesbevis) — samme streng, to helt ulike roller.
+_SKJEMAKODE = re.compile(r"\bNAV\s?(\d{2}-\d{2}\.\d{2})\b")
+
+
+def finn_skjemanummer(tekst: str):
+    """NAV-blankettnummeret, eller None."""
+    treff = _SKJEMAKODE.search(tekst or "")
+    return f"NAV {treff.group(1)}" if treff else None
+
+
+def _skjema_ytelse() -> dict:
+    """{skjemanummer: ytelse} fra regler/skjemanummer_ytelse.txt.
+
+    Fila er tom som standard — se kommentaren i den. Et navn som ikke
+    står i NORSKE_YTELSER hoppes over: en tastefeil skal ikke skape en
+    ytelse som resten av systemet ikke kjenner."""
+    global _SKJEMA_YTELSE_BUFFER
+    sti = _regelfil("skjemanummer_ytelse.txt")
+    try:
+        stempel = os.path.getmtime(sti)
+    except OSError:
+        return {}
+    if _SKJEMA_YTELSE_BUFFER and _SKJEMA_YTELSE_BUFFER[0] == stempel:
+        return _SKJEMA_YTELSE_BUFFER[1]
+    tabell = {}
+    try:
+        # utf-8-sig av samme grunn som egne_etiketter.txt: en fil lagret
+        # fra Notepad får BOM, og uten -sig havner den usynlig først på
+        # linje én — da slipper kommentarlinja forbi «#»-filteret.
+        with open(sti, encoding="utf-8-sig") as fil:
+            for linje in fil:
+                linje = linje.split("#", 1)[0].strip()
+                if "=" not in linje:
+                    continue
+                nummer, _, navn = linje.partition("=")
+                navn = navn.strip().lower()
+                if navn in NORSKE_YTELSER:
+                    tabell[nummer.strip()] = navn
+    except OSError:
+        return {}
+    _SKJEMA_YTELSE_BUFFER = (stempel, tabell)
+    return tabell
+
+
+_SKJEMA_YTELSE_BUFFER = None
+
+
+def finn_ytelse_prioritert(tekst: str) -> dict:
+    """Hvilken ytelse dokumentet GJELDER — ikke hvilke det NEVNER.
+
+    De to er ikke det samme, og forskjellen var målbar: en «Søknad om
+    dagpenger» med standardavsnittet «er du sykmeldt, søk sykepenger …»
+    ble klassifisert som ARBEIDSAVKLARINGSPENGER. Ikke fordi AAP ble
+    nevnt oftest — det ble nevnt én gang — men fordi den gamle regelen
+    var `max(treff, key=len)`: LENGSTE navn vant. «arbeidsavklarings-
+    penger» er det lengste navnet i lista (23 tegn) og «dagpenger» det
+    korteste (9), så AAP slo alt det ble nevnt sammen med, og dagpenger
+    kunne bare vinne når det sto HELT alene i dokumentet.
+
+    Lengderegelen var ment for OVERLAPPENDE navn («uførepensjon» skal
+    ikke bli «pensjon»). Den ble brukt på navn som ikke overlapper i det
+    hele tatt — og lista har i dag NULL overlappende par, så regelen
+    vernet mot et tilfelle som ikke finnes mens den ødela det som gjør
+    det. Omslutningen i `_ytelsestreff` dekker den ekte saken.
+
+    Beviset rangeres etter hvor lett det lar seg forfalske av
+    standardtekst:
+
+      1 skjemanummer  blanketten er trykt på arket
+      2 tittel        dokumentets egen overskrift
+      3 brødtekst     bare når ingen av de over sier noe
+
+    Returnerer {navn, kilde, grunn, kandidater}. `navn` er None når
+    beviset ikke rekker — og da sier `grunn` hvorfor, med `kandidater`
+    som liste. Å svare «vet ikke» er et gyldig svar; å gjette er det
+    ikke, for mottakeren kan ikke se forskjell på en gjetning og et
+    funn."""
+    tomt = {"navn": None, "kilde": None, "grunn": None, "kandidater": []}
+
+    nummer = finn_skjemanummer(tekst)
+    if nummer:
+        navn = _skjema_ytelse().get(nummer)
+        if navn:
+            return {**tomt, "navn": navn, "kilde": "skjemanummer"}
+
+    i_tittel = list(dict.fromkeys(n for _, _, n in
+                                  _ytelsestreff(_tittelen(tekst))))
+    if i_tittel:
+        # FØRSTE treff vinner, ikke lengste og ikke «flere = vet ikke».
+        # Samme innsikt som `gjett_dokumenttype` bygger på, og av samme
+        # grunn: det dokumentet ER står først, det det VISER TIL kommer
+        # etter. «Vedtak om arbeidsavklaringspenger / Du har mottatt
+        # sykepenger fram til …» er et AAP-vedtak — nesten hvert
+        # NAV-vedtak åpner med å nevne ytelsen det avløser, og en regel
+        # som kalte dét tvetydig ville tiet om de aller vanligste
+        # dokumentene vi får.
+        return {**tomt, "navn": i_tittel[0], "kilde": "tittel"}
+
+    unike = list(dict.fromkeys(n for _, _, n in _ytelsestreff(tekst)))
+    if not unike:
+        return tomt
+    if gjett_dokumenttype(tekst) in GENERISKE_BLANKETTER:
+        return {**tomt, "grunn": "generisk_blankett", "kandidater": unike}
+    if len(unike) == 1:
+        return {**tomt, "navn": unike[0], "kilde": "tekst"}
+    return {**tomt, "grunn": "flere_i_teksten", "kandidater": unike}
+
+
+def finn_ytelse(tekst: str):
+    """Ytelsen dokumentet gjelder, eller None. Se
+    `finn_ytelse_prioritert` for hvorfor None er et ekte svar her."""
+    return finn_ytelse_prioritert(tekst)["navn"]
 
 
 def finn_alle_ytelser(tekst: str) -> list:
@@ -1509,16 +1639,13 @@ def finn_alle_ytelser(tekst: str) -> list:
 
     Rekkefølgen er FØRSTE FOREKOMST, ikke lengde. Den er stabil for
     samme tekst, og «hva står øverst» er det en leser ser først.
+
+    Samme treffbegrep som `finn_ytelse_prioritert` (`_ytelsestreff`), så
+    de to kan ikke bli uenige om hva som STÅR i teksten — bare om hva
+    dokumentet GJELDER. Det er to spørsmål, og lista svarer på det
+    første.
     """
-    flat = _uten_saertegn(tekst)
-    med_posisjon = []
-    for ytelse in NORSKE_YTELSER:
-        i = flat.find(_uten_saertegn(ytelse))
-        if i >= 0:
-            med_posisjon.append((i, ytelse))
-    # posisjon først, så navn: to ytelser kan ikke starte på samme
-    # indeks, men sorteringen skal være total uansett input
-    return [y for _, y in sorted(med_posisjon)]
+    return list(dict.fromkeys(n for _, _, n in _ytelsestreff(tekst)))
 
 
 # Paragraf- og kapittelhenvisninger i løpende tekst. «§ 8-2», «§§ 8-2 og

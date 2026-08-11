@@ -630,6 +630,25 @@ def _hjemler(tekst, dato_iso, lov_id) -> list:
     return ut
 
 
+def _ytelsesbevis(tekst: str) -> dict:
+    """{kilde, uavklart} — hvor ytelsen ble avgjort, eller hvorfor den
+    ikke ble det (R183).
+
+    Begge nøklene er ALLTID med, også når de er null: en klient som
+    forgrener på `ytelse.uavklart` skal ikke krasje på det ene
+    dokumentet der feltet manglet (R128 / R39).
+
+    KANDIDATLISTA STÅR IKKE HER. Første utgave la ved `kandidater`, og
+    målt mot kjørende server var den ORD FOR ORD lik `ytelser[]` i hvert
+    tilfelle den var utfylt — den kan ikke bli noe annet, for begge
+    kommer fra samme treffsett. To felter med samme innhold er ikke to
+    opplysninger; det er ett svar og én framtidig motsigelse. `uavklart`
+    sier HVORFOR, `ytelser[]` sier HVA — det er hele bildet."""
+    from delt.tekstuttrekk import finn_ytelse_prioritert
+    dom = finn_ytelse_prioritert(tekst or "")
+    return {"kilde": dom["kilde"], "uavklart": dom["grunn"]}
+
+
 def _hjemmel(dato_iso, ytelse_navn=None) -> dict:
     """Hvilken lov som gjaldt DA DOKUMENTET BLE TIL.
 
@@ -828,6 +847,14 @@ def _valuta(tekst: str) -> dict:
 
 # Første utgivelse — se API_VERSJON i dokument_api.py for hvorfor det
 # ikke er 2.0.
+#
+# R183 la til `ytelse.kilde`, `ytelse.uavklart` og `ytelse.kandidater`,
+# og `ytelse.navn.kode` kan nå være null der den før alltid hadde en
+# verdi — koden gjetter ikke lenger når beviset ikke rekker. Tallet står
+# likevel på 1.0: det teller UTGIVELSER, ikke utviklingsrunder, og
+# ingen utenfor denne maskinen har sett en forrige (R108). Jeg satte det
+# til 1.1 her først; `test_versjonsnummeret_teller_utgivelser_ikke_
+# utviklingsrunder` stoppet det, og hadde rett.
 SKJEMAVERSJON = "1.0"
 
 
@@ -963,6 +990,15 @@ def bygg_profil(tekst, *, filnavn=None, antall_sider=None, strekkoder=None,
             # «betegnelse» er heller ikke ordet i teksten («Uførepensjon
             # (1966-loven; i dag uføretrygd)» står ingen steder).
             "_ord": s_dok.get("ytelse") or None,
+            # HVOR beviset kom fra, og hvorfor det eventuelt ikke rakk
+            # (R183). Uten dette kan ikke en mottaker skille «vi vet at
+            # dette er en dagpengesak» fra «vi fant ordet dagpenger et
+            # sted» — og enda mindre skille «dokumentet nevner ingen
+            # ytelse» fra «det nevner fem, og vi nekter å gjette».
+            # `kilde` er skjemanummer/tittel/tekst, `uavklart` er
+            # grunnen når `navn.kode` er null: generisk_blankett eller
+            # flere_i_teksten.
+            **_ytelsesbevis(tekst),
             "type": None,
             "utfall": None,
             "gyldig_fra": None,

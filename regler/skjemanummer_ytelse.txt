@@ -1,0 +1,22 @@
+# Skjemanummer -> ytelse
+#
+# NAVs blankettnummer («NAV 04-01.03») identifiserer BLANKETTEN, og en
+# blankett hører nesten alltid til én ytelse. Det er derfor det sterkeste
+# signalet vi kan ha: det står trykt på arket, det endrer seg ikke med
+# ordvalg, og det påvirkes ikke av at teksten ramser opp andre ytelser.
+#
+# DENNE FILA ER TOM MED VILJE.
+# Jeg har ikke en verifisert liste over NAVs blankettnummer, og et
+# oppdiktet nummer her ville vært verre enn ingen: det ville gitt en
+# SIKKER feilklassifisering med høyeste prioritet, som overstyrer både
+# tittel og tekst. Mekanismen står klar — tallene må komme fra NAV.
+#
+# FORMAT (ett par per linje):
+#   NAV 04-01.03 = dagpenger
+#
+# Venstre side skrives nøyaktig som den står i dokumentet.
+# Høyre side MÅ være et navn fra NORSKE_YTELSER i delt/konstanter.py —
+# et ukjent navn ignoreres, og `tester/test_ytelse_prioritert.py` sier
+# fra om det.
+#
+# Linjer som begynner med # er kommentarer. Tomme linjer hoppes over.

@@ -73,13 +73,43 @@ def test_entallsfeltet_ligger_alltid_i_lista():
             "betegnelse": profil["ytelse"]["betegnelse"]} in profil["ytelser"]
 
 
-def test_entallsfeltet_er_den_mest_spesifikke_ikke_den_forste():
-    """Dokumentert med vilje: `ytelse.navn` er LENGSTE treff (det mest
-    spesifikke navnet), `ytelser[0]` er det som står først. Sammenfaller
-    de ikke, er begge riktige — de svarer på ulike spørsmål."""
-    tekst = "Saken gjelder sykepenger og senere arbeidsavklaringspenger."
-    assert finn_ytelse(tekst) == "arbeidsavklaringspenger"
-    assert finn_alle_ytelser(tekst)[0] == "sykepenger"
+def test_entallsfeltet_er_den_dokumentet_GJELDER():
+    """ENDRET I R183 — og den gamle regelen sto her, dokumentert som et
+    valg: «`ytelse.navn` er LENGSTE treff (det mest spesifikke navnet)».
+
+    Begrunnelsen holdt ikke. «Lengst = mest spesifikk» er sant for navn
+    som OVERLAPPER («uførepensjon» skal ikke bli «pensjon»), og der
+    løses det nå ved omslutning. For navn som ikke deler ett eneste
+    tegn betyr lengre bare at ordet er lengre — og målt slo det ut slik:
+    «arbeidsavklaringspenger» er lista sitt lengste navn (23 tegn) og
+    «dagpenger» det korteste (9), så en «Søknad om dagpenger» med
+    standardavsnittet «er du sykmeldt, søk sykepenger …» ble klassifisert
+    som AAP. Lista har i dag NULL overlappende par, så regelen vernet
+    mot et tilfelle som ikke finnes.
+
+    Nå: `ytelse.navn` er den dokumentet GJELDER (skjemanummer > tittel >
+    tekst), `ytelser[]` er alt det NEVNER. To spørsmål, to svar."""
+    vedtak = ("Vedtak om dagpenger\n"
+              "Du har tidligere mottatt arbeidsavklaringspenger.")
+    # Tittelen avgjør — ikke hvilket ord som er lengst.
+    assert finn_ytelse(vedtak) == "dagpenger"
+    # …og ingenting går tapt: begge står fortsatt i lista.
+    assert finn_alle_ytelser(vedtak) == ["dagpenger",
+                                         "arbeidsavklaringspenger"]
+
+
+def test_uten_holdepunkt_svarer_entallsfeltet_ingenting():
+    """Nevner brødteksten flere ytelser og tittelen ingen, er det ikke
+    et svar å velge en av dem. Lista bærer alle tre; entallsfeltet sier
+    ærlig fra at det ikke vet, og HVORFOR."""
+    from delt.tekstuttrekk import finn_ytelse_prioritert
+    brev = ("NAV Arbeid og ytelser\nPostboks 354, 8601 Mo i Rana\n\n"
+            "Utbetalingene omfatter sykepenger for januar, dagpenger for "
+            "februar og etterbetaling av uføretrygd.")
+    dom = finn_ytelse_prioritert(brev)
+    assert dom["navn"] is None
+    assert dom["grunn"] == "flere_i_teksten"
+    assert dom["kandidater"] == ["sykepenger", "dagpenger", "uforetrygd"]
 
 
 def test_uten_ytelse_er_lista_tom_ikke_null():
