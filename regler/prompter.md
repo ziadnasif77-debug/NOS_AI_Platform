@@ -187,12 +187,46 @@ Datoer funnet i dokumentet (skrevet på norsk form dd.mm.åååå fordi de skal 
 Identifikatorer som er KONTROLLERT av kode (sjekksum/format) — bruk disse i felter som ber om dem, og ingen andre tall:
 [[/fyll_skjema.identifikatorer_overskrift]]
 
-## 6. Promptversjon
+## 6. Klassifisering av dokumenttype (operasjon `klassifiser`)
+
+Modellen VELGER fra en lukket kodeliste — den utvider den aldri.
+Listen ($koder) bygges av koden fra `_DOKUMENTTYPER`, og svaret
+valideres av kode (`_klassifisersvar_til_kode`, R184): en kode utenfor
+listen forkastes og rapporteres. Prompten styrer, koden garanterer.
+
+[[klassifiser.dokumenttype]]
+Hvilken dokumenttype er dokumentet under? Velg NØYAKTIG én kode fra denne listen:
+$koder
+
+Regler:
+- Svar KUN med koden, ingenting annet
+- Dokumentets egen art står i tittelen: «Klage på vedtak om …» er en klage, ikke et vedtak
+- Er du usikker, svar «ukjent» — å gjette er ikke et gyldig svar
+
+Dokument:
+$dokument
+
+Kode:
+[[/klassifiser.dokumenttype]]
+
+## 7. Sammendrag av dokumentet (operasjon `oppsummer`)
+
+Instruksen sendes gjennom SAMME svarkjerne som frie spørsmål
+(`svar_paa_sporsmal`), så sammendraget får tallvakten,
+eksklusjonsvakten og stordokument-supplementet gratis (R185).
+Ordlyden må derfor ikke ligne et side-, strekkode- eller
+identifikatorspørsmål — da ville den deterministiske rutingen tatt den.
+
+[[oppsummer.instruks]]
+Gi et kort sammendrag av dokumentet på 3 til 6 setninger: hva slags dokument det er, hvem det gjelder, hva det handler om, og eventuelle frister, beløp eller krav. Bruk kun opplysninger som står i dokumentet, og gjengi tall og datoer ordrett.
+[[/oppsummer.instruks]]
+
+## 8. Promptversjon
 
 Øk denne hver gang du endrer en blokk over. Verdien følger med i
 `versjon.prompt` i alle API-svar (R39), så et svar alltid kan spores
 tilbake til nøyaktig den ordlyden som ga det.
 
 [[versjon]]
-p11
+p12
 [[/versjon]]

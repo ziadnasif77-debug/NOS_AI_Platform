@@ -1,0 +1,123 @@
+# Prosjektjournal — utforskning av KI i dokumentforståelse
+
+Dette er journalen konseptutredningen («Utforskning av KI og intelligent
+automatisering i Nav økonomi stønad», kap. 8) etterspør: løpende
+dokumentasjon av vurderinger, beslutninger, teknologitester og
+erfaringer — både det som lyktes og det som ikke gjorde det.
+
+Journalen dekker det TEKNISKE utforskningssporet (spor 2 i utredningen):
+lokal kjøring av åpne KI-modeller for dokumentforståelse. Møter,
+organisering og dialogen med fagmiljøene dokumenteres utenfor dette
+repoet; her står det som kan verifiseres mot kode, tester og målinger.
+
+**Slik leses dette repoet som journal:**
+
+| Kilde | Hva den dokumenterer |
+|---|---|
+| [regler_lokal_api.md](regler_lokal_api.md) | **Erfaringsloggen.** 180+ nummererte regler (R1 →), én per funnet og rettet feil eller etablert garanti — med måling, årsak og hva som håndheves av kode |
+| `git log` | Kronologien. Hver commit navngir regelen den innfører |
+| [endepunkter.md](endepunkter.md) | Kontrakten slik den faktisk er |
+| [dokumentprofil_skjema.md](dokumentprofil_skjema.md) | Formbeslutningene — og de kjente svakhetene, navngitt |
+| `tester/` (1500+ tester) | Garantiene, håndhevet — ikke lovet |
+
+---
+
+## 1. Hva som er bygget (status)
+
+En frittstående, lokal dokumenttjeneste som leser et dokument én gang,
+svarer og forkaster det — ingenting lagres. Alt kjører i én mappe, på
+egen maskin, uten sky og uten internett etter første installasjon.
+Det var et bevisst valg: skal teknologien vurderes for Nav, må den
+kunne prøves under de samme rammene som gjelder for taushetsbelagt
+informasjon.
+
+Tre modeller samarbeider, alle åpne og lokale:
+
+- **EasyOCR/RapidOCR** — trykt tekst (adaptivt motorvalg etter ledig GPU)
+- **norhand v3** (Nasjonalbibliotekets TrOCR) — håndskrift, og den
+  eneste modellen som finjusteres videre på egne korreksjoner
+- **Borealis 4B** (Nasjonalbibliotekets norske språkmodell) — spørsmål,
+  skjemautfylling, OCR-korrigering, klassifisering, sammendrag
+
+Rundt modellene står det som viste seg å være mesteparten av arbeidet:
+vakter i kode (tallvakt, sjekksumvalidering, formstabilitet),
+sporbarhet per funn (side og posisjon), personvernbryter og sladding,
+kvalitetsport for nytrente modeller med automatisk rull-tilbake, og en
+treningsløkke der mennesker korrigerer det maskinen leste dårlig.
+
+## 2. Dekningskart mot utredningens utforskningsområder (kap. 9)
+
+Ærlig status per område — «ikke påbegynt» er et resultat, ikke en
+mangel ved journalen:
+
+| Område | Status | Belegg |
+|---|---|---|
+| 9.1 Dokumentforståelse | **I drift lokalt.** Metadata, håndskrift, kvalitetsdom, koordinater per funn. Klassifisering: regel + modellforslag med kodevalidering (R184). Sammendrag med tallvakt (R185). Sammenligning av to dokumenter: ikke påbegynt | `/dokument`, `/forhandssjekk`, R51–R55, R184, R185 |
+| 9.2 Språkmodeller | **Én åpen modell grundig prøvd** (Borealis 4B, kvantisert, på 8 GB GPU). Systematisk sammenligning av flere åpne modeller: begrenset av GPU-minnet. Kommersielle tjenester: ikke prøvd — personvernvurdering må komme først, og reelle dokumenter kan ikke sendes ut | R-loggen; `bytt_grunnmodell.py` står klar for modellbytte |
+| 9.3 Multimodale modeller (VLM) | **Ikke påbegynt.** 8 GB GPU er fullt utnyttet av språkmodell + OCR; en synsmodell krever mer maskinvare. Venter på infrastruktursporet med Teknologiavdelingen | Målt grense: R51 (adaptivt motorvalg etter ledig VRAM), R140 (kontekstverdien som felte tjenesten) |
+| 9.4 Kunnskapssøk (RAG) | **Bevisst utelatt her.** Tjenestens bærende prinsipp er «ingenting lagres»; RAG krever en varig indeks. Hører hjemme i en egen pilot med andre data (rutiner/rundskriv, ikke borgerdokumenter) og egen personvernvurdering. Byggekloss som finnes: deterministisk lovtekstoppslag med flertydighetsvern (`delt/lover.py`) | README («lagrer ingenting»), R-loggen |
+| 9.5 Saksbehandlingsstøtte | **Delvis.** Spørsmål med tallvakt, mangelkontroll, sammendrag (R185), profil på tvers av en bunke. Brevutkast: ikke påbegynt — en 4B-modell kan ikke garantere kvaliteten et utgående brev krever, og vaktene som måtte til finnes ikke ennå | `/dokument` (svar/oppsummer), dokumentprofilen |
+| 9.6 Automatisering/RPA | **Kjernen i løsningen.** Bygget for UiPath: flat svarform, formstabilitet håndhevet av tester, `/ekko` til klientdiagnose, `/jobb` for store bunker. KI som utviklingsstøtte (PDD/testdata/logganalyse): ikke del av denne tjenesten | R63, R81/R99/R103, formstabilitetstestene |
+| 9.7 Agentteknologi | **Ikke påbegynt** — i tråd med utredningen: kunnskap først, løsninger senere | — |
+
+## 3. Lærdommer med overføringsverdi (beslutningsgrunnlag)
+
+1. **Modellen er den minste delen av arbeidet.** Av 180+ dokumenterte
+   rettelser handler de fleste ikke om modellen, men om det rundt:
+   svar som var gale og så sikre ut, felter som løy i kanttilfeller,
+   kontrakter som sprakk i stillhet. Enhver ny KI-pilot bør budsjettere
+   deretter: vaktene, sporbarheten og ærligheten er hovedarbeidet.
+2. **En språkmodell formulerer alltid et svar — også når den tar
+   feil.** Garantier må derfor ligge i kode, ikke i prompten: tall i
+   svar kreves ordrett fra dokumentet (tallvakt), identifikatorer
+   valideres matematisk (mod11/mod10), og spørsmål koden kan besvare
+   eksakt (sidetall, strekkoder, kontonummer) rutes forbi modellen.
+3. **Lokal kjøring er reell og tilstrekkelig for utprøving.** Åpne
+   norske modeller (Nasjonalbiblioteket) løser oppgavene på
+   forbruksmaskinvare — men 8 GB GPU er en hard grense: én språkmodell
+   pluss OCR fyller kortet, og større kontekst/synsmodeller krever
+   serverkapasitet. Det er et konkret, målt innspill til
+   infrastrukturdialogen.
+4. **Mennesket i løkken, med port.** Dårlige lesinger går automatisk
+   til manuell korreksjon (Label Studio); korreksjonene trener
+   håndskriftmodellen; en ny modell settes bare i drift hvis den måles
+   bedre enn den gamle på et fast valideringssett — ellers forkastes
+   den, med rull-tilbake tilgjengelig. Ingen forbedring på tro alene.
+5. **Start enkelt-prinsippet holdt.** OCR + regler løser mye uten
+   modell; modellen legges bare på der den tilfører noe (håndskrift,
+   frie spørsmål, sammendrag) — og alltid med en deterministisk vei ved
+   siden av, så tjenesten svarer også når modellen er nede.
+6. **Det som ikke ble noe, er også dokumentert.** Klassifiserings-,
+   NER-, vektorsøk- og layoutmodeller (nb-bert, qwen3-embed, layoutlmv3
+   m.fl.) ble prøvd og FJERNET (2026-07-21) — funksjonene forsvarte
+   ikke GPU-plassen og kompleksiteten. Utredningens mål om å
+   dokumentere «mindre hensiktsmessige» løsninger er altså oppfylt i
+   praksis.
+
+## 4. Milepæler (fra git-historikken)
+
+| Når | Hva |
+|---|---|
+| 2026-06-19 | Første utgave: OCR + uttrekk + gjennomgang; Label Studio inn som korreksjonsverktøy |
+| 2026-06-24 → 07 | Borealis 4B (norsk LLM) inn lokalt; spørsmål/skjema med tallvakt og kodevakter |
+| 2026-07-16 → 24 | Ytelses- og ærlighetsrunder på ekte dokumenter (R49–R55): OCR 17 s → 1 s/side, håndskriftbudsjett, modellasting ut av brukerkall |
+| 2026-07-21 | Opprydding: klassifiserings-/NER-/vektorsøk-/layoutmodellene fjernet; portabilitetsvakt (alt i én mappe) |
+| 2026-07-31 → 08-08 | Kontraktsarbeid for RPA: flat svarform, formstabilitet, operasjonskontrakt, feilkontrakt; sikkerhet (nøkkel, rate-limit, sladd, personvernbryter); vakthund med exitkode-diagnose |
+| 2026-08-03 → 08-11 | Systematisk revisjon R129–R183: personvernhull, kvalitetsport målt i stedet for antatt, ytelse/temakoder (SYK/UFO/DAG), utmattingsvern |
+| 2026-08-12 | Journalen etablert; klassifiser- og oppsummer-operasjonene inn (R184, R185) som første nye KI-oppgaver etter utredningens kap. 9.1 |
+
+## 5. Åpne spørsmål til neste fase
+
+- Serverkapasitet/GPU: hva kreves for VLM og for å sammenligne flere
+  åpne modeller side om side? (Tallgrunnlag finnes: dagens grense er
+  målt, ikke antatt.)
+- Kommersielle tjenester: personvernvurdering og syntetisk testkorpus
+  før noen reell prøving.
+- RAG over rutiner/rundskriv: egen pilot, egne data, egen lagrings- og
+  personvernprofil — gjenbruk vaktprinsippene herfra, ikke koden.
+- Skjemanummer→ytelse-listen (`regler/skjemanummer_ytelse.txt`) er tom
+  med vilje: den må fylles med VERIFISERTE blankettnummer fra Nav, ikke
+  gjetninger (R183).
+
+*Journalen føres videre per endring: nye oppføringer i kap. 4, nye
+erfaringer i kap. 3, og statusendringer i kap. 2.*

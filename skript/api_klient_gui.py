@@ -3755,7 +3755,8 @@ class DokumentKlientApp:
         ophode = tk.Frame(opramme, bg=BG_PANEL)
         ophode.pack(fill="x", padx=8, pady=(8, 0))
         tk.Label(ophode, text="Gyldige typer: tekst, felter, struktur, svar "
-                 "(+sporsmal), skjema (+mal, +motor), korriger",
+                 "(+sporsmal), skjema (+mal, +motor), korriger, "
+                 "klassifiser, oppsummer",
                  fg=FG_DEMPET, bg=BG_PANEL, anchor="w").pack(side="left")
         tema_knapp(ophode, "Sett inn eksempel",
                    self._sett_inn_operasjoner_eksempel).pack(side="right")

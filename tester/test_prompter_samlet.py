@@ -43,6 +43,9 @@ KALLSTEDER = [
     ("fyll_skjema.koder_overskrift", {}),
     ("fyll_skjema.datoer_overskrift", {}),
     ("fyll_skjema.identifikatorer_overskrift", {}),
+    ("klassifiser.dokumenttype", {"dokument": "DOK",
+                                  "koder": "faktura, vedtak, ukjent"}),
+    ("oppsummer.instruks", {}),
     ("versjon", {}),
 ]
 

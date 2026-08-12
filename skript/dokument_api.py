@@ -109,7 +109,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                identifikatortyper_i_mal, klassifiser_datoer,
                                refererte_felt, sett_dato_roller,
                                sladd_tekst, strukturert_uttrekk, til_norsk,
-                               utvid_entiteter, FLETT_REGEL_VERSJON,
+                               utvid_entiteter, DOKUMENTTYPE_TERM,
+                               FLETT_REGEL_VERSJON,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
@@ -2277,6 +2278,54 @@ def _med_hale(rettet: str, hale: str) -> str:
             f"rå OCR-tekst.]\n" + hale)
 
 
+def _klassifisersvar_til_kode(svar: str):
+    """Koden i modellens klassifiseringssvar — eller None når svaret
+    ikke er en kjent kode.
+
+    Dette er garantien i klassifiser-operasjonen (R184): modellen kan
+    bare VELGE fra listen i `_DOKUMENTTYPER`, aldri utvide den. Et
+    påfunn («purring», «rekommandert brev») ser ut som en dokumenttype,
+    men ingen klient kan forgrene på en kode som ikke finnes i
+    kodeverket — så alt utenfor listen forkastes, og forkastingen
+    rapporteres (`modell_ugyldig`), den skjules ikke."""
+    raa = (svar or "").strip().strip(".,:;!«»\"'` ").lower()
+    if not raa:
+        return None
+    # Modellen skal kunne si «vet ikke» — det er et gyldig svar (R183),
+    # og det skal ikke rapporteres som et ugyldig et.
+    if raa in ("ukjent", "ingen", "vet ikke"):
+        return "ukjent"
+    if raa in DOKUMENTTYPE_TERM:
+        return raa
+    # Termen («Legeerklæring») er også et ærlig svar på spørsmålet —
+    # den mappes til koden sin, men bare EKSAKT: delstrengtreff ville
+    # gjort «kvitteringskopi» til «kvittering».
+    for kode, term in DOKUMENTTYPE_TERM.items():
+        if raa == term.lower():
+            return kode
+    # «Dokumenttype: vedtak» — modeller gjentar gjerne ledeteksten.
+    # Siste ord prøves, med samme strenge regler.
+    siste = raa.split()[-1].strip(".,:;!«»\"'` ") if raa.split() else ""
+    if siste in DOKUMENTTYPE_TERM:
+        return siste
+    return None
+
+
+def klassifiser_borealis(tekst: str):
+    """Ber Borealis velge dokumenttype fra den KJENTE kodelisten.
+
+    Returnerer (kode, raasvar): kode er None når modellen ikke svarte
+    med en kjent kode — da står råsvaret igjen så avvisningen kan
+    granskes. Modellen foreslår, koden garanterer: valideringen skjer i
+    `_klassifisersvar_til_kode`, ikke i prompten."""
+    koder = ", ".join(sorted(DOKUMENTTYPE_TERM) + ["ukjent"])
+    prompt = prompter.hent("klassifiser.dokumenttype",
+                           dokument=tekst[:MAKS_LLM_TEGN],
+                           koder=koder)
+    svar, _ = _borealis_generer(prompt, 16)
+    return _klassifisersvar_til_kode(svar), svar
+
+
 def korriger_borealis(ocr_tekst: str, regioner: list | None = None) -> str:
     """Retter OCR-feil ut fra SETNINGSSAMMENHENGEN, i TO pass:
     1) korreksjon — med kjente OCR-artefaktmønstre og (når vi har dem)
@@ -3822,7 +3871,7 @@ def _openapi() -> dict:
                                                    "enum": ["ja", "nei"],
                                                    "description": "ja → beviste funn (fnr/konto/orgnr/KID/telefon/epost) med bokser per side, i «koordinater». Standard nei (bokser kan mangedoble svaret)"},
                                    "operasjoner": {"type": "string",
-                                                   "description": "ALTERNATIV til bryterne: en JSON-liste av operasjoner, f.eks. [{\"type\":\"felter\"},{\"type\":\"skjema\",\"motor\":\"auto\",\"mal\":{...}}]. Gyldige typer: tekst, felter, struktur, svar (+sporsmal), skjema (+mal, +motor felter/modell/auto), korriger. Svar: {ok, resultater:[{type, ok, ...}]}. Maks 20 per kall"},
+                                                   "description": "ALTERNATIV til bryterne: en JSON-liste av operasjoner, f.eks. [{\"type\":\"felter\"},{\"type\":\"skjema\",\"motor\":\"auto\",\"mal\":{...}}]. Gyldige typer: tekst, felter, struktur, svar (+sporsmal), skjema (+mal, +motor felter/modell/auto), korriger, klassifiser (dokumenttype: regel + modellforslag, kodevalidert), oppsummer (kort sammendrag med tallvakt). Svar: {ok, resultater:[{type, ok, ...}]}. Maks 20 per kall"},
                                    "strekkoder": {"type": "string",
                                                   "enum": ["ja", "nei"],
                                                   "description": "nei → hopper over strekkode-/QR-skanningen. Da betyr et tomt «strekkoder» at det ikke ble sett etter koder, IKKE at dokumentet mangler dem — «dokumentprofil.koder.lest» sier hvilket. Standard ja"},
@@ -8072,7 +8121,8 @@ def _modellen_kjorte(deler) -> bool:
     deterministisk og hoppet over menneskelig kontroll."""
     return any(_delen_brukte_modellen(d)
                for navn, d in _deler_som_par(deler)
-               if navn in ("svar", "skjema", "korriger"))
+               if navn in ("svar", "skjema", "korriger",
+                           "klassifiser", "oppsummer"))
 
 
 def _borealis_er_klar():
@@ -8379,6 +8429,99 @@ class KorrigerOperasjon(Operasjon):
                 "data": korriger_borealis(ktx.tekst)}
 
 
+def _typepar(kode):
+    """{kode, term} for en dokumenttypekode — None når koden mangler.
+    Samme par-form som dokumentprofilen bruker, så en klient leser
+    typen likt uansett hvor den står i svaret."""
+    if not kode:
+        return None
+    return {"kode": kode, "term": DOKUMENTTYPE_TERM.get(kode, kode)}
+
+
+class KlassifiserOperasjon(Operasjon):
+    type = "klassifiser"
+
+    def _krever_borealis(self):
+        # Degraderer til regelbasert svar når modellen er nede — samme
+        # mønster som skjema/auto. 503-porten skal derfor ikke stenge
+        # den: et regelbasert svar er bedre enn ingen svar.
+        return False
+
+    def utfor(self, ktx):
+        if ktx.er_tom():
+            return {"type": "klassifiser", "ok": False,
+                    "feil": _TOM_DOKUMENT_FEIL}
+        # Regelmotorens svar hentes fra strukturen konteksten allerede
+        # har regnet ut — les-en-gang, regn-en-gang.
+        regel_kode = (ktx.struktur.get("dokument") or {}).get("dokumenttype")
+        regelbasert = _typepar(regel_kode)
+        data = {
+            # Avgjørelsen. Regelen har siste ord ved uenighet (R184) —
+            # modellen får bare avgjøre der regelen ikke fant noe.
+            "dokumenttype": regelbasert,
+            "regelbasert": regelbasert,
+            "modell": None,
+            # Råsvaret NÅR det ble forkastet — en avvist klassifisering
+            # skal kunne granskes, ikke forsvinne i stillhet.
+            "modell_ugyldig": None,
+            # None = modellen ble aldri spurt. Uenighet er et SIGNAL til
+            # mottakeren (send til manuell kontroll), ikke en feil.
+            "enige": None,
+            "kilde": "regler",
+        }
+        if not _borealis_er_klar():
+            return {"type": "klassifiser", "ok": True, "motor": "regler",
+                    "modell_brukt": False, "data": data}
+        modell_kode, raasvar = klassifiser_borealis(ktx.tekst)
+        if modell_kode is None:
+            data["modell_ugyldig"] = raasvar[:120]
+        elif modell_kode != "ukjent":
+            data["modell"] = _typepar(modell_kode)
+            if regelbasert:
+                data["enige"] = modell_kode == regel_kode
+            else:
+                # Regelen fant ingenting — modellens gyldige forslag er
+                # bedre enn et tomt felt, og kilden sier ærlig hvor det
+                # kom fra.
+                data["dokumenttype"] = data["modell"]
+                data["kilde"] = "modell"
+        return {"type": "klassifiser", "ok": True, "motor": "regler+modell",
+                "modell_brukt": True, "data": data}
+
+
+class OppsummerOperasjon(Operasjon):
+    type = "oppsummer"
+
+    def _krever_borealis(self):
+        return True
+
+    def utfor(self, ktx):
+        if not _borealis_er_klar():
+            return {"type": "oppsummer", "ok": False,
+                    "feil": _borealis_nede_feil()}
+        if ktx.er_tom():
+            return {"type": "oppsummer", "ok": False,
+                    "feil": _TOM_DOKUMENT_FEIL}
+        # Gjenbruker HELE svar-kjernen med en fast instruks fra
+        # regler/prompter.md — så sammendraget får tallvakten,
+        # eksklusjonsvakten og stordokument-supplementet gratis, i
+        # stedet for en egen, svakere vei uten vakter (R185).
+        kjerne = svar_paa_sporsmal(ktx.tekst,
+                                   prompter.hent("oppsummer.instruks"),
+                                   ktx.ocr_brukt, ktx.handskrift,
+                                   ktx.strekkoder, ktx.strekkoder_lest)
+        if kjerne["tom"]:
+            return {"type": "oppsummer", "ok": False,
+                    "feil": _TOM_DOKUMENT_FEIL}
+        return {"type": "oppsummer", "ok": True,
+                "modell_brukt": kjerne.get("modell_brukt", False) is True,
+                "data": {"sammendrag": kjerne["svar"],
+                         "tall_verifisert": kjerne["tall_verifisert"],
+                         "uverifiserte_tall": kjerne.get("uverifiserte_tall"),
+                         "svar_avkortet": kjerne["svar_avkortet"],
+                         "advarsler": kjerne["advarsler"]}}
+
+
 def bygg_operasjon(spec):
     """Bygger én Operasjon fra en {type, …}-spesifikasjon (fra
     operasjoner-kontraktet). Ukjent type eller manglende påkrevd felt gir
@@ -8402,6 +8545,10 @@ def bygg_operasjon(spec):
         return SvarOperasjon(sporsmal)
     if t == "korriger":
         return KorrigerOperasjon()
+    if t == "klassifiser":
+        return KlassifiserOperasjon()
+    if t == "oppsummer":
+        return OppsummerOperasjon()
     if t == "skjema":
         mal = spec.get("mal")
         if not isinstance(mal, (dict, list)) or not mal:
@@ -8416,7 +8563,7 @@ def bygg_operasjon(spec):
 
     raise ValueError(
         f"ukjent operasjonstype: {t!r} — gyldige: tekst, felter, struktur, "
-        "svar, skjema, korriger")
+        "svar, skjema, korriger, klassifiser, oppsummer")
 
 
 # Nøklene ETHVERT operasjonsresultat har. Målt hadde `resultater[]` sju

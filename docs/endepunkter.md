@@ -843,6 +843,28 @@ Her er `operasjoner` **påkrevd**: uten feltet får du 400 i stedet for et
 svar som stilltiende ble noe annet. Feltveien på `/dokument` beholdes
 uendret.
 
+### Gyldige operasjonstyper
+
+| Type | Modell? | Hva den gjør |
+|---|---|---|
+| `tekst` | nei | Hele den utleste teksten |
+| `felter` | nei | Deterministiske felter + datoer |
+| `struktur` | nei | Komplett strukturert uttrekk |
+| `svar` (+`sporsmal`) | ja* | Fritt spørsmål med tallvakt |
+| `skjema` (+`mal`, +`motor`) | avhenger | Din JSON-mal utfylt (`felter`/`auto`/`modell`) |
+| `korriger` | ja | LLM-korrigert OCR-tekst |
+| `klassifiser` | delvis | Dokumenttype: regelsvar ALLTID, modellforslag når Borealis er klar. Modellen kan bare velge fra det kjente kodeverket — alt annet forkastes og rapporteres i `modell_ugyldig` (R184). Ved uenighet avgjør regelen, og `enige: false` er signalet om manuell kontroll. Uten modell degraderer den til `motor: "regler"` |
+| `oppsummer` | ja | Kort sammendrag (3–6 setninger) via SAMME svarkjerne som `svar` — tallvakten og stordokument-supplementet gjelder, og `tall_verifisert`/`uverifiserte_tall` følger med i `data` (R185) |
+
+\* som `sporsmal`-bryteren: side-, strekkode- og identifikatorspørsmål
+besvares av koden også her.
+
+`klassifiser` sitt `data`-felt har alltid samme nøkler:
+`dokumenttype` (avgjørelsen, `{kode, term}`), `regelbasert`, `modell`,
+`modell_ugyldig`, `enige` (`null` = modellen ble aldri spurt) og
+`kilde` (`regler` eller `modell` — modellen avgjør bare når regelen
+ikke fant noe).
+
 ---
 
 ## Klientidentitet — navngitte API-nøkler (R91)

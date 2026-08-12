@@ -439,10 +439,14 @@ def test_avkorting_meldes_i_rapporten():
 # `kilde: deterministisk` — mens `strekkoder: null` sto i SAMME svar.
 # To felt om samme faktum, med hvert sitt svar.
 
-def test_de_tre_kallstedene_sender_det_som_FAKTISK_skjedde():
+def test_de_fire_kallstedene_sender_det_som_FAKTISK_skjedde():
     """Kildekontroll på argumentet, fordi feilen var at det manglet.
     `les_strekkoder` er hva klienten ba om; `strekkoder_lest` /
-    `skanning_kjorte` er hva som skjedde."""
+    `skanning_kjorte` er hva som skjedde.
+
+    Antallet er en del av vakten: et NYTT kallsted skal telles opp HER,
+    så det aldri kan legges til uten å møte kravet under. Nr. 4 kom med
+    `oppsummer`-operasjonen (R185) — den sender `ktx.strekkoder_lest`."""
     import inspect
     import re
     kilde = inspect.getsource(api)
@@ -450,7 +454,7 @@ def test_de_tre_kallstedene_sender_det_som_FAKTISK_skjedde():
     # DEFINISJONEN også, og vakten teller den som et kallsted.
     ekte = re.findall(
         r"(?<!def )svar_paa_sporsmal\((?:[^()]|\([^()]*\))*\)", kilde)
-    assert len(ekte) == 3, f"fant {len(ekte)} kallsteder, ventet 3"
+    assert len(ekte) == 4, f"fant {len(ekte)} kallsteder, ventet 4"
     for k in ekte:
         flat = " ".join(k.split())
         assert ("strekkoder_lest" in flat or "skanning_kjorte" in flat), (

@@ -18,6 +18,7 @@ UiPath, curl eller egne skript.
 | [docs/endepunkter.md](docs/endepunkter.md) | **Komplett endepunktreferanse** — felter inn/ut, hvilke som bruker modellen, klientfeller |
 | [docs/api_dokumentasjon.md](docs/api_dokumentasjon.md) | Arbeidsflyter og eksempler |
 | [docs/regler_lokal_api.md](docs/regler_lokal_api.md) | Regelverket R1–R67 |
+| [docs/prosjektjournal.md](docs/prosjektjournal.md) | **Prosjektjournal** — status mot konseptutredningen, lærdommer, milepæler |
 | `GET /dokumentasjon` | Swagger UI med svarmodeller og innebygd veiledning |
 
 ---
