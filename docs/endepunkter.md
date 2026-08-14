@@ -861,9 +861,17 @@ besvares av koden også her.
 
 `klassifiser` sitt `data`-felt har alltid samme nøkler:
 `dokumenttype` (avgjørelsen, `{kode, term}`), `regelbasert`, `modell`,
-`modell_ugyldig`, `enige` (`null` = modellen ble aldri spurt) og
+`modell_ugyldig`, `enige` (`null` = modellen ble aldri spurt),
 `kilde` (`regler` eller `modell` — modellen avgjør bare når regelen
-ikke fant noe).
+ikke fant noe) og `forventninger` (R186): typeruting i praksis — den
+avgjorte typen bestemmer hvilke felter som SKAL finnes, og rapporten
+`{felter, funnet, mangler}` måler dem mot det deterministiske
+uttrekket. `null` når typen er ukjent eller uten forventninger (ingen
+forventning er ingen påstand). En robot kan dermed rute på
+`mangler`-lista — «faktura uten beløp» går til manuell behandling uten
+å tolke fritekst. Standardforventningene står i
+`delt/typeforventninger.py`; egne overstyringer i
+`regler/dokumenttype_forventninger.txt` (leses live).
 
 ---
 

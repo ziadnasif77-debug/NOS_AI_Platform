@@ -204,3 +204,39 @@ def test_modellen_kjorte_ser_de_nye_typene():
         {"type": "klassifiser", "ok": True, "motor": "regler",
          "modell_brukt": False, "data": {}})]
     assert _modellen_kjorte(degradert) is False
+
+
+# ------------------------------------------------------------------ #
+#  Typeforventninger i klassifiser-svaret (R186)                      #
+# ------------------------------------------------------------------ #
+
+def test_forventninger_foelger_den_avgjorte_typen(ktx, borealis_nede):
+    """Vedtak forventer fnr, dato og ytelse — DOK har bare ytelsen, og
+    rapporten sier ÆRLIG hva som mangler, i forventningsrekkefølge."""
+    res = KlassifiserOperasjon().utfor(ktx)
+    rapport = res["data"]["forventninger"]
+    assert rapport["felter"] == ["fodselsnummer", "dato", "ytelse"]
+    assert rapport["funnet"] == ["ytelse"]
+    assert rapport["mangler"] == ["fodselsnummer", "dato"]
+
+
+def test_forventninger_uten_kjent_type_er_null(borealis_nede):
+    """Ingen type → ingen forventning → ingen påstand (R128)."""
+    ktx = DokumentKontekst("Ren tekst uten kjente typeord i det hele "
+                           "tatt, lang nok til å ikke være tom.")
+    res = KlassifiserOperasjon().utfor(ktx)
+    assert res["data"]["forventninger"] is None
+
+
+def test_forventninger_bruker_modellens_type_naar_regelen_er_tom(
+        borealis_klar, monkeypatch):
+    """Typerutingen følger AVGJØRELSEN — også når den kom fra modellen.
+    «brev» har ingen forventninger, så rapporten er null, ikke en
+    vedtaksrapport fra en type dokumentet ikke fikk."""
+    ktx = DokumentKontekst("Ren tekst uten kjente typeord i det hele "
+                           "tatt, lang nok til å ikke være tom.")
+    monkeypatch.setattr(dokument_api, "klassifiser_borealis",
+                        lambda tekst: ("brev", "brev"))
+    res = KlassifiserOperasjon().utfor(ktx)
+    assert res["data"]["dokumenttype"]["kode"] == "brev"
+    assert res["data"]["forventninger"] is None

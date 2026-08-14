@@ -156,9 +156,15 @@ def test_proeven_skygger_ikke_for_en_ekte_daarlig_lesing():
     import dokument_api as api
     kilde = inspect.getsource(api._kanskje_send_til_gjennomgang)
     plass = kilde.index("grunn = (")
-    blokk = kilde[plass:plass + 320]
-    for tidligere in ("tomt_resultat", "lav_ocr_konfidens", "handskrift"):
-        assert blokk.index(tidligere) < blokk.index("kalibreringsproeve")
+    blokk = kilde[plass:plass + 420]
+    # Eksakt token med anførselstegn: «mellomband_kalibreringsproeve»
+    # (R187) står med VILJE foran lav_ocr_konfidens — navnet bærer
+    # begge fakta (i båndet ⇒ lav konfidens, og sendt som prøve). Det
+    # denne vakten fortsatt forbyr, er at R149-STIKKPRØVEN skygger for
+    # en ekte dårlig lesing.
+    for tidligere in ('"tomt_resultat"', '"lav_ocr_konfidens"',
+                      '"handskrift"'):
+        assert blokk.index(tidligere) < blokk.index('"kalibreringsproeve"')
 
 
 def test_godt_leste_dokumenter_slipper_fortsatt_unna_naar_andelen_er_null():

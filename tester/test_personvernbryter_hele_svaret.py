@@ -358,3 +358,31 @@ def test_hver_raatekstbaerende_operasjonstype_renses(type_):
     assert svar["resultater"][0]["data"] is None, (
         f"operasjonen «{type_}» leverte dokumentet under sammendrag")
     assert f"resultater[{type_}].data" in (svar.get("utelatt") or [])
+
+
+def test_klassifiser_forventninger_renses_under_sammendrag():
+    """R186-rapporten er et EKSISTENSBEVIS: «funnet: [fodselsnummer]»
+    betyr at et mod11-gyldig nummer står i dokumentet. Under
+    profil=sammendrag fjernes rapporten og NAVNGIS i utelatt — typen og
+    enigheten (ingen persondata) står igjen."""
+    svar = api._sammendragsform_operasjoner(
+        {"resultater": [{"type": "klassifiser", "ok": True, "data": {
+            "dokumenttype": {"kode": "vedtak", "term": "Vedtak"},
+            "enige": None, "kilde": "regler",
+            "forventninger": {"felter": ["fodselsnummer", "dato"],
+                              "funnet": ["fodselsnummer"],
+                              "mangler": ["dato"]}}}]})
+    data = svar["resultater"][0]["data"]
+    assert data["forventninger"] is None
+    assert data["dokumenttype"] == {"kode": "vedtak", "term": "Vedtak"}
+    assert "resultater[klassifiser].data.forventninger" in svar["utelatt"]
+
+
+def test_klassifiser_uten_rapport_har_ingenting_aa_utelate():
+    """Motprøven: var rapporten alt null, skal utelatt ikke påstå at
+    noe ble fjernet — `[]` er en påstand (R128)."""
+    svar = api._sammendragsform_operasjoner(
+        {"resultater": [{"type": "klassifiser", "ok": True, "data": {
+            "dokumenttype": None, "forventninger": None}}]})
+    assert svar["resultater"][0]["data"]["forventninger"] is None
+    assert "utelatt" not in svar or not svar.get("utelatt")

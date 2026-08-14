@@ -52,11 +52,11 @@ mangel ved journalen:
 
 | Område | Status | Belegg |
 |---|---|---|
-| 9.1 Dokumentforståelse | **I drift lokalt.** Metadata, håndskrift, kvalitetsdom, koordinater per funn. Klassifisering: regel + modellforslag med kodevalidering (R184). Sammendrag med tallvakt (R185). Sammenligning av to dokumenter: ikke påbegynt | `/dokument`, `/forhandssjekk`, R51–R55, R184, R185 |
+| 9.1 Dokumentforståelse | **I drift lokalt.** Metadata, håndskrift, kvalitetsdom, koordinater per funn. Klassifisering: regel + modellforslag med kodevalidering (R184), og typeruting: den avgjorte typen bestemmer forventede felter, `mangler` rapporteres deterministisk (R186). Sammendrag med tallvakt (R185). Sammenligning av to dokumenter: ikke påbegynt | `/dokument`, `/forhandssjekk`, R51–R55, R184–R186 |
 | 9.2 Språkmodeller | **Én åpen modell grundig prøvd** (Borealis 4B, kvantisert, på 8 GB GPU). Systematisk sammenligning av flere åpne modeller: begrenset av GPU-minnet. Kommersielle tjenester: ikke prøvd — personvernvurdering må komme først, og reelle dokumenter kan ikke sendes ut | R-loggen; `bytt_grunnmodell.py` står klar for modellbytte |
 | 9.3 Multimodale modeller (VLM) | **Ikke påbegynt.** 8 GB GPU er fullt utnyttet av språkmodell + OCR; en synsmodell krever mer maskinvare. Venter på infrastruktursporet med Teknologiavdelingen | Målt grense: R51 (adaptivt motorvalg etter ledig VRAM), R140 (kontekstverdien som felte tjenesten) |
 | 9.4 Kunnskapssøk (RAG) | **Bevisst utelatt her.** Tjenestens bærende prinsipp er «ingenting lagres»; RAG krever en varig indeks. Hører hjemme i en egen pilot med andre data (rutiner/rundskriv, ikke borgerdokumenter) og egen personvernvurdering. Byggekloss som finnes: deterministisk lovtekstoppslag med flertydighetsvern (`delt/lover.py`) | README («lagrer ingenting»), R-loggen |
-| 9.5 Saksbehandlingsstøtte | **Delvis.** Spørsmål med tallvakt, mangelkontroll, sammendrag (R185), profil på tvers av en bunke. Brevutkast: ikke påbegynt — en 4B-modell kan ikke garantere kvaliteten et utgående brev krever, og vaktene som måtte til finnes ikke ennå | `/dokument` (svar/oppsummer), dokumentprofilen |
+| 9.5 Saksbehandlingsstøtte | **Delvis.** Spørsmål med tallvakt, sammendrag (R185), profil på tvers av en bunke — og mangelkontroll per dokumenttype: «faktura uten beløp» er nå et felt en robot kan rute på (R186), med et målbart mellombånd i gjennomgangsrutingen (R187). Brevutkast: ikke påbegynt — en 4B-modell kan ikke garantere kvaliteten et utgående brev krever, og vaktene som måtte til finnes ikke ennå | `/dokument` (svar/oppsummer/klassifiser), dokumentprofilen |
 | 9.6 Automatisering/RPA | **Kjernen i løsningen.** Bygget for UiPath: flat svarform, formstabilitet håndhevet av tester, `/ekko` til klientdiagnose, `/jobb` for store bunker. KI som utviklingsstøtte (PDD/testdata/logganalyse): ikke del av denne tjenesten | R63, R81/R99/R103, formstabilitetstestene |
 | 9.7 Agentteknologi | **Ikke påbegynt** — i tråd med utredningen: kunnskap først, løsninger senere | — |
 
@@ -105,12 +105,18 @@ mangel ved journalen:
 | 2026-07-31 → 08-08 | Kontraktsarbeid for RPA: flat svarform, formstabilitet, operasjonskontrakt, feilkontrakt; sikkerhet (nøkkel, rate-limit, sladd, personvernbryter); vakthund med exitkode-diagnose |
 | 2026-08-03 → 08-11 | Systematisk revisjon R129–R183: personvernhull, kvalitetsport målt i stedet for antatt, ytelse/temakoder (SYK/UFO/DAG), utmattingsvern |
 | 2026-08-12 | Journalen etablert; klassifiser- og oppsummer-operasjonene inn (R184, R185) som første nye KI-oppgaver etter utredningens kap. 9.1 |
+| 2026-08-13 | **Teknologivurdering** (utredningens kap. 8: også vurderinger dokumenteres): arkitekturen vår holdt opp mot fersk produksjonsforskning — «Operationalizing Document AI» (arXiv 2605.18818, mai 2026) og MADP (arXiv 2605.17159). Papirets hovedfunn — OCR er flaskehalsen, ikke språkmodellen, og GPU-kapasitet er den reelle grensen — hadde vi allerede målt uavhengig (R51). To anbefalinger derfra tatt inn i vår deterministiske form: typeruting etter klassifisering (R186) og tre-bånds gjennomgangsruting med målbart mellombånd (R187). Avvist med begrunnelse: LayoutLMv3 (2022-modell vi alt har fjernet; dagens alternativ er kompakte VLM-er), kø/database/søkeindeks (hører til nasjonalt spor — bryter «ingenting lagres»), og generisk VLM i stedet for norhand (ville kastet den norske finjusteringsløkken). Dokumentprofilen deklarert som kanonisk representasjon (dokumentprofil_skjema.md §2.7) |
 
 ## 5. Åpne spørsmål til neste fase
 
 - Serverkapasitet/GPU: hva kreves for VLM og for å sammenligne flere
   åpne modeller side om side? (Tallgrunnlag finnes: dagens grense er
-  målt, ikke antatt.)
+  målt, ikke antatt.) Vaktliste per 2026-08: PaddleOCR-VL (0,9B — får
+  plass på 8 GB) og DeepSeek-OCR kvantisert (4–6 GB) er de første
+  VLM-ene som teoretisk passer vår maskinvare, men de konkurrerer med
+  Borealis om samme minne og er umålte på norsk håndskrift — riktig vei
+  er en side-om-side-kjøring mot vårt eget korpus (`kjor_korpus.py`),
+  ikke et bytte på magefølelse.
 - Kommersielle tjenester: personvernvurdering og syntetisk testkorpus
   før noen reell prøving.
 - RAG over rutiner/rundskriv: egen pilot, egne data, egen lagrings- og

@@ -1,0 +1,30 @@
+# Forventede felter per dokumenttype (R186).
+#
+# En linje her ERSTATTER standardforventningen for typen. Format:
+#
+#   dokumenttype = felt1, felt2, felt3
+#   dokumenttype = ingen          # typen skal ikke ha forventninger
+#
+# Gyldige dokumenttyper: faktura, kvittering, vedtak, soknad,
+# legeerklaring, inntektsmelding, sykmelding, klage, egenerklaring,
+# meldekort, pensjonsbrev, attest, kontrakt, boardingkort, brev.
+#
+# Gyldige felter (lukket vokabular — bare det koden kan PÅVISE):
+# belop, dato, periode, fodselsnummer, kontonummer,
+# organisasjonsnummer, kid, saksnummer, ytelse, telefon, epost,
+# adresse, tittel.
+#
+# Ukjente typer og ukjente feltnavn hoppes over — en tastefeil skaper
+# aldri en forventning systemet ikke kan sjekke. Fila leses live, uten
+# omstart. Standardene står i delt/typeforventninger.py.
+#
+# NB — fila har TO roller (R186 + R187):
+#   1. `klassifiser`-operasjonen melder `mangler` mot denne tabellen.
+#   2. Mellombåndet i gjennomgangsrutingen (GJENNOMGANG_NEDRE, R187)
+#      bruker den SAMME tabellen som bevis for å holde lavkonfidens-
+#      dokumenter unna menneskelig gjennomgang. Snevrer du en type inn
+#      til lette felter (f.eks. «brev = dato»), frikjenner du i praksis
+#      nesten alle slike dokumenter fra gjennomgang når båndet er på.
+#
+# Eksempel (fjern # for å ta i bruk):
+# faktura = belop, dato, organisasjonsnummer, kid

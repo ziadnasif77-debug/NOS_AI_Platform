@@ -1,7 +1,7 @@
 # regler/ — alt som styrer hva systemet svarer
 
 Skal du legge til en regel eller en prompt, skjer det HER. Ingen andre
-steder. Tre filer, og de leses alle på nytt så snart du lagrer —
+steder. Filene i tabellen under leses på nytt så snart du lagrer —
 **ingen omstart av serveren**.
 
 | Fil | Hva den styrer | Hvem endrer den |
@@ -10,6 +10,7 @@ steder. Tre filer, og de leses alle på nytt så snart du lagrer —
 | [`lover.md`](lover.md) | Hvilke lover vi slår opp i, og hvordan de skilles | Utvikler (går i git) |
 | [`egne_regler.txt`](egne_regler.txt) | Stil og form på svarene fra `/spor` | Dere selv, når som helst |
 | [`egne_etiketter.txt`](egne_etiketter.txt) | Nye ord foran datoer i nye dokumenttyper | Dere selv, når som helst |
+| [`dokumenttype_forventninger.txt`](dokumenttype_forventninger.txt) | Hvilke felter en dokumenttype SKAL ha (`klassifiser` melder `mangler`) — og premisset for mellombåndet i gjennomgangsrutingen (R187), se under | Dere selv, når som helst |
 
 ## Hvilken fil skal jeg i?
 
@@ -26,6 +27,17 @@ OCR-retting), legg til en linje, og øk `versjon` nederst i fila.
 
 **«Dokumentet bruker et ord vi ikke kjenner foran datoen»** — f.eks.
 «hentedato» → `egne_etiketter.txt`, én linje: `hentedato = hentedato`.
+
+**«En dokumenttype skal alltid ha visse felter»** — f.eks. «en faktura
+uten beløp er defekt» → `dokumenttype_forventninger.txt`, én linje:
+`faktura = belop, dato, organisasjonsnummer`. `klassifiser`-operasjonen
+melder da `mangler` for felter som ikke ble funnet. **Vær klar over
+dobbeltrollen (R187):** den samme tabellen er BEVISET mellombåndet i
+gjennomgangsrutingen bruker for å holde lavkonfidens-dokumenter unna
+menneskelig gjennomgang (når `GJENNOMGANG_NEDRE` er senket). Snevrer
+du en type inn til lette felter (f.eks. `brev = dato`), frikjenner du
+i praksis nesten alle slike dokumenter fra gjennomgang — endringer her
+bør derfor ses i sammenheng med båndet, ikke bare med rapporten.
 
 **«Vi skal slå opp i en lov til»** → `lover.md`. Hent teksten med
 `skript/hent_lovtekst.py`, legg til en blokk i registeret. Merk at
@@ -64,8 +76,9 @@ Kort sagt: prompten styrer, koden garanterer.
 
 ## Etter en endring
 
-`egne_regler.txt` og `egne_etiketter.txt` krever ingenting — de virker
-med én gang. Endrer du `prompter.md`, gjør dette:
+`egne_regler.txt`, `egne_etiketter.txt` og
+`dokumenttype_forventninger.txt` krever ingenting — de virker med én
+gang. Endrer du `prompter.md`, gjør dette:
 
 ```bash
 .pyruntime\python.exe -m pytest tester/test_prompter_samlet.py -q

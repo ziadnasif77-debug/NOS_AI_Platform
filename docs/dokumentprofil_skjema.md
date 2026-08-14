@@ -102,6 +102,16 @@ allerede har to konkurrerende kilder etter én dag.
    konvolutt rundt HVERT felt dobler svaret uten å gi verdi.
 6. **Deterministisk som standard.** Profilen skal virke når Borealis er
    nede. Felter som KREVER modellen merkes, og er aldri stille null.
+7. **Profilen er den KANONISKE representasjonen av dokumentet.** Alt
+   som forbruker et dokumentfaktum — GUI-en, UiPath-roboter, journalen,
+   framtidige konsumenter — leser det fra profilen, ikke fra hver sin
+   parallelle utvinning. Det er samme idé som «canonical document
+   representation» i moderne Document AI-arkitektur (én representasjon,
+   mange konsumenter), med én forskjell som er hele personvernhistorien
+   vår: representasjonen RETURNERES per svar og lagres aldri. Skal den
+   en dag persisteres (nasjonal skala, søk, gjenbruk på tvers av kall),
+   er det en NY personvernbeslutning som hører til
+   infrastruktursporet — ikke en kodeendring her.
 
 ---
 

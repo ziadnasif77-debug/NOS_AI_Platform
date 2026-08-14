@@ -114,7 +114,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import kalibrering, prompter
+from delt import kalibrering, prompter, typeforventninger
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -537,6 +537,20 @@ def _skriv_tilgang(handler, code) -> None:
 LABEL_STUDIO_URL = os.environ.get("LABEL_STUDIO_URL", "").strip()
 LABEL_STUDIO_API_KEY = os.environ.get("LABEL_STUDIO_API_KEY", "").strip()
 LS_KONFIDENS_TERSKEL = float(os.environ.get("LS_KONFIDENS_TERSKEL", "0.85"))
+# R187: nedre grense for MELLOMBÅNDET i gjennomgangsrutingen. Dokumenter
+# med konfidens i [GJENNOMGANG_NEDRE, LS_KONFIDENS_TERSKEL) kan holdes
+# tilbake fra menneskelig gjennomgang — men BARE når den deterministiske
+# andre-sjekken beviser at alt dokumenttypen forventer, ble funnet
+# (delt/typeforventninger.py). Standard = terskelen selv, altså et TOMT
+# bånd: dagens oppførsel, til kalibreringstabellen (R149) har vist hvor
+# et bånd er trygt. En umålt terskel skal ikke få en umålt nabo.
+GJENNOMGANG_NEDRE = float(os.environ.get("GJENNOMGANG_NEDRE",
+                                         str(LS_KONFIDENS_TERSKEL)))
+if GJENNOMGANG_NEDRE > LS_KONFIDENS_TERSKEL:
+    print(f"  ADVARSEL: GJENNOMGANG_NEDRE ({GJENNOMGANG_NEDRE}) er over "
+          f"LS_KONFIDENS_TERSKEL ({LS_KONFIDENS_TERSKEL}) — båndet er "
+          "snudd og settes tomt (nedre = terskelen).")
+    GJENNOMGANG_NEDRE = LS_KONFIDENS_TERSKEL
 # R149: andelen GODT LESTE dokumenter som likevel sendes til gjennomgang,
 # for å kunne måle om terskelen over betyr noe.
 #
@@ -1175,6 +1189,44 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
     raa_tekst = ocr_res.get("tekst", "")
     tomt = len(raa_tekst.strip()) < 20        # OCR fant nesten ingen tekst
     lav_konfidens = konfidens < LS_KONFIDENS_TERSKEL
+    # R187: mellombåndet [GJENNOMGANG_NEDRE, terskelen) kan holdes
+    # tilbake — men bare når den deterministiske andre-sjekken BEVISER
+    # at alt dokumenttypen forventer, ble funnet (og forventningssettet
+    # ikke er tomt: [] er en påstand uten bevis, R128). Tomt resultat og
+    # håndskrift er kvalitative signaler som mater treningsløkken og
+    # båndes aldri. Beslutningen logges via `_gjennomgang_vurdering` så
+    # tilbakeholdet kan MÅLES i tilgangsloggen — et bånd som ikke kan
+    # måles, kan heller ikke forsvares (R149). Andre-sjekken regner
+    # strukturert uttrekk på nytt; kostnaden er avgrenset til
+    # mellombåndets dokumenter, og bare når gjennomgang er PÅ.
+    # `handskrift_avkortet` diskvalifiserer båndet på linje med funnet
+    # håndskrift: det betyr at håndskriftKANDIDATER fantes men aldri ble
+    # lest (tids-/antallstak, modell nede) — og et dokument med ulest
+    # håndskrift er nettopp det treningsløkken trenger, uansett hvor
+    # komplett den trykte delen ser ut.
+    band_proeve = False
+    if (lav_konfidens
+            and not (tomt or handskrift
+                     or ocr_res.get("handskrift_avkortet"))
+            and konfidens >= GJENNOMGANG_NEDRE):
+        rapport = typeforventninger.rapport_for_tekst(raa_tekst)
+        if rapport and rapport["felter"] and not rapport["mangler"]:
+            # Samme prøvemekanisme som R149, med båndets eget salt: en
+            # liten andel av de tilbakeholdbare sendes LIKEVEL, merket
+            # som båndprøve. Uten den får ingen tilbakeholdte dokumenter
+            # noensinne en fasit, og båndet ville gjenskapt nøyaktig
+            # blindsonen R149 fjernet — bare ett hakk lenger ned.
+            band_proeve = kalibrering.skal_kalibreringsproeve(
+                "mellomband:" + hashlib.sha256(innhold).hexdigest()[:16],
+                KALIBRERING_ANDEL)
+            if not band_proeve:
+                # Kompakt streng, ikke objekt: loggfeltet «gjennomgang»
+                # er en streng i alle andre utfall, og analysen skjer
+                # med grep.
+                ocr_res["_gjennomgang_vurdering"] = (
+                    "mellomband_holdt_tilbake:"
+                    + (rapport["dokumenttype"] or "ukjent"))
+                return None
     # R149: en liten andel av de GODT LESTE tas med som kalibreringsprøve.
     # Uten dem får ingen dokumenter over terskelen en fasit, og
     # spørsmålet «betyr konfidensen noe?» kan ikke besvares i det hele
@@ -1188,7 +1240,12 @@ def _kanskje_send_til_gjennomgang(filnavn: str, innhold: bytes,
             return None                  # lest godt nok — ingen grunn
     # Rekkefølgen er en RANGERING: prøven er den svakeste grunnen, og
     # skal aldri skygge for at dokumentet faktisk ble lest dårlig.
+    # Båndprøven står FORAN lav_ocr_konfidens med vilje — navnet bærer
+    # begge fakta (i båndet ⇒ lav konfidens, OG sendt som prøve), og
+    # uten den etiketten kunne en analyse aldri skille «sendt fordi
+    # båndet prøvetok» fra «sendt som alle andre» (R149/R187).
     grunn = ("tomt_resultat" if tomt else
+             "mellomband_kalibreringsproeve" if band_proeve else
              "lav_ocr_konfidens" if lav_konfidens else
              "handskrift" if handskrift else "kalibreringsproeve")
 
@@ -1574,6 +1631,9 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
                 "ocr_konfidens": ocr_res.get("konfidens"),
                 "bildekvalitet": ocr_res.get("forbehandling"),
                 "sendt_til_gjennomgang": sendt,
+                # R187: intern (understrek) — mellombåndets tilbakehold,
+                # til tilgangsloggen. Aldri ut i svar.
+                "_gjennomgang_vurdering": ocr_res.get("_gjennomgang_vurdering"),
                 "advarsel": ocr_advarsel,
             }
         # Datoklassifisering + kryssjekk mot håndskrevne regioner
@@ -1617,6 +1677,9 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "ocr_konfidens": ocr_res.get("konfidens"),
             "bildekvalitet": ocr_res.get("forbehandling"),
             "sendt_til_gjennomgang": sendt,
+            # R187: intern (understrek) — mellombåndets tilbakehold, til
+            # tilgangsloggen. Aldri ut i svar.
+            "_gjennomgang_vurdering": ocr_res.get("_gjennomgang_vurdering"),
             "advarsel": ocr_advarsel,
         }
 
@@ -4606,8 +4669,15 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         sendt = analyse.get("sendt_til_gjennomgang")
         # «null» = ikke sendt. Det er ikke det samme som at vi ikke vet:
-        # her VET vi at dokumentet ble lest godt nok (R128).
-        self._gjennomgang_grunn = (sendt or {}).get("grunn") if sendt else None
+        # her VET vi at dokumentet ble lest godt nok (R128). Unntaket er
+        # mellombåndet (R187): der VAR konfidensen lav, men andre-sjekken
+        # holdt dokumentet tilbake — og nettopp den beslutningen må stå i
+        # loggen («mellomband_holdt_tilbake:<dokumenttype>»), ellers kan
+        # båndet aldri måles og aldri forsvares.
+        if sendt:
+            self._gjennomgang_grunn = (sendt or {}).get("grunn")
+        else:
+            self._gjennomgang_grunn = analyse.get("_gjennomgang_vurdering")
 
     def _statisk(self, filnavn: str):
         """Serverer Swagger UI fra nav-mappa (R136).
@@ -7970,6 +8040,18 @@ def _sammendragsform_operasjoner(svar: dict) -> dict:
         elif type_ == "struktur":
             res["data"] = None
             fjernet.append("resultater[struktur].data")
+        # «klassifiser» bærer ingen identifikatorVERDIER, men
+        # forventningsrapporten (R186) er et EKSISTENSBEVIS: «funnet:
+        # [fodselsnummer]» betyr at et mod11-GYLDIG nummer står i
+        # dokumentet, og vi beviste det — samme lekkasjeklasse som
+        # opphav-pekerne R89 fjernet. Typen, kildene og enigheten
+        # beholdes (ingen persondata der); rapporten fjernes og NAVNGIS
+        # i utelatt, så fraværet ikke kan forveksles med «typen har
+        # ingen forventninger».
+        elif (type_ == "klassifiser" and isinstance(data, dict)
+                and data.get("forventninger") is not None):
+            data["forventninger"] = None
+            fjernet.append("resultater[klassifiser].data.forventninger")
         # «felter» har samme form som blokka «felter» på bryterveien, så
         # den gjenbruker rensingen der.
         elif type_ == "felter" and isinstance(data, dict):
@@ -8470,6 +8552,7 @@ class KlassifiserOperasjon(Operasjon):
             "kilde": "regler",
         }
         if not _borealis_er_klar():
+            data["forventninger"] = self._forventninger(ktx, data)
             return {"type": "klassifiser", "ok": True, "motor": "regler",
                     "modell_brukt": False, "data": data}
         modell_kode, raasvar = klassifiser_borealis(ktx.tekst)
@@ -8485,8 +8568,19 @@ class KlassifiserOperasjon(Operasjon):
                 # kom fra.
                 data["dokumenttype"] = data["modell"]
                 data["kilde"] = "modell"
+        data["forventninger"] = self._forventninger(ktx, data)
         return {"type": "klassifiser", "ok": True, "motor": "regler+modell",
                 "modell_brukt": True, "data": data}
+
+    @staticmethod
+    def _forventninger(ktx, data):
+        """Typeruting (R186): den AVGJORTE typen bestemmer hva som skal
+        finnes i dokumentet, og rapporten sier hva som mangler — målt
+        mot strukturen konteksten alt har regnet ut, aldri mot en
+        gjetning. None når typen er ukjent eller uten forventninger:
+        ingen forventning er ingen påstand."""
+        avgjort = (data.get("dokumenttype") or {}).get("kode")
+        return typeforventninger.forventningsrapport(avgjort, ktx.struktur)
 
 
 class OppsummerOperasjon(Operasjon):
