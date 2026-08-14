@@ -14,6 +14,17 @@
     "modell": "går til Borealis — det er DISSE som måler en modell",
     "kode": "rutes deterministisk forbi modellen (side-, strekkode- og sjekksumvaliderte identifikatorspørsmål). KONTROLLGRUPPE: de skal gi identisk svar før og etter et modellbytte. Endrer de seg, er det rutingen som er brutt, ikke modellen."
   },
+  "maalt_baseline": {
+    "dato": "2026-08-15",
+    "modell": "borealis-4b-instruct-preview-Q8_0.gguf",
+    "resultat": "42 av 46 (91 %) — modellen 33/37, koden 9/9, 0,63 s per svar, determinisme grønn, tallvakten grep aldri inn",
+    "merknad": "Dette er baselinen en ny modell må slå MÅLBART (bootstrap-KI, ikke punkttall) for å bli promotert av skript/bytt_modell.py."
+  },
+  "kjent_svakhet": {
+    "bunkeforveksling": "De fire feilene i baselinen har ETT mønster: spørsmål om side 9–10 besvares fra side 1–3. «Hvilken dato er vedtaket som det klages på?» ga 12.05.2026 (vedtaket på side 1) i stedet for 08.05.2026 (det påklagede vedtaket på side 9); «Hvilken mottakenhet står på returslippen?» ga NAV Innkreving (side 3) i stedet for NAV Skanning Hamar (side 10). Dokumentet er 7 176 tegn — godt innenfor MAKS_LLM_TEGN, så det er IKKE avkorting. Modellen skiller ikke dokumentene i en bunke fra hverandre.",
+    "tallvakten_dekker_ikke_dette": "«Hvor mye skylder parten i renter?» ga «kr 4 812,00». Dokumentet oppgir ingen rentesum — 4 812 er fakturabeløpet. Tallvakten (R3) stoppet det ikke, og KAN ikke: tallet står ordrett i dokumentet, det svarer bare på et annet spørsmål. Vakten garanterer at tall ikke er DIKTET, ikke at de er RELEVANTE. Dette er den viktigste enkeltobservasjonen i korpuset, og grunnen til at menneskelig kontroll ikke kan fjernes.",
+    "hvorfor_de_staar_igjen": "Spørsmålene er riktige og fasiten er riktig. De rettes ikke for å få grønt — et korpus som later som alt er bra, er verdiløst (samme regel som feltkorpuset). De fire er baselinen: en ny modell som løser dem, er målbart bedre."
+  },
   "sporsmaal": [
     {
       "id": "saksnummer",

@@ -53,7 +53,7 @@ try:
 except Exception:
     pass
 
-from delt import modellsjekk                                    # noqa: E402
+from delt import maskinprofil, modellsjekk                      # noqa: E402
 
 GGUF_MAPPE = ROT / "modeller" / "borealis-gguf"
 FORRIGE_MAPPE = ROT / "modeller" / "borealis-forrige"
@@ -149,6 +149,17 @@ def forsjekk(kandidat: Path) -> dict:
         linjer.append(f"[OK]   {vram['forklaring']}")
     else:
         linjer.append(f"[FEIL] {vram['forklaring']}")
+        # Å bare nekte er ikke godt nok for den som står med serveren og
+        # ikke kan koden: si HVA som ville fått plass (R190).
+        try:
+            maks = maskinprofil.profil()["utledet"]["maks_modell_mb"]
+            if maks:
+                linjer.append(f"       Dette kortet tåler en modellfil på "
+                              f"~{maks / 1024:.1f} GB med dagens kontekst "
+                              f"({KONTEKST} tokens). Vil du kjøre en større "
+                              "modell, må konteksten ned eller kortet opp.")
+        except Exception:                                       # noqa: BLE001
+            pass
         holder = False
 
     ankre = modellsjekk.sjekk_promptankre()
@@ -469,6 +480,12 @@ def skriv_rapport(kandidatnavn: str, livenavn: str, live: dict,
 
 
 def vis_status() -> int:
+    # Maskinen først: alt under er utledet av den (R190).
+    try:
+        _skriv("")
+        _skriv(maskinprofil.rapport())
+    except Exception as exc:                                    # noqa: BLE001
+        _skriv(f"(maskinprofil kunne ikke leses: {exc})")
     naa = live_modell()
     _skriv("\nSpråkmodell (Borealis)")
     _skriv(f"  Live:      {naa.name if naa else '(ingen .gguf funnet)'}")

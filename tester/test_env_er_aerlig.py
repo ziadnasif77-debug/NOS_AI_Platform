@@ -86,6 +86,21 @@ def _lest_i_koden():
             continue
         for m in monstre:
             funn |= set(m.findall(tekst))
+    # R190: maskinprofilen er også en LESER. Den slår opp
+    # miljøvariabelen selv, så et tak som hentes derfra er koblet til —
+    # kallstedet skriver bare ikke os.environ.get lenger. Kartet leses
+    # fra modulen, ikke gjettes med en regex: en regex bred nok til å
+    # treffe det, treffer også vilkårlige ordbøker andre steder og ville
+    # meldt døde nøkler som levende.
+    try:
+        sys.path.insert(0, ROT)
+        from delt.maskinprofil import _env_navn, utled
+        funn |= {_env_navn(n) for n in utled(
+            {"gpu_kort": 1, "vram_kort0_mb": 8192, "ram_mb": 32768,
+             "kjerner": 8}) if not n.startswith(("merknad", "maks_modell",
+                                                 "kontekst_kortet"))}
+    except Exception:                                           # noqa: BLE001
+        pass
     return funn - IKKE_KONFIG
 
 
@@ -194,9 +209,32 @@ def test_eksempelfila_dekker_de_farlige_valgene():
     standarder. Men de som KAN felle tjenesten skal være synlige og
     forklart, ikke bare finnes i koden."""
     eksempel = _nokler(EKSEMPEL)
-    for navn in ("OCR_MINSTE_LEDIG_GPU_MB", "BOREALIS_KONTEKST",
-                 "RATE_LIMIT_PER_MIN", "API_NOKKEL"):
+    for navn in ("OCR_MINSTE_LEDIG_GPU_MB", "RATE_LIMIT_PER_MIN",
+                 "API_NOKKEL"):
         assert navn in eksempel, f"{navn} mangler i .env.example"
+
+
+def test_maskinstyrte_verdier_er_forklart_men_ikke_pinnet():
+    """R190: `BOREALIS_KONTEKST` settes av maskinprofilen, og skal derfor
+    IKKE stå som en aktiv linje — en pinnet verdi ville hindret et større
+    kort i å få den konteksten det tåler, som er hele poenget.
+
+    Kravet fra vakten over gjelder like fullt: verdien kan felle
+    tjenesten, så den skal være SYNLIG OG FORKLART. Den skal altså stå i
+    fila, utkommentert, med begrunnelsen ved siden av."""
+    tekst = io.open(EKSEMPEL, encoding="utf-8").read()
+    for navn in ("BOREALIS_KONTEKST",):
+        assert navn not in _nokler(EKSEMPEL), (
+            f"{navn} står som en AKTIV linje i .env.example og overstyrer "
+            "dermed maskinprofilen på enhver maskin (R190)")
+        assert f"#{navn}=" in tekst, (
+            f"{navn} mangler helt — den kan felle tjenesten og skal være "
+            "synlig, utkommentert, med forklaring")
+        plass = tekst.index(navn)
+        foran = tekst[max(0, plass - 900):plass]
+        assert "SEGFAULT" in foran.upper() or "krasj" in foran.lower(), (
+            f"{navn} står der uten at det fremgår hva som skjer om man "
+            "bommer")
 
 
 # ------------------------------------------------------------------ #

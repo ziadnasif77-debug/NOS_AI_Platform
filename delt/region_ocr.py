@@ -50,7 +50,12 @@ TERSKEL_OPPGITT = 0.25
 # Håndskrift i NAV-skjemaer står i noen få felter, ikke over hele siden,
 # så et tak rammer i praksis bare degraderte sider der norhand uansett
 # ikke har noe å bidra med (den er trent på håndskrift, ikke på støy).
-MAKS_NORHAND_PER_SIDE = int(os.environ.get("MAKS_NORHAND_PER_SIDE", "12"))
+from delt import maskinprofil as _maskinprofil
+
+# Taket følger kortet (R190): 12 er ankermaskinens verdi, et større
+# kort tåler flere håndskriftregioner per side. Miljøvariabelen vinner
+# fortsatt — `verdi()` leser den selv.
+MAKS_NORHAND_PER_SIDE = _maskinprofil.verdi("maks_norhand_per_side", 12)
 MAKS_NORHAND_SEKUNDER = float(os.environ.get("MAKS_NORHAND_SEKUNDER", "4.0"))
 # Hvor mange regioner som leses i samme modellkall. Porsjonering gjør at
 # tidstaket fortsatt kan virke (det sjekkes mellom porsjonene), samtidig
@@ -87,7 +92,10 @@ MAKS_NORHAND_TOKENS = int(os.environ.get("MAKS_NORHAND_TOKENS", "96"))
 # krasj (serveren bare døde, ingen traceback). Nå kreves ekte rom før
 # OCR får GPU; ellers brukes RapidOCR på CPU — som etter latin-fiksen
 # leser norsk feilfritt, så fallbacken er endelig trygg å stå i.
-MINSTE_LEDIG_GPU_MB = int(os.environ.get("OCR_MINSTE_LEDIG_GPU_MB", "2600"))
+# R190: hentes fra maskinprofilen, som ALDRI senker denne automatisk —
+# 800 var verdien som felte tjenesten, og en sikkerhetsreserve er ikke
+# noe et lite kort får «rabatt» på. Profilen kan bare bekrefte 2600.
+MINSTE_LEDIG_GPU_MB = _maskinprofil.verdi("ocr_minste_ledig_gpu_mb", 2600)
 # norhand (TrOCR) er mindre enn EasyOCR: ~330 MiB i fp16. Eget, lavere
 # krav så den ikke havner på CPU bare fordi EasyOCR alt har tatt sin del.
 # Hevet fra 450 av samme grunn: 450 MiB margin på et kort der Borealis

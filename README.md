@@ -155,6 +155,28 @@ og modellene med dem (2026-07-21).
 python skript/last_ned_modeller.py     # last ned de to modellene (én gang)
 ```
 
+### Maskinen bestemmer takene (R190)
+
+Prosjektet skal kunne kopieres til en server ingen har sett ennå. Derfor
+er grensene ikke lenger frosset til utviklermaskinen: serveren måler
+kortet den står på og utleder kontekstvindu, samtidighet, OCR-reserve og
+håndskriftbudsjett av målingen.
+
+```bash
+.pyruntime\python.exe -m delt.maskinprofil
+```
+
+Et svakere kort får lavere tak umiddelbart. Et større kort får mer — men
+**automatikken hever seg aldri over `KONTEKST_AUTO_TAK`**, fordi en for
+høy kontekst ikke gir en feilmelding, den gir et nativt krasj uten
+traceback. Over det sier profilen fra at kortet tåler mer og lar et
+menneske ta valget. **Sikkerhetsreserver senkes aldri automatisk** —
+`OCR_MINSTE_LEDIG_GPU_MB` ble en gang satt til 800 og felte tjenesten
+(R140). Miljøvariabler vinner alltid; profilen setter bare standarden.
+
+Profilen står også i `GET /hjelp` og i kontrollpanelets **Modeller**-fane,
+sammen med den største modellfila kortet tåler.
+
 ### Bytte språkmodell — med port og angreknapp (R188/R189)
 
 Serveren tar den nyeste `.gguf` i `modeller/borealis-gguf`, så et bytte

@@ -100,9 +100,21 @@ språkmodellen for mye, har OCR ingen plass igjen.
 
 | Verdi | Trygg verdi | Hva som skjer hvis du bommer |
 |---|---|---|
-| `BOREALIS_KONTEKST` | **4096** | 8192 gir **segfault** under oppstart — verifisert. Serveren dør uten melding. |
+| `BOREALIS_KONTEKST` | **settes av maskinen** (4096 på et 8 GB-kort) | En for høy verdi gir **segfault** under oppstart — verifisert ved 8192 på 8 GB. Serveren dør uten melding. |
 | `OCR_MINSTE_LEDIG_GPU_MB` | **2600** | 800 ga stille nativ krasj. Dette er den farligste enkeltverdien i `.env`. |
-| Antall GPU-lag | som satt | Flere lag = raskere modell, mindre plass til OCR. |
+| Antall GPU-lag (`BOREALIS_GPU_LAG`) | som satt | Flere lag = raskere modell, mindre plass til OCR. Senk den for å dele en større modell med RAM. |
+
+**Serveren regner disse ut av kortet den står på** (R190). Vil du se hva
+den kom fram til, og hvorfor:
+
+```
+.pyruntime\python.exe -m delt.maskinprofil
+```
+
+Den skriver kortet, minnet, hvert tak den valgte, og **den største
+modellfila dette kortet tåler**. Står det en `MERK:` der, er det noe du
+bør lese før du endrer noe. Setter du en verdi i `.env`, vinner din
+verdi over profilen — profilen setter bare standarden.
 
 **Hva du gjør hvis serveren krasjer med 0xC0000005:**
 

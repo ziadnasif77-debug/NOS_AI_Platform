@@ -19,6 +19,8 @@ import pytest
 
 sys.path.insert(0, ".")
 
+from delt import maskinprofil                                   # noqa: E402
+
 _KILDE = open("skript/dokument_api.py", encoding="utf-8").read()
 
 
@@ -31,7 +33,11 @@ def _last_kapasitetskode():
                  "VRAM_PER_JOBB_MB", "MIN_SAMTIDIGE", "MAKS_SAMTIDIGE_TAK",
                  "KAPASITET_MAAL_S"):
         linje = _KILDE.split(navn + " = ")[1].split("\n")[0]
-        ns[navn] = eval(linje, {"os": os, "int": int, "float": float})
+        # `maskinprofil` med: takene hentes nå fra maskinprofilen (R190),
+        # så konstantlinjene kan referere den. Profilen leser miljøet
+        # selv, og gir ankermaskinens verdier her.
+        ns[navn] = eval(linje, {"os": os, "int": int, "float": float,
+                                "maskinprofil": maskinprofil})
     exec(_KILDE[start:slutt], ns)
     return ns
 

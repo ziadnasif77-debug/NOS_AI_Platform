@@ -114,7 +114,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import kalibrering, prompter, typeforventninger
+from delt import kalibrering, maskinprofil, prompter, typeforventninger
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -138,7 +138,11 @@ PORT = int(os.environ.get("DOKUMENT_API_PORT",
 MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
 # Hvor mange tegn av dokumentet LLM-en leser direkte. Større dokumenter
 # suppleres med deterministisk uttrekk fra HELE teksten + advarsel.
-MAKS_LLM_TEGN = int(os.environ.get("MAKS_LLM_TEGN", "12000"))
+# R190: følger kontekstvinduet, som følger kortet. 12000 hørte til 4096
+# tokens på ankermaskinen; et større kort skal ikke arve småkortets
+# grense på nøyaktig det brukeren merker (hvor mye av dokumentet
+# modellen får se).
+MAKS_LLM_TEGN = maskinprofil.verdi("maks_llm_tegn", 12000)
 # OCR er ekte GPU-arbeid per side — standardgrense, kan økes per
 # forespørsel med multipart-feltet maks_sider (tak: OCR_TAK_SIDER).
 # Kuttes det, sier svaret det ALLTID eksplisitt i 'advarsel'.
@@ -223,7 +227,7 @@ KOE_VENT_S = float(os.environ.get("KOE_VENT_S", "90"))
 MAKS_SAMTIDIGE_MB = int(os.environ.get("MAKS_SAMTIDIGE_MB", "400"))
 # Hvor mange som får stå inne per kort. OCR serialiseres uansett per kort,
 # så poenget er å holde kortet mettet — ikke å kjøre alt samtidig.
-SAMTIDIGE_PER_GPU = int(os.environ.get("SAMTIDIGE_PER_GPU", "4"))
+SAMTIDIGE_PER_GPU = maskinprofil.verdi("samtidige_per_gpu", 4)
 SAMTIDIGE_UTEN_GPU = int(os.environ.get("SAMTIDIGE_UTEN_GPU", "2"))
 # Minne en forespørsel legger beslag på mens den behandles. Målt: 10
 # samtidige skannede sider løftet serveren fra 7,0 til 8,1 GB ≈ 110 MB
@@ -1415,7 +1419,7 @@ _analyse_cache_las = threading.Lock()
 # Da er et ærlig «prøv igjen om litt» langt bedre enn en taus henging,
 # og det er samme mønster som Borealis alt bruker mens den laster.
 _oppvarming = {"pagaar": False}
-ANALYSE_CACHE_MAKS = int(os.environ.get("ANALYSE_CACHE_MAKS", "32"))
+ANALYSE_CACHE_MAKS = maskinprofil.verdi("analyse_cache_maks", 32)
 
 
 def analyser_med_cache(filnavn: str, data: bytes, ocr_maks_sider=None,
@@ -1723,7 +1727,13 @@ BOREALIS_GGUF_MAPPE = os.path.join(ROT, "modeller", "borealis-gguf")
 # segfaulter under KV-cache-allokering (full-size SWA-cache). 4096 er
 # verifisert trygt her (og romslig — LLM-input er uansett kappet på
 # MAKS_LLM_TEGN). Øk bare hvis du frigjør GPU (færre GPU-lag / mindre OCR).
-BOREALIS_KONTEKST = int(os.environ.get("BOREALIS_KONTEKST", "4096"))
+#
+# R190: verdien er ikke lenger frosset til dette kortet. Maskinprofilen
+# regner den ut av kortet den faktisk står på — 8 GB gir fortsatt 4096
+# (ankeret er nettopp denne målingen), et større kort får mer. Den
+# hever seg aldri over KONTEKST_AUTO_TAK av seg selv, for et for høyt
+# tall gir ikke en feilmelding her, men et nativt krasj uten traceback.
+BOREALIS_KONTEKST = maskinprofil.verdi("borealis_kontekst", 4096)
 
 
 def _finn_gguf() -> str:
@@ -4966,6 +4976,16 @@ class Handler(BaseHTTPRequestHandler):
                 # CPU-fallback (fullt kort) er 20× tregere — den skal
                 # være synlig her, ikke noe man må måle seg fram til.
                 "ocr": _ocr_status(),
+                # R190: takene er utledet av maskinen, ikke frosset. En
+                # klient som lurer på hvorfor svaret ble kappet, skal
+                # kunne se hvilket kontekstvindu maskinen fikk.
+                "maskin": {
+                    "gpu_kort": maskinprofil.profil()["maaling"]["gpu_kort"],
+                    "vram_mb": maskinprofil.profil()["maaling"]["vram_kort0_mb"],
+                    "borealis_kontekst": BOREALIS_KONTEKST,
+                    "maks_llm_tegn": MAKS_LLM_TEGN,
+                    "samtidige_per_gpu": SAMTIDIGE_PER_GPU,
+                },
                 "klient_eksempel": ("Enhver HTTP-klient (GUI, UiPath, curl, egne skript): "
                                     "POST med filen som multipart-felt 'fil'"),
             })
@@ -8857,6 +8877,16 @@ def main():
     # Jobbsystem: last ferdige jobber fra disk og start arbeidstråden
     _jobb_last_fra_disk()
     threading.Thread(target=_jobb_arbeider, daemon=True).start()
+
+    # R190: hvilken maskin står vi på, og hvilke tak ga den? Skrives ut
+    # FØRST, fordi alt under (kontekst, samtidige, OCR-reserve) er
+    # utledet av den. Og lagres, så neste oppstart vet hva som kjørte
+    # hvis denne skulle dø nativt.
+    try:
+        print(maskinprofil.rapport())
+        maskinprofil.lagre()
+    except Exception as exc:                                    # noqa: BLE001
+        print(f"(maskinprofil hoppet over: {exc})")
 
     # Motoravtrykk: varsle høyt hvis EasyOCR-/RapidOCR-/Doc-UFCN-/Borealis-
     # vektene er byttet siden tersklene ble kalibrert (norhand har sin egen,
