@@ -152,7 +152,15 @@ feil, uten at noen har endret noe åpenbart.
    .pyruntime\python.exe skript\kjor_sporsmaalskorpus.py
    ```
 
-3. **Har noen byttet modellvekter?** Serveren roper om det ved oppstart,
+3. **Er maskinen blitt tregere, eller er det bare en følelse?** Mål:
+   ```
+   .pyruntime\python.exe skript\kjor_ytelsesmaaling.py
+   ```
+   Den skriver median/P95/P99 per ledd, OCR-sider per sekund og hvor
+   mange samtidige maskinen bærer — og lagrer resultatet i
+   `data\ytelsesmaalinger\`. Sammenlign med forrige kjøring der.
+
+4. **Har noen byttet modellvekter?** Serveren roper om det ved oppstart,
    men meldingen kan ha rullet forbi:
    ```
    .pyruntime\python.exe -m delt.motoravtrykk

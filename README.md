@@ -19,6 +19,7 @@ UiPath, curl eller egne skript.
 | [docs/api_dokumentasjon.md](docs/api_dokumentasjon.md) | Arbeidsflyter og eksempler |
 | [docs/regler_lokal_api.md](docs/regler_lokal_api.md) | Regelverket R1–R67 |
 | [docs/prosjektjournal.md](docs/prosjektjournal.md) | **Prosjektjournal** — status mot konseptutredningen, lærdommer, milepæler |
+| [docs/fase0_beslutningsrapport.md](docs/fase0_beslutningsrapport.md) | **Phase 0-rapport** — hva maskinen faktisk klarer, målt. Kjør `make ytelse` for nye tall |
 | [docs/beslutninger/](docs/beslutninger/LES_MEG.md) | **ADR-register** — hva vi bevisst valgte bort, og hva valget koster |
 | [docs/naar_noe_gaar_galt.md](docs/naar_noe_gaar_galt.md) | **Feilboka** — symptom → årsak → hva du gjør. Skrevet for drift uten utvikler og uten internett |
 | `GET /dokumentasjon` | Swagger UI med svarmodeller og innebygd veiledning |
