@@ -114,7 +114,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import kalibrering, maskinprofil, prompter, typeforventninger
+from delt import (kalibrering, maalinger, maskinprofil, prompter,
+                  typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -481,10 +482,40 @@ def _tilgangslogger():
     return _tilgang_logger
 
 
+def _tell_foresporsel(handler, code) -> None:
+    """Metrikkene for én ferdig forespørsel.
+
+    Ligger FØR tilgangsloggens `TILGANGSLOGG_STI`-port med vilje: den
+    som slår av tilgangsloggen av personvernhensyn, skal ikke miste
+    kapasitetstallene på kjøpet. Her er det uansett ingen steder et
+    innhold kan havne — bare rute, statuskode og utfall."""
+    try:
+        sekunder = time.time() - getattr(handler, "_t0_req", time.time())
+        sti = maalinger.rute(getattr(handler, "path", "") or "")
+        kode = str(code.value if hasattr(code, "value") else code)
+        maalinger.tell("nav_foresporsler_total", sti=sti, kode=kode)
+        maalinger.observer("nav_foresporsel_sekunder", sekunder, sti=sti)
+        tallvakt = getattr(handler, "_tallvakt", None)
+        if isinstance(tallvakt, dict):
+            maalinger.tell(
+                "nav_tallvakt_total",
+                utfall="stoppet" if tallvakt.get("stoppet") else "rent")
+        grunn = getattr(handler, "_gjennomgang_grunn", None)
+        if grunn:
+            # Grunnene er en lukket liste fra koden, ikke fritekst — så
+            # kardinaliteten kan ikke løpe løpsk. Mellombåndets verdi
+            # bærer dokumenttypen etter et kolon; den klippes vekk.
+            maalinger.tell("nav_gjennomgang_total",
+                           grunn=str(grunn).split(":", 1)[0])
+    except Exception:                                           # noqa: BLE001
+        pass
+
+
 def _skriv_tilgang(handler, code) -> None:
     """Én JSON-linje til tilgangsloggen. Best-effort, aldri fatal. Logger
     kun ip, metode, sti (uten query), status, om X-API-Key var med, og
     responstid — ALDRI forespørselskroppen (kan inneholde PII)."""
+    _tell_foresporsel(handler, code)
     if not TILGANGSLOGG_STI:
         return
     try:
@@ -1029,6 +1060,7 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     Synkron variant med sidegrense — store dokumenter hører hjemme i
     POST /jobb. Rapporterer alltid sider_lest/sider_totalt ærlig."""
     import fitz
+    _t0_ocr = time.time()
     import numpy as np
     from delt.forbehandling import forbehandle_side
     from delt.region_ocr import ocr_side
@@ -1152,6 +1184,10 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     konfidens = round(konf_sum / konf_vekt, 4) if konf_vekt else 1.0
     return {"tekst": samlet, "motorer": motorer,
             "handskrift": handskrift, "konfidens": konfidens,
+            # Sekundene OCR faktisk brukte. Sider/sekund er tallet hele
+            # kapasitetsplanleggingen hviler på — uten det kan ingen
+            # svare på hvor mange arbeidere en gitt last trenger.
+            "sekunder": round(time.time() - _t0_ocr, 3),
             "sider_lest": min(sider_totalt, maks_sider),
             "sider_totalt": sider_totalt,
             # Understrek = internt felt, aldri med i et JSON-svar (samme
@@ -1574,6 +1610,19 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
             "mangle")
 
     if ocr_res is not None:
+        # Sider per sekund er det tallet hele kapasitetsplanleggingen
+        # hviler på: OCR, ikke språkmodellen, dominerer tiden på en
+        # skannet bunke. Telles her fordi dette er stedet OCR faktisk
+        # har kjørt — ikke i svarbyggeren, som også nås fra cache.
+        try:
+            if not ocr_res.get("fra_cache"):
+                maalinger.tell("nav_ocr_sider_total",
+                               float(ocr_res.get("sider_lest") or 0))
+                if ocr_res.get("sekunder"):
+                    maalinger.tell("nav_ocr_sekunder_total",
+                                   float(ocr_res["sekunder"]))
+        except Exception:                                       # noqa: BLE001
+            pass
         ocr_tekst = ocr_res["tekst"]
         ocr_advarsel = None
         if ocr_res.get("tomme_sider"):
@@ -1880,6 +1929,19 @@ def _borealis_generer(prompt: str, maks_tokens: int = 256) -> tuple:
     """Én deterministisk generering med Borealis (GPU-lås rundt kallet).
     Returnerer (tekst, avkortet) — avkortet=True betyr at svaret traff
     tokentaket og KAN være ufullstendig. Det skal aldri skjules."""
+    _t0_modell = time.time()
+    try:
+        return _borealis_generer_intern(prompt, maks_tokens)
+    finally:
+        # Målt her og ikke i kallstedene: dette er den ENE porten alle
+        # modellkall går gjennom, og et tall som bare gjelder noen av
+        # dem ville svart feil på «er modellen flaskehalsen?».
+        maalinger.tell("nav_modellkall_total")
+        maalinger.tell("nav_modell_sekunder_total",
+                       time.time() - _t0_modell)
+
+
+def _borealis_generer_intern(prompt: str, maks_tokens: int = 256) -> tuple:
     if _borealis["motor"].startswith("llama_cpp"):
         llm = _borealis["llama"]
         prompt = _tilpass_kontekst(llm, prompt, maks_tokens)
@@ -3897,6 +3959,23 @@ def _openapi() -> dict:
         "paths": {
             "/hjelp": {"get": {"summary": "Tjenestestatus og oversikt",
                                "responses": {"200": {"description": "Status, endepunkter, grenser, Borealis-motor"}}}},
+            "/metrics": {"get": {
+                "summary": "Målinger i Prometheus-format (text/plain)",
+                "description": (
+                    "Sider/sekund, P95-latens per rute, tallvakt-rate, "
+                    "kapasitet og HVA som binder den (gpu/cpu/ram), ledig "
+                    "VRAM. Tallene kapasitetsplanleggingen hviler på — "
+                    "uten dem kan ingen svare på om systemet trenger mer "
+                    "maskinvare eller bare bedre innstillinger.\n\n"
+                    "Svaret er text/plain, ikke JSON. Ingen "
+                    "personopplysninger: etikettene er lukkede verdier "
+                    "(rute, statuskode, utfall), aldri innhold — "
+                    "endepunktet kan derfor skrapes uten en egen "
+                    "personvernvurdering."),
+                "tags": ["drift"],
+                "responses": {"200": {
+                    "description": "Prometheus-tekstformat 0.0.4",
+                    "content": {"text/plain": {"schema": {"type": "string"}}}}}}},
             "/dokument": {"post": {
                 "summary": "Samlet endepunkt: ETT kall, brytere for hva som skal gjøres",
                 "description": (
@@ -4689,6 +4768,43 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._gjennomgang_grunn = analyse.get("_gjennomgang_vurdering")
 
+    def _metrics(self):
+        """GET /metrics — Prometheus-tekst.
+
+        De ferske målingene (kapasitet, VRAM, modellstatus) settes her og
+        ikke i en bakgrunnstråd: en tråd som tikker hvert sekund koster
+        noe hele døgnet, mens dette koster noe bare når noen faktisk
+        spør. Skrapes typisk hvert 15.–60. sekund.
+
+        Svaret er text/plain, ikke JSON — det er formatet Prometheus
+        leser, og hele poenget med endepunktet."""
+        try:
+            # `status()` gir både grensen, hva som binder den og hvor
+            # mange som er inne nå — ett kall, ingen ny måling.
+            kap = _kapasitet_port.status()
+            maalinger.sett("nav_kapasitet", kap.get("grense") or 0)
+            maalinger.sett("nav_i_flukt", kap.get("i_arbeid") or 0)
+            # HVA som binder kapasiteten er hele poenget for
+            # kapasitetsplanleggingen: er det GPU, blir mer RAM bortkastet.
+            for navn in ("gpu", "cpu", "ram"):
+                maalinger.sett("nav_kapasitet_binder",
+                               1 if kap.get("binder") == navn else 0,
+                               ressurs=navn)
+            maalt = kap.get("maalt") or {}
+            if maalt.get("gpu_ledig_mb") is not None:
+                maalinger.sett("nav_vram_ledig_mb", maalt["gpu_ledig_mb"])
+        except Exception:                                       # noqa: BLE001
+            pass
+        maalinger.sett("nav_borealis_klar",
+                       1 if _borealis["status"] == "klar" else 0)
+        kropp = maalinger.tekst().encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type",
+                         "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Content-Length", str(len(kropp)))
+        self.end_headers()
+        self.wfile.write(kropp)
+
     def _statisk(self, filnavn: str):
         """Serverer Swagger UI fra nav-mappa (R136).
 
@@ -4839,6 +4955,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if sti == "/openapi.json":
             return self._svar(200, _openapi())
+        if sti == "/metrics":
+            return self._metrics()
         if sti.startswith("/innsyn/"):
             # Direktevisnings-poll: hendelser fra og med ?fra=N + resultat.
             # SAMME nøkkelkrav som GET /jobb/<id>: svaret inneholder hele
@@ -4924,6 +5042,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "datoer og dokumentdato med datospenn per side"),
                     "GET /jobb/<id>/tekst": "hele den utlestne teksten når jobben er ferdig",
                     "POST /jobb/<id>/avbryt": "stopp en kø/pågående jobb",
+                    "GET /metrics": ("målinger i Prometheus-format: sider/sekund, "
+                                     "P95 per rute, tallvakt-rate, kapasitet og hva "
+                                     "som binder den, ledig VRAM. text/plain, ingen "
+                                     "personopplysninger"),
                 },
                 "datoer": ("dokumentets EGEN dato (dokumentdato) skilles fra datoene i "
                            "innholdet: hver dato får en «rolle» (dokument/innhold/behandling/"
