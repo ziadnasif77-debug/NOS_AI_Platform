@@ -19,6 +19,7 @@ UiPath, curl eller egne skript.
 | [docs/api_dokumentasjon.md](docs/api_dokumentasjon.md) | Arbeidsflyter og eksempler |
 | [docs/regler_lokal_api.md](docs/regler_lokal_api.md) | Regelverket R1–R67 |
 | [docs/prosjektjournal.md](docs/prosjektjournal.md) | **Prosjektjournal** — status mot konseptutredningen, lærdommer, milepæler |
+| [docs/naar_noe_gaar_galt.md](docs/naar_noe_gaar_galt.md) | **Feilboka** — symptom → årsak → hva du gjør. Skrevet for drift uten utvikler og uten internett |
 | `GET /dokumentasjon` | Swagger UI med svarmodeller og innebygd veiledning |
 
 ---
@@ -152,6 +153,42 @@ og modellene med dem (2026-07-21).
 
 ```bash
 python skript/last_ned_modeller.py     # last ned de to modellene (én gang)
+```
+
+### Bytte språkmodell — med port og angreknapp (R188/R189)
+
+Serveren tar den nyeste `.gguf` i `modeller/borealis-gguf`, så et bytte
+er teknisk sett «kopier inn en fil». Det er nettopp problemet: en modell
+som ikke får plass gir et **nativt krasj uten traceback**, og en som er
+dårligere ser helt normal ut. Bruk derfor porten:
+
+```bash
+.pyruntime\python.exe skript\bytt_modell.py <ny-modell.gguf>
+```
+
+Den kjører hele runden og stopper ved første grunn til å la være:
+filsignatur → VRAM-budsjett (får den plass, OG blir det nok igjen til
+OCR?) → promptankre → mål dagens modell → bytt → mål den nye → døm.
+**Dommen faller på konfidensintervaller, ikke på to tall** (R148/R189):
+er forskjellen ikke skillbar fra tilfeldighet, byttes ingenting. Går noe
+galt, rulles forrige modell tilbake automatisk.
+
+```bash
+.pyruntime\python.exe skript\bytt_modell.py --sjekk <fil>   # bare sjekk, endrer ingenting
+.pyruntime\python.exe skript\bytt_modell.py --status        # hva kjører nå?
+.pyruntime\python.exe skript\bytt_modell.py --rull-tilbake  # angre
+```
+
+Forrige modell ligger i `modeller/borealis-forrige` og **slettes aldri
+automatisk**. Alt dette finnes også som knapper i kontrollpanelet under
+fanen **Modeller** — laget for at serveren skal kunne stelles uten at
+noen kan koden.
+
+Målingen bruker spørsmålskorpuset
+([tester/korpus/sporsmaal_syntetisk_bunke.json](tester/korpus/sporsmaal_syntetisk_bunke.json)):
+
+```bash
+.pyruntime\python.exe skript\kjor_sporsmaalskorpus.py
 ```
 
 ---

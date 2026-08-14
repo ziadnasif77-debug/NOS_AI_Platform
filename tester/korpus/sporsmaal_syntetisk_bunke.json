@@ -1,0 +1,398 @@
+{
+  "korpus": "sporsmaal",
+  "fil": "syntetisk_bunke_tekstlag.pdf",
+  "beskrivelse": "Spørsmål med fasitsvar mot den 10-siders SYNTETISKE NAV-bunken. Måler SPRÅKMODELLEN (og rutingen rundt den) — ikke det deterministiske uttrekket, som tester/korpus/syntetisk_bunke_tekstlag.json allerede dekker. Brukes av skript/kjor_sporsmaalskorpus.py og av modellbytte-porten (skript/bytt_modell.py).",
+  "fasit_lest_av": "menneske, fra dokumentets tekstlag 2026-08-14",
+  "merknad_personvern": "Dokumentet er syntetisk (fødselsnumre fra de offisielle syntetiske seriene, måned +80/+90). Fødselsnumre og kontonumre står likevel ALDRI som verdier i denne fila — de sjekkes med «felt», som sammenligner svaret mot det deterministiske uttrekket ved kjøretid. Da havner ingen numre i git-historikken, og fasiten kan ikke bli utdatert i forhold til uttrekket.",
+  "sjekktyper": {
+    "maa_inneholde": "ALLE disse strengene må stå i svaret (mellomrom i tall ignoreres)",
+    "ett_av": "MINST ÉN av disse må stå i svaret — for verdier som skrives på flere måter",
+    "maa_ikke_inneholde": "INGEN av disse får stå i svaret",
+    "felt": "svaret må inneholde verdien som det deterministiske uttrekket fant på denne stien (unngår å legge numre i git)"
+  },
+  "svares_av": {
+    "modell": "går til Borealis — det er DISSE som måler en modell",
+    "kode": "rutes deterministisk forbi modellen (side-, strekkode- og sjekksumvaliderte identifikatorspørsmål). KONTROLLGRUPPE: de skal gi identisk svar før og etter et modellbytte. Endrer de seg, er det rutingen som er brutt, ikke modellen."
+  },
+  "sporsmaal": [
+    {
+      "id": "saksnummer",
+      "sporsmal": "Hva er saksnummeret?",
+      "maa_inneholde": ["4417820"],
+      "fasit": "4417820",
+      "svares_av": "modell",
+      "type": "identifikator"
+    },
+    {
+      "id": "vedtakstype",
+      "sporsmal": "Hva slags vedtak er dette?",
+      "ett_av": ["sykepeng"],
+      "fasit": "Vedtak om sykepenger",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    },
+    {
+      "id": "innvilget",
+      "sporsmal": "Ble søknaden innvilget eller avslått?",
+      "ett_av": ["innvilget", "innvilga"],
+      "maa_ikke_inneholde": ["avslått", "avslag"],
+      "fasit": "Innvilget",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    },
+    {
+      "id": "vedtaksdato",
+      "sporsmal": "Hvilken dato er vedtaket på side 1 datert?",
+      "ett_av": ["12.05.2026", "2026-05-12"],
+      "fasit": "12.05.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "rett_fra",
+      "sporsmal": "Fra hvilken dato har parten rett til sykepenger?",
+      "ett_av": ["02.04.2026", "2026-04-02", "2.04.2026"],
+      "fasit": "02.04.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "periode_til",
+      "sporsmal": "Til hvilken dato gjelder vedtaket?",
+      "ett_av": ["30.09.2026", "2026-09-30"],
+      "fasit": "30.09.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "sykepengegrunnlag",
+      "sporsmal": "Hva er sykepengegrunnlaget per år?",
+      "maa_inneholde": ["512400"],
+      "fasit": "kr 512 400 per år",
+      "svares_av": "modell",
+      "type": "belop"
+    },
+    {
+      "id": "utbetalingsgrad",
+      "sporsmal": "Hvor mange prosent av grunnlaget blir utbetalt?",
+      "maa_inneholde": ["100"],
+      "fasit": "100 prosent",
+      "svares_av": "modell",
+      "type": "tall"
+    },
+    {
+      "id": "forste_utbetaling",
+      "sporsmal": "Når er første utbetaling beregnet til?",
+      "ett_av": ["25.05.2026", "2026-05-25"],
+      "fasit": "25.05.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "lovhjemmel_vedtak",
+      "sporsmal": "Hvilket kapittel i folketrygdloven er vedtaket fattet etter?",
+      "maa_inneholde": ["8"],
+      "fasit": "Kapittel 8",
+      "svares_av": "modell",
+      "type": "hjemmel"
+    },
+    {
+      "id": "dagsats",
+      "sporsmal": "Hva er dagsatsen i beregningen?",
+      "maa_inneholde": ["1970"],
+      "fasit": "1 970",
+      "svares_av": "modell",
+      "type": "belop"
+    },
+    {
+      "id": "sum_dager",
+      "sporsmal": "Hvor mange dager er summen i beregningstabellen?",
+      "maa_inneholde": ["129"],
+      "fasit": "129",
+      "svares_av": "modell",
+      "type": "tall"
+    },
+    {
+      "id": "brutto_april",
+      "sporsmal": "Hva er bruttobeløpet for april 2026?",
+      "maa_inneholde": ["41370"],
+      "fasit": "41 370",
+      "svares_av": "modell",
+      "type": "belop"
+    },
+    {
+      "id": "netto_juni",
+      "sporsmal": "Hva er nettobeløpet for juni 2026?",
+      "maa_inneholde": ["30338"],
+      "fasit": "30 338",
+      "svares_av": "modell",
+      "type": "belop"
+    },
+    {
+      "id": "fakturabelop",
+      "sporsmal": "Hvor mye skal betales på fakturaen?",
+      "maa_inneholde": ["4812"],
+      "fasit": "kr 4 812,00",
+      "svares_av": "modell",
+      "type": "belop"
+    },
+    {
+      "id": "forfallsdato",
+      "sporsmal": "Hva er forfallsdatoen på fakturaen?",
+      "ett_av": ["24.06.2026", "2026-06-24"],
+      "fasit": "24.06.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "fakturanummer",
+      "sporsmal": "Hva er fakturanummeret?",
+      "maa_inneholde": ["90114882"],
+      "fasit": "90114882",
+      "svares_av": "modell",
+      "type": "identifikator"
+    },
+    {
+      "id": "fakturadato",
+      "sporsmal": "Hvilken dato er fakturaen datert?",
+      "ett_av": ["03.06.2026", "2026-06-03", "3.06.2026"],
+      "fasit": "03.06.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "hvorfor_tilbakebetaling",
+      "sporsmal": "Hvorfor kreves beløpet tilbake?",
+      "ett_av": ["for mye", "utbetalt for mye", "feilutbetal"],
+      "fasit": "Det er utbetalt for mye sykepenger",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    },
+    {
+      "id": "tilbakebetaling_periode",
+      "sporsmal": "Hvilken periode gjelder tilbakebetalingskravet?",
+      "ett_av": ["30.04.2026", "2026-04-30"],
+      "fasit": "02.04.2026 til 30.04.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "hjemmel_tilbakekreving",
+      "sporsmal": "Hvilken paragraf i folketrygdloven hjemler tilbakekrevingen?",
+      "ett_av": ["22-15", "22 - 15"],
+      "fasit": "§ 22-15",
+      "svares_av": "modell",
+      "type": "hjemmel"
+    },
+    {
+      "id": "betalingsmottaker",
+      "sporsmal": "Hvem er betalingsmottaker på fakturaen?",
+      "ett_av": ["innkreving"],
+      "fasit": "NAV Innkreving",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    },
+    {
+      "id": "skjemanummer",
+      "sporsmal": "Hvilket skjemanummer har egenerklæringen?",
+      "ett_av": ["08-07.04", "08-07-04"],
+      "fasit": "NAV 08-07.04",
+      "svares_av": "modell",
+      "type": "identifikator"
+    },
+    {
+      "id": "epost",
+      "sporsmal": "Hva er e-postadressen i dokumentet?",
+      "maa_inneholde": ["ola.testperson@eksempel.no"],
+      "fasit": "ola.testperson@eksempel.no",
+      "svares_av": "kode",
+      "type": "identifikator"
+    },
+    {
+      "id": "telefon",
+      "sporsmal": "Hva er telefonnummeret?",
+      "felt": "dokumentprofil.kontakt.telefoner.0",
+      "reserve_inneholder": ["41288903"],
+      "fasit": "41288903 (skrevet «+47 412 88 903» i dokumentet)",
+      "svares_av": "kode",
+      "type": "identifikator"
+    },
+    {
+      "id": "kontonummer",
+      "sporsmal": "Hva er kontonummeret?",
+      "felt": "struktur.identifikatorer.kontonummer.0",
+      "fasit": "kontonummeret på fakturaen (mod11-validert av koden)",
+      "svares_av": "kode",
+      "type": "identifikator"
+    },
+    {
+      "id": "kid",
+      "sporsmal": "Hva er KID-nummeret?",
+      "maa_inneholde": ["1002345678911"],
+      "fasit": "1002345678911",
+      "svares_av": "kode",
+      "type": "identifikator"
+    },
+    {
+      "id": "fodselsnummer_begge",
+      "sporsmal": "Hva er fødselsnummeret?",
+      "felt": "struktur.identifikatorer.fodselsnummer.0",
+      "ogsaa_felt": "struktur.identifikatorer.fodselsnummer.1",
+      "fasit": "BEGGE personenes fødselsnumre — bunken gjelder to personer, og koden lister alle treff",
+      "svares_av": "kode",
+      "type": "identifikator",
+      "merknad": "Den viktigste kontrollen i hele korpuset: en modell ville valgt ETT nummer. Svarer denne med bare ett, er den deterministiske rutingen brutt."
+    },
+    {
+      "id": "strekkode_side3",
+      "sporsmal": "Hva er strekkoden på side 3?",
+      "maa_inneholde": ["1002345678911"],
+      "fasit": "1002345678911",
+      "svares_av": "kode",
+      "type": "strekkode"
+    },
+    {
+      "id": "strekkode_side10",
+      "sporsmal": "Hva er strekkoden på side 10?",
+      "maa_inneholde": ["NAV4417820-2026-06"],
+      "fasit": "NAV4417820-2026-06",
+      "svares_av": "kode",
+      "type": "strekkode"
+    },
+    {
+      "id": "antall_sider",
+      "sporsmal": "Hvor mange sider har dokumentet?",
+      "maa_inneholde": ["10"],
+      "fasit": "10",
+      "svares_av": "modell",
+      "type": "tall"
+    },
+    {
+      "id": "les_side_7",
+      "sporsmal": "les side 7",
+      "maa_inneholde": ["Side 7 av 10"],
+      "fasit": "Sidens tekst ordrett",
+      "svares_av": "kode",
+      "type": "side"
+    },
+    {
+      "id": "side_finnes_ikke",
+      "sporsmal": "les side 14",
+      "ett_av": ["finnes ikke"],
+      "fasit": "Dokumentet har 10 sider — side 14 finnes ikke.",
+      "svares_av": "kode",
+      "type": "side",
+      "merknad": "«Vet ikke» er et gyldig svar; å dikte en side er det ikke."
+    },
+    {
+      "id": "klage_sprak",
+      "sporsmal": "Hvilket språk er klagen på side 9 skrevet på?",
+      "ett_av": ["nynorsk"],
+      "fasit": "Nynorsk",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    },
+    {
+      "id": "klage_ytelse",
+      "sporsmal": "Hvilken ytelse gjelder klagen på side 9?",
+      "ett_av": ["arbeidsavklaringspeng"],
+      "maa_ikke_inneholde": ["sykepeng"],
+      "fasit": "Arbeidsavklaringspenger",
+      "svares_av": "modell",
+      "type": "forstaaelse",
+      "merknad": "Klagen gjelder AAP, ikke sykepengene resten av bunken handler om (R183: det dokumentet GJELDER, ikke det det NEVNER)."
+    },
+    {
+      "id": "klage_avsender",
+      "sporsmal": "Hvem har sendt klagen på side 9?",
+      "maa_inneholde": ["Marit"],
+      "fasit": "Marit Testperson",
+      "svares_av": "modell",
+      "type": "navn"
+    },
+    {
+      "id": "sakstilvising",
+      "sporsmal": "Hva er sakstilvisinga i klagen?",
+      "maa_inneholde": ["5590114"],
+      "fasit": "5590114",
+      "svares_av": "modell",
+      "type": "identifikator"
+    },
+    {
+      "id": "klage_paaklaget_vedtak",
+      "sporsmal": "Hvilken dato er vedtaket som det klages på?",
+      "ett_av": ["08.05.2026", "2026-05-08", "8.05.2026"],
+      "fasit": "08.05.2026",
+      "svares_av": "modell",
+      "type": "dato"
+    },
+    {
+      "id": "klage_begrunnelse",
+      "sporsmal": "Hva er begrunnelsen for klagen på side 9?",
+      "ett_av": ["feil faktum", "slutta", "sluttet"],
+      "fasit": "Klageren mener vedtaket bygger på feil faktum — hun sluttet i stillingen 28.02.2026",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    },
+    {
+      "id": "returslipp_enhet",
+      "sporsmal": "Hvilken mottakenhet står på returslippen?",
+      "ett_av": ["Hamar"],
+      "fasit": "NAV Skanning Hamar",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    },
+    {
+      "id": "postnummer_avsender",
+      "sporsmal": "Hvilket postnummer og poststed har avsenderadressen på side 1?",
+      "maa_inneholde": ["0607"],
+      "ett_av": ["OSLO", "Oslo"],
+      "fasit": "0607 OSLO",
+      "svares_av": "modell",
+      "type": "adresse"
+    },
+    {
+      "id": "diagnose",
+      "sporsmal": "Hvilken diagnosekode står i legeerklæringen?",
+      "ett_av": ["L86"],
+      "fasit": "L86 Ryggsyndrom med utstråling",
+      "svares_av": "modell",
+      "type": "forstaaelse",
+      "kjent_svakhet": "Kursivskriften på side 5 er fragmentert i tekstlaget (én bokstav per posisjon). Spørsmålet er MED VILJE med: det måler om en ny modell tåler fragmentert tekst bedre eller dårligere."
+    },
+    {
+      "id": "ikke_i_dokumentet",
+      "sporsmal": "Hva er pasientens blodtype?",
+      "ett_av": ["ikke", "finnes ikke", "står ikke", "vet ikke", "ingen"],
+      "maa_ikke_inneholde": ["A+", "0+", "AB"],
+      "fasit": "Opplysningen finnes ikke i dokumentet",
+      "svares_av": "modell",
+      "type": "negativ",
+      "merknad": "Måler det viktigste av alt: at modellen sier «vet ikke» i stedet for å dikte. En modell som svarer med en blodtype her, skal ALDRI promoteres."
+    },
+    {
+      "id": "ikke_oppdiktet_belop",
+      "sporsmal": "Hvor mye skylder parten i renter?",
+      "ett_av": ["ikke", "finnes ikke", "står ikke", "vet ikke", "ingen"],
+      "fasit": "Rentebeløp er ikke oppgitt — dokumentet sier bare at renter påløper ved for sen betaling",
+      "svares_av": "modell",
+      "type": "negativ"
+    },
+    {
+      "id": "hvem_gjelder_bunken",
+      "sporsmal": "Hvem gjelder dokumentbunken?",
+      "ett_av": ["Ola", "OLA"],
+      "fasit": "Ola Nordmann Nor-Etternavn (side 1–8 og 10); Marit Testperson står som klager på side 9",
+      "svares_av": "modell",
+      "type": "navn"
+    },
+    {
+      "id": "oppsummering",
+      "sporsmal": "Hva handler dokumentet om?",
+      "ett_av": ["sykepeng"],
+      "fasit": "Sykepengevedtak med beregning, tilbakebetalingskrav, egenerklæring, legeerklæring, inntektsmelding, klage og returslipp",
+      "svares_av": "modell",
+      "type": "forstaaelse"
+    }
+  ]
+}

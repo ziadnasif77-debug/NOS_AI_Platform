@@ -118,3 +118,45 @@ den opp i `felter` som en vanlig sjekk.
 analysecachen svarer på millisekunder når samme fil er kjørt før, og en
 grense som «består» fordi svaret kom fra cache måler ingenting. Ytelse
 måles mot en fersk server, korpuset er til for riktighet.
+
+---
+
+## Spørsmålskorpuset (`sporsmaal_syntetisk_bunke.json`)
+
+Fasitene over måler det DETERMINISTISKE uttrekket. De sier ingenting om
+hva språkmodellen svarer på et fritt spørsmål — og uten et tall der er
+«den nye modellen føles bedre» det eneste kriteriet som finnes når noen
+skal bytte modell.
+
+```
+.pyruntime\python.exe skript\kjor_sporsmaalskorpus.py
+```
+
+Samme dokument, samme personvernregel (kun syntetisk), men tre ting
+skiller det fra feltfasitene:
+
+**To grupper, med hver sin jobb.** `svares_av: "modell"` er spørsmålene
+som faktisk måler en språkmodell. `svares_av: "kode"` er
+KONTROLLGRUPPEN: side-, strekkode- og sjekksumvaliderte
+identifikatorspørsmål rutes deterministisk forbi modellen, så de skal
+gi identisk svar før og etter et modellbytte. Endrer de seg, er det
+rutingen som er brutt — ikke modellen — og da sier resten av tallene
+ingenting. Modellbytte-porten stopper på nettopp det (R189).
+
+**Ingen numre i fasiten.** Fødselsnumre og kontonumre står ALDRI som
+verdier her, heller ikke syntetiske: `felt` peker i stedet inn i
+uttrekket i samme svar, og sammenligningen skjer ved kjøretid. En
+vakttest håndhever regelen. Dermed havner ingen numre i git-historikken,
+og fasiten kan heller ikke bli utdatert i forhold til uttrekket.
+
+**Negative spørsmål teller mest.** «Hva er pasientens blodtype?» står
+ikke i dokumentet. En modell som svarer med en blodtype i stedet for
+«det står ikke her», skal aldri promoteres — uansett hvor mange andre
+spørsmål den treffer på. Å svare «vet ikke» er et gyldig svar; å gjette
+er det ikke (samme prinsipp som R183).
+
+Sjekktypene: `maa_inneholde` (alle), `ett_av` (minst én — for verdier
+som skrives på flere måter), `maa_ikke_inneholde`, `felt`/`ogsaa_felt`
+(mot uttrekket). Mellomrom inne i tall ignoreres, så «4 812,00» og
+«4812,00» er samme svar — ellers måler fasiten skrivemåte, ikke
+riktighet.

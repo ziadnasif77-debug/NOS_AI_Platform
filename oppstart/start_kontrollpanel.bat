@@ -2,9 +2,9 @@
 REM ====================================================================
 REM  Aapner kontrollpanel-GUI-et (api_klient_gui.py): start/stopp av alle
 REM  tjenester + live GPU/CPU/RAM-grafer + dokumentklienten. Faner:
-REM  Dokument, Operasjoner (uniformt operasjoner-kontrakt), Spor, Fyll
-REM  skjema (alle med skjema_motor modell/felter/auto), Analyser, Uttrekk,
-REM  Storjobb. Bruker pythonw (ingen konsollvindu).
+REM  Kontrollpanel, Flytskjema, Innsyn, Trening, MODELLER (bytt
+REM  spraakmodell med port og angreknapp), Dokument, Operasjoner,
+REM  Spoer, Storjobb, Serverinfo. Bruker pythonw (ingen konsollvindu).
 REM ====================================================================
 cd /d "%~dp0.."
 

@@ -233,6 +233,7 @@ FANER = [
     ("flyt", "Flytskjema"),
     ("innsyn", "Innsyn"),
     ("trening", "Trening"),
+    ("modeller", "Modeller"),
     ("dokument", "Dokument"),
     ("operasjoner", "Operasjoner"),
     ("spor", "Spør"),
@@ -3243,6 +3244,251 @@ class InnsynPanel:
             pass
 
 
+class ModellPanel:
+    """Modeller-fanen: bytt språkmodell uten å kunne koden.
+
+    Hele poenget er at serveren skal kunne stelles av noen som ikke har
+    bygget den, uten internett og uten hjelp. Derfor gjør ikke denne
+    fanen noe eget — den kjører skript/bytt_modell.py og viser
+    utdataene. Ett sted å rette feil, én oppførsel enten du bruker
+    knapp eller kommandolinje.
+
+    Alle knappene er trygge: sjekken rører ingenting, byttet ruller
+    automatisk tilbake hvis kandidaten ikke er målbart bedre, og forrige
+    modell slettes aldri av seg selv."""
+
+    def __init__(self, forelder, rot):
+        self.rot = rot
+        self._lukket = False
+        self._prosess = None
+        self._kandidat = None
+        self._bygg(forelder)
+        threading.Thread(target=self._hent_status, daemon=True).start()
+
+    # ---------- oppbygging ----------
+    def _bygg(self, forelder):
+        pad = {"padx": 12, "pady": 6}
+
+        statusramme = tema_rammefelt(forelder, "Språkmodellen som kjører nå")
+        statusramme.pack(fill="x", **pad)
+        self.status_var = tk.StringVar(value="Leser status ...")
+        tk.Label(statusramme, textvariable=self.status_var, fg=FG_TEKST,
+                 bg=BG_PANEL, anchor="w", justify="left",
+                 font=("Consolas", 9)).pack(fill="x", padx=8, pady=8)
+
+        velgramme = tema_rammefelt(forelder, "Ny modell (.gguf-fil)")
+        velgramme.pack(fill="x", **pad)
+        velgrad = tk.Frame(velgramme, bg=BG_PANEL)
+        velgrad.pack(fill="x", padx=8, pady=8)
+        tema_knapp(velgrad, "Velg modellfil ...",
+                   self._velg_fil).pack(side="left")
+        self.fil_var = tk.StringVar(value="(ingen fil valgt)")
+        tk.Label(velgrad, textvariable=self.fil_var, fg=FG_DEMPET,
+                 bg=BG_PANEL, anchor="w").pack(side="left", padx=(10, 0))
+
+        knapperad = tk.Frame(forelder, bg=BG_HOVED)
+        knapperad.pack(fill="x", **pad)
+        self.bytt_knapp = tk.Button(
+            knapperad, text="▶  MÅL OG BYTT MODELL", command=self._mal_og_bytt,
+            bg=AKSENT, fg="white", activebackground=AKSENT_AKTIV,
+            activeforeground="white", font=("Segoe UI", 12, "bold"),
+            relief="flat", highlightthickness=0, pady=10,
+        )
+        self.bytt_knapp.pack(side="left", fill="x", expand=True)
+        self.sjekk_knapp = tk.Button(
+            knapperad, text="Sjekk uten å bytte", command=self._bare_sjekk,
+            bg=GRONN, fg="white", activebackground=GRONN_AKTIV,
+            activeforeground="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", highlightthickness=0, padx=12, pady=10,
+        )
+        self.sjekk_knapp.pack(side="left", padx=(10, 0))
+        self.tilbake_knapp = tk.Button(
+            knapperad, text="↩  Rull tilbake", command=self._rull_tilbake,
+            bg=GUL, fg="white", activebackground=_bland(GUL, "#000000", 0.2),
+            activeforeground="white", font=("Segoe UI", 10, "bold"),
+            relief="flat", highlightthickness=0, padx=12, pady=10,
+        )
+        self.tilbake_knapp.pack(side="left", padx=(10, 0))
+
+        rad2 = tk.Frame(forelder, bg=BG_HOVED)
+        rad2.pack(fill="x", padx=12)
+        tema_knapp(rad2, "Mål dagens modell (spørsmålskorpus)",
+                   self._mal_bare).pack(side="left")
+        tema_knapp(rad2, "Oppdater status",
+                   lambda: threading.Thread(target=self._hent_status,
+                                            daemon=True).start()
+                   ).pack(side="left", padx=(8, 0))
+        tema_knapp(rad2, "Åpne feilboka", self._aapne_feilbok).pack(
+            side="left", padx=(8, 0))
+
+        forklaring = (
+            "Byttet måler BEGGE modellene på det samme spørsmålskorpuset og "
+            "bytter bare hvis den nye er MÅLBART bedre. Er forskjellen for "
+            "liten til å skilles fra tilfeldighet, byttes ingenting. Går noe "
+            "galt underveis, rulles forrige modell tilbake automatisk — den "
+            "slettes aldri.")
+        tk.Label(forelder, text=forklaring, fg=FG_DEMPET, bg=BG_HOVED,
+                 anchor="w", justify="left", wraplength=900).pack(
+                     fill="x", padx=12, pady=(6, 0))
+
+        loggramme = tema_rammefelt(forelder, "Hva som skjer (live)")
+        loggramme.pack(fill="both", expand=True, **pad)
+        self.logg = tema_tekstfelt(loggramme, wrap="none",
+                                   font=("Consolas", 9), height=14)
+        self.logg.pack(fill="both", expand=True, padx=8, pady=8)
+        self.logg.config(state="disabled")
+
+    # ---------- status ----------
+    def _hent_status(self):
+        try:
+            ut = subprocess.run(
+                [str(PROSJEKT_ROT / ".pyruntime" / "python.exe"), "-X", "utf8",
+                 str(PROSJEKT_ROT / "skript" / "bytt_modell.py"), "--status"],
+                cwd=str(PROSJEKT_ROT), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=60,
+                creationflags=_UTEN_VINDU)
+            tekst = (ut.stdout or "").strip() or (ut.stderr or "").strip()
+        except Exception as exc:                                # noqa: BLE001
+            tekst = f"Klarte ikke å lese status: {exc}"
+        self._trygg_after(self.status_var.set, tekst)
+
+    def _trygg_after(self, fn, *argumenter):
+        try:
+            self.rot.after(0, fn, *argumenter)
+        except (tk.TclError, RuntimeError):
+            pass
+
+    # ---------- knappene ----------
+    def _velg_fil(self):
+        sti = filedialog.askopenfilename(
+            title="Velg språkmodell (.gguf)",
+            filetypes=[("GGUF-modeller", "*.gguf"), ("Alle filer", "*.*")])
+        if sti:
+            self._kandidat = sti
+            self.fil_var.set(os.path.basename(sti))
+
+    def _krev_fil(self) -> bool:
+        if not self._kandidat:
+            messagebox.showinfo("Velg en modellfil",
+                                "Velg .gguf-fila du vil prøve først.")
+            return False
+        return True
+
+    def _bare_sjekk(self):
+        if self._krev_fil():
+            self._kjor(["--sjekk", self._kandidat],
+                       "Sjekker kandidaten (ingenting endres) ...")
+
+    def _mal_og_bytt(self):
+        if not self._krev_fil():
+            return
+        if not messagebox.askyesno(
+                "Måle og bytte modell?",
+                "Dette måler dagens modell, bytter til den nye, starter "
+                "serveren på nytt og måler igjen.\n\n"
+                "Serveren er nede noen minutter underveis.\n\n"
+                "Er den nye modellen ikke målbart bedre, rulles den gamle "
+                "tilbake automatisk.\n\nFortsette?"):
+            return
+        self._kjor([self._kandidat], "Måler, bytter og måler igjen ...")
+
+    def _rull_tilbake(self):
+        if not messagebox.askyesno(
+                "Rulle tilbake?",
+                "Forrige modell settes tilbake i drift.\n\n"
+                "Serveren må startes på nytt etterpå for at den skal tas i "
+                "bruk.\n\nFortsette?"):
+            return
+        self._kjor(["--rull-tilbake"], "Ruller tilbake ...")
+
+    def _mal_bare(self):
+        self._kjor(None, "Måler dagens modell på spørsmålskorpuset ...",
+                   skript="kjor_sporsmaalskorpus.py")
+
+    def _aapne_feilbok(self):
+        sti = PROSJEKT_ROT / "docs" / "naar_noe_gaar_galt.md"
+        try:
+            os.startfile(str(sti))                              # noqa: S606
+        except Exception:                                       # noqa: BLE001
+            messagebox.showinfo("Feilboka", f"Den ligger her:\n{sti}")
+
+    # ---------- kjøring med strømmende logg ----------
+    def _kjor(self, argumenter, melding: str,
+              skript: str = "bytt_modell.py"):
+        if self._prosess is not None:
+            messagebox.showinfo("Vent litt", "En kjøring pågår allerede.")
+            return
+        self._sett_knapper("disabled")
+        self._sett_logg(melding + "\n")
+        kommando = [str(PROSJEKT_ROT / ".pyruntime" / "python.exe"), "-u",
+                    "-X", "utf8",
+                    str(PROSJEKT_ROT / "skript" / skript)]
+        kommando += [str(a) for a in (argumenter or [])]
+
+        def arbeider():
+            try:
+                self._prosess = subprocess.Popen(
+                    kommando, cwd=str(PROSJEKT_ROT),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    creationflags=_UTEN_VINDU)
+            except OSError as exc:
+                self._trygg_after(self._ferdig, f"Klarte ikke å starte: {exc}")
+                return
+            for linje in self._prosess.stdout:
+                self._trygg_after(self._logglinje, linje.rstrip())
+            kode = self._prosess.wait()
+            self._prosess = None
+            self._trygg_after(self._ferdig,
+                              "Ferdig." if kode == 0 else
+                              f"Avsluttet uten å bytte (kode {kode}) — "
+                              "les begrunnelsen over.")
+
+        threading.Thread(target=arbeider, daemon=True).start()
+
+    def _sett_knapper(self, tilstand: str):
+        try:
+            for knapp in (self.bytt_knapp, self.sjekk_knapp,
+                          self.tilbake_knapp):
+                knapp.config(state=tilstand)
+        except tk.TclError:
+            pass
+
+    def _sett_logg(self, tekst: str):
+        try:
+            self.logg.config(state="normal")
+            self.logg.delete("1.0", "end")
+            self.logg.insert("end", tekst)
+            self.logg.config(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _logglinje(self, linje: str):
+        try:
+            self.logg.config(state="normal")
+            self.logg.insert("end", linje + "\n")
+            if int(self.logg.index("end-1c").split(".")[0]) > 500:
+                self.logg.delete("1.0", "100.0")
+            self.logg.see("end")
+            self.logg.config(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _ferdig(self, melding: str):
+        self._logglinje("")
+        self._logglinje(melding)
+        self._sett_knapper("normal")
+        threading.Thread(target=self._hent_status, daemon=True).start()
+
+    def lukk(self):
+        self._lukket = True
+        if self._prosess is not None:
+            try:
+                self._prosess.terminate()
+            except Exception:                                   # noqa: BLE001
+                pass
+
+
 class DokumentKlientApp:
     def __init__(self, rot: tk.Tk):
         self.rot = rot
@@ -3277,6 +3523,8 @@ class DokumentKlientApp:
             self.trening._avbryt()
         if hasattr(self, "trening"):
             self.trening.lukk()
+        if hasattr(self, "modeller"):
+            self.modeller.lukk()
         if hasattr(self, "kontroll"):
             self.kontroll.lukk()  # stopper bakgrunnstrådene rent
         lagre_konfig(self.url_var.get().strip(), self.nokkel_var.get().strip())
@@ -3342,6 +3590,7 @@ class DokumentKlientApp:
         self.innsyn = InnsynPanel(self._fane_rammer["innsyn"], self.rot, self)
         self.trening = TreningPanel(self._fane_rammer["trening"], self.rot,
                                     self.kontroll)
+        self.modeller = ModellPanel(self._fane_rammer["modeller"], self.rot)
         self._bygg_dokument_fane(self._fane_rammer["dokument"])
         self._bygg_operasjoner_fane(self._fane_rammer["operasjoner"])
         self._bygg_spor_fane(self._fane_rammer["spor"])
