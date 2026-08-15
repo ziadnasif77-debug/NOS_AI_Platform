@@ -1805,6 +1805,12 @@ BOREALIS_GGUF_MAPPE = os.path.join(ROT, "modeller", "borealis-gguf")
 BOREALIS_KONTEKST = maskinprofil.verdi("borealis_kontekst", 4096)
 
 
+# Under dette er fila ikke en språkmodell. En 4B-modell er ~2,5 GB selv
+# på Q4, og den minste modellen noen realistisk kjører her er godt over
+# 100 MB — mens en avbrutt nedlasting typisk er noen få.
+MINSTE_MODELL_MB = int(os.environ.get("MINSTE_MODELL_MB", "100"))
+
+
 def _finn_gguf() -> str:
     """Modellbytte skal være «legg filen i mappen og restart»: bruk
     BOREALIS_GGUF-miljøvariabelen hvis satt, ellers den nyeste
@@ -1821,7 +1827,42 @@ def _finn_gguf() -> str:
                       and not n.lower().startswith("mmproj")]
     except OSError:
         return ""
-    return max(kandidater, key=os.path.getmtime) if kandidater else ""
+    # R202: «nyeste fil vinner» er en gjetning, og en avbrutt nedlasting
+    # er ALLTID den nyeste fila. Den ville dermed blitt valgt ved neste
+    # omstart, og llama.cpp svarer på en ødelagt modell med et nativt
+    # krasj uten traceback.
+    #
+    # bytt_modell.py sjekket dette allerede (`er_gguf`) — men den er den
+    # OVERVÅKEDE veien. Veien vi dokumenterer, «legg fila i mappa og
+    # restart», hadde ingen sjekk i det hele tatt. Vakten hørte hjemme
+    # der mennesket IKKE ser på.
+    #
+    # Målt tilfelle: en avbrutt Q4-nedlasting på 6,5 MB begynte med fire
+    # nullbytes i stedet for «GGUF». Signaturen tar den. Størrelsen tas
+    # med i tillegg, fordi en nedlasting som rakk litt lenger HAR gyldig
+    # signatur og bare mangler slutten.
+    #
+    # Et eksplisitt BOREALIS_GGUF røres ikke: der har et menneske valgt,
+    # og da skal koden ikke overprøve valget i det stille.
+    brukbare = []
+    for sti in kandidater:
+        try:
+            if os.path.getsize(sti) < MINSTE_MODELL_MB * 1024 * 1024:
+                print(f"  [modell] Hopper over {os.path.basename(sti)}: bare "
+                      f"{os.path.getsize(sti) / (1024 ** 2):.0f} MB — for "
+                      f"liten til å være en språkmodell (avbrutt nedlasting?)")
+                continue
+            with open(sti, "rb") as f:
+                if f.read(4) != b"GGUF":
+                    print(f"  [modell] Hopper over {os.path.basename(sti)}: "
+                          f"mangler GGUF-signaturen — fila er ikke en "
+                          f"ferdig GGUF-modell")
+                    continue
+        except OSError as exc:
+            print(f"  [modell] Hopper over {os.path.basename(sti)}: {exc}")
+            continue
+        brukbare.append(sti)
+    return max(brukbare, key=os.path.getmtime) if brukbare else ""
 
 
 BOREALIS_GGUF_STI = _finn_gguf()
@@ -1841,11 +1882,24 @@ except Exception:                      # region_ocr utilgjengelig
     _gpu_las = threading.RLock()
 
 
+# Under denne lesefarten er det disken som er tregheten, ikke modellen.
+# En SSD gir 500+ MB/s og en NVMe 1500+; en mekanisk disk 100-150, og
+# mindre når noe annet leser fra samme spindel.
+TREG_LASTING_MB_PER_S = int(os.environ.get("TREG_LASTING_MB_PER_S", "200"))
+
+
 def _last_borealis_bakgrunn():
     """Laster Borealis i en bakgrunnstråd. GGUF Q8 via llama.cpp
-    foretrekkes (målt: ~3 s lasting og ~34 tok/s mot ~90 s og ~12
-    tok/s med transformers+bitsandbytes — og Q8 er mer presis enn
-    nf4). transformers beholdes som generell fallback."""
+    foretrekkes (målt: ~34 tok/s mot ~12 tok/s med
+    transformers+bitsandbytes — og Q8 er mer presis enn nf4).
+    transformers beholdes som generell fallback.
+
+    Lastetiden avhenger av DISKEN, ikke av backenden: med
+    `n_gpu_layers` må hele GGUF-fila leses og skyves over PCIe. De ~3
+    sekundene som sto her før var en VARM måling — fila lå i
+    filbufferet. Kald, fra en mekanisk disk, tar de samme 3,85 GB
+    ~30 s, og mer når noe annet leser fra samme disk. Derfor måles og
+    logges farten nå (R201) i stedet for å bli antatt."""
     try:
         _borealis["status"] = "laster"
         gguf_sti = _finn_gguf()
@@ -1860,12 +1914,36 @@ def _last_borealis_bakgrunn():
                 # BOREALIS_GPU_LAG lar deg dele en STØRRE modell (12B/27B)
                 # mellom GPU og RAM på et mindre kort (f.eks. 40)
                 gpu_lag = int(os.environ.get("BOREALIS_GPU_LAG", "-1"))
+                # R201: MÅL lastetiden. `verbose=False` demper llama.cpp
+                # sin egen timing, så «hvorfor tar modellen så lang tid
+                # å starte?» var et spørsmål ingen kunne besvare fra
+                # loggen — svaret måtte utledes av disktype utenfra.
+                # Med n_gpu_layers må hele fila LESES og skyves over
+                # PCIe; mmap hjelper ikke. Da er lastetiden i praksis en
+                # diskmåling, og den hører hjemme i oppstartsloggen.
+                start_lasting = time.time()
                 llm = Llama(model_path=gguf_sti, n_gpu_layers=gpu_lag,
                             n_ctx=BOREALIS_KONTEKST, verbose=False)
+                brukt = max(time.time() - start_lasting, 0.01)
                 navn = os.path.basename(gguf_sti)
+                mb = os.path.getsize(gguf_sti) / (1024 ** 2)
                 _borealis.update(llama=llm, status="klar",
-                                 motor="llama_cpp", modellfil=navn)
+                                 motor="llama_cpp", modellfil=navn,
+                                 lastesekunder=round(brukt, 1),
+                                 lest_mb_per_s=round(mb / brukt))
                 print(f"  Borealis ({navn}, llama.cpp/CUDA) klar — POST /spor er klar.")
+                print(f"  Lastet {mb:.0f} MB på {brukt:.0f} s "
+                      f"({mb / brukt:.0f} MB/s).")
+                if mb / brukt < TREG_LASTING_MB_PER_S:
+                    # Tallet, ikke en gjetning: 3,85 GB på en 5900-omdreiners
+                    # disk er ~30 s alene, og mer når noe annet bruker samme
+                    # spindel. Uten denne linja ser en treg oppstart ut som
+                    # et problem med modellen eller med koden.
+                    print(f"  Merk: det er lesefarten fra disken modellfila "
+                          f"ligger på, ikke modellen eller GPU-en. Under "
+                          f"{TREG_LASTING_MB_PER_S} MB/s betyr som regel en "
+                          f"mekanisk disk, eller at noe annet leser fra den "
+                          f"samtidig.")
                 return
             except Exception as exc:
                 print(f"  GGUF-backend feilet ({exc}) — prøver transformers.")

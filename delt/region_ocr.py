@@ -225,6 +225,18 @@ _rapid = {"motor": None}
 _valgt = {"motor": None}      # hva auto faktisk landet på
 
 
+# Hvor mange CPU-tråder RapidOCR får bruke. -1 (standard) betyr alle
+# kjerner, og det er riktig så lenge ÉN side leses om gangen: målt
+# bruker en enkelt side allerede 5,4 av 12 kjerner, altså parallelliserer
+# ONNX Runtime internt.
+#
+# Skal flere sider leses SAMTIDIG, må hver leser få sin del av maskinen.
+# Uten dette starter N lesere 12 tråder hver på 12 kjerner, og de stjeler
+# tid fra hverandre i stedet for å dele arbeidet (målt: to prosesser med
+# fulle trådtall ga 0,96× — altså mindre enn ingenting).
+RAPID_TRAADER = int(os.environ.get("OCR_TRAADER_PER_MOTOR", "-1"))
+
+
 def _hent_rapid():
     if _rapid["motor"] is None:
         # rapidocr v3 med LATINSK PP-OCRv5-gjenkjenner. R-fiks 2026-07-23:
@@ -240,6 +252,7 @@ def _hent_rapid():
             "Rec.lang_type": LangRec.LATIN,
             "Rec.ocr_version": OCRVersion.PPOCRV5,
             "Rec.model_type": ModelType.MOBILE,
+            "EngineConfig.onnxruntime.intra_op_num_threads": RAPID_TRAADER,
         })
     return _rapid["motor"]
 

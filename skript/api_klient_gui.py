@@ -1077,6 +1077,43 @@ class RessursMaaler:
         except Exception:
             return None
 
+    def topp_cpu(self, antall=3):
+        """→ [(prosessnavn, prosent_av_maskinen), ...] — de tyngste nå.
+
+        Grafene over måler HELE maskinen, ikke tjenestene i panelet. Uten
+        denne lista kan kortet vise «Stoppet» på alt mens CPU står i 89 %,
+        og den eneste rimelige tolkningen er at stoppknappen ikke virket.
+
+        Målt tilfelle: alle fire tjenester var faktisk stoppet. Maskinen
+        ble holdt av en videokonvertering (ffmpeg) og et annet prosjekts
+        testkjøring — programmer panelet verken starter eller kjenner,
+        men som deler den samme maskinen. Det tok tre kommandoer i et
+        terminalvindu å finne ut. Det skal stå her i stedet.
+
+        Prosentene deles på antall kjerner, så de er sammenlignbare med
+        CPU-grafen: psutil teller 100 % per kjerne, og «ffmpeg 620 %»
+        ville vært et tall ingen kan holde opp mot en graf som stopper
+        på 100."""
+        if psutil is None:
+            return []
+        try:
+            kjerner = psutil.cpu_count() or 1
+            eget = os.getpid()
+            rader = []
+            for p in psutil.process_iter(["name", "cpu_percent"]):
+                try:
+                    if p.pid in (0, 4, eget):
+                        continue          # Idle og System er ikke forbrukere
+                    prosent = (p.info.get("cpu_percent") or 0.0) / kjerner
+                    if prosent >= 1.0:
+                        rader.append((p.info.get("name") or "?", prosent))
+                except Exception:         # noqa: BLE001 — prosessen kan dø under lesing
+                    continue
+            rader.sort(key=lambda r: r[1], reverse=True)
+            return rader[:antall]
+        except Exception:                                       # noqa: BLE001
+            return []
+
 
 class MiniGraf:
     """Liten rullende kurve (siste ~2 min) tegnet rett på en tk.Canvas —
@@ -1209,7 +1246,12 @@ class KontrollPanel:
                 self._bygg_tunnel_lenke(tjenesteramme)
 
         # -- ressursgrafer --
-        ressursramme = tema_rammefelt(forelder, "Ressursbruk (live, siste ~2 minutter)")
+        # Tittelen sier «hele maskinen» fordi rammen står rett under
+        # tjenestelista og ellers leses som tjenestenes eget forbruk.
+        ressursramme = tema_rammefelt(
+            forelder,
+            "Ressursbruk for HELE maskinen — alle programmer, ikke bare "
+            "tjenestene over (siste ~2 minutter)")
         ressursramme.pack(fill="both", expand=True, **pad)
         rutenett = tk.Frame(ressursramme, bg=BG_PANEL)
         rutenett.pack(fill="both", expand=True, padx=8, pady=8)
@@ -1224,6 +1266,14 @@ class KontrollPanel:
         self.graf_cpu.grid(row=1, column=0, sticky="nsew", padx=(0, 4), pady=(4, 0))
         self.graf_ram = MiniGraf(rutenett, "Minne (RAM)", LILLA)
         self.graf_ram.grid(row=1, column=1, sticky="nsew", padx=(4, 0), pady=(4, 0))
+
+        # Hvem drar maskinen akkurat nå. Svarer på spørsmålet grafene
+        # over reiser, men ikke kan besvare: «alt står stoppet — hvorfor
+        # er den da opptatt?»
+        self.forbruker_var = tk.StringVar(value="")
+        tk.Label(ressursramme, textvariable=self.forbruker_var, fg=FG_DEMPET,
+                 bg=BG_PANEL, anchor="w", justify="left",
+                 wraplength=920).pack(fill="x", padx=8, pady=(0, 8))
 
         # -- bunnlinje: disk + forklaring --
         self.bunn_var = tk.StringVar(value="")
@@ -1934,6 +1984,7 @@ class KontrollPanel:
 
     # ---------- ressursgrafer (bakgrunnstråd) ----------
     def _ressurs_lokke(self):
+        puls = 0
         while not self._lukket:
             cpu = self._maaler.cpu_prosent()
             ram = self._maaler.ram()
@@ -1942,10 +1993,15 @@ class KontrollPanel:
                 disk = shutil.disk_usage(PROSJEKT_ROT)
             except OSError:
                 disk = None
-            self._trygg_after(self._vis_ressurser, cpu, ram, gpu, disk)
+            # Prosesslista koster en runde gjennom alle prosesser på
+            # maskinen. Den trengs ikke hvert sekund — teksten den mater
+            # leses av et menneske, ikke av en graf.
+            puls += 1
+            topp = self._maaler.topp_cpu() if puls % 3 == 1 else None
+            self._trygg_after(self._vis_ressurser, cpu, ram, gpu, disk, topp)
             time.sleep(RESSURS_PULS_S)
 
-    def _vis_ressurser(self, cpu, ram, gpu, disk):
+    def _vis_ressurser(self, cpu, ram, gpu, disk, topp=None):
         if self._lukket:
             return
         try:
@@ -1965,6 +2021,8 @@ class KontrollPanel:
             elif not self._maaler.nvidia_ok:
                 self.graf_gpu.sett_utilgjengelig("ingen NVIDIA")
                 self.graf_vram.sett_utilgjengelig("ingen NVIDIA")
+            if topp is not None:
+                self.forbruker_var.set(self._forbrukertekst(cpu, topp))
             deler = []
             if disk is not None:
                 deler.append(f"Disk {PROSJEKT_ROT.drive} {disk.free / 1024**3:.0f} GB ledig")
@@ -1972,6 +2030,21 @@ class KontrollPanel:
             self.bunn_var.set("   ·   ".join(deler))
         except tk.TclError:
             pass  # vinduet er i ferd med å lukkes
+
+    def _forbrukertekst(self, cpu, topp):
+        """Én linje som forklarer belastningen grafene over viser.
+
+        Setningen om at alt er stoppet står FØRST når den gjelder, fordi
+        det er akkurat da panelet ser ødelagt ut: fire røde prikker og
+        «Stoppet» på alt, over en CPU-graf i 89 %."""
+        if not topp:
+            return ""
+        liste = ",   ".join(f"{navn} {prosent:.0f} %" for navn, prosent in topp)
+        alle_stoppet = all(s == "stoppet" for s in self._status.values())
+        if alle_stoppet and (cpu or 0) >= 25:
+            return ("Alle tjenestene over er stoppet — belastningen kommer fra "
+                    f"ANDRE programmer på maskinen.   Tyngst nå:   {liste}")
+        return f"Tyngst nå:   {liste}"
 
     def _trygg_after(self, fn, *argumenter):
         try:
