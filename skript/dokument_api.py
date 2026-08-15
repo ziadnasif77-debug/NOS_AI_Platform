@@ -114,7 +114,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import (kalibrering, maalinger, maskinprofil, prompter,
+from delt import (bevisvalg, kalibrering, maalinger, maskinprofil, prompter,
                   typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
@@ -144,6 +144,18 @@ MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
 # grense på nøyaktig det brukeren merker (hvor mye av dokumentet
 # modellen får se).
 MAKS_LLM_TEGN = maskinprofil.verdi("maks_llm_tegn", 12000)
+# R195: gi modellen bare de sidene spørsmålet gjelder, på en bunke.
+# AV som standard: hypotesen om at mindre kontekst gir mindre
+# forveksling er MÅLT, ikke antatt — og den skrus bare på hvis
+# spørsmålskorpuset viser at den er målbart bedre.
+# Verdirommet er det FELLES (BRYTER_JA nedenfor), ikke en egen liste:
+# R12 slo fast at hver bryter med sitt eget verdirom er en felle —
+# «on» virket ett sted og ikke et annet, uten at noe sa fra. Listen
+# gjentas her fordi den defineres lenger nede i fila; vakttesten
+# `test_ett_verdirom_for_alle_brytere` fanger det hvis de sprikjer.
+BEVISVALG = (os.environ.get("BEVISVALG", "").strip().lower()
+             in ("ja", "1", "true", "on", "yes", "pa", "på"))
+BEVISVALG_MAKS_SIDER = int(os.environ.get("BEVISVALG_MAKS_SIDER", "3"))
 # OCR er ekte GPU-arbeid per side — standardgrense, kan økes per
 # forespørsel med multipart-feltet maks_sider (tak: OCR_TAK_SIDER).
 # Kuttes det, sier svaret det ALLTID eksplisitt i 'advarsel'.
@@ -7511,6 +7523,28 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                 "svar_avkortet": False, "advarsler": advarsler}
 
     tekst = raa_tekst
+    # R195: bevisvalg. På en BUNKE blander modellen dokumentene — målt:
+    # spørsmål om side 9–10 besvares fra side 1–3, uten at noe er
+    # avkortet. Her får den de sidene spørsmålet gjelder i stedet for
+    # alle ti. AV som standard til korpuset har dømt; treffer
+    # seleksjonen ingenting, sendes ALT (aldri et tomt grunnlag).
+    bevis = None
+    if BEVISVALG and len((raa_tekst or "").strip()) >= 5:
+        _antall, _sider = del_i_sider(raa_tekst)
+        if _antall > 1:
+            bevis = bevisvalg.velg_sider(_sider, sporsmal,
+                                         maks_sider=BEVISVALG_MAKS_SIDER)
+            if bevis["valgte"]:
+                tekst = bevisvalg.bygg_utvalgstekst(
+                    _sider, bevis["valgte"], _antall)
+                advarsler.append(
+                    "Svaret er basert på side "
+                    + ", ".join(str(n) for n in bevis["valgte"])
+                    + f" av {_antall} — de øvrige ble vurdert som "
+                    "irrelevante for spørsmålet og ikke sendt til "
+                    "modellen (bevisvalg)")
+            else:
+                bevis = None
     # Merk håndskriftregioner så Borealis kan skille dem fra trykt
     # tekst («hvilket navn står med håndskrift?» blir svarbart)
     if handskrift:
