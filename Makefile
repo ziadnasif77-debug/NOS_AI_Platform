@@ -1,7 +1,7 @@
 # NAV Dokument-API — lokal server (native Windows + GPU)
 # Ingen Docker: serveren kjører direkte med Python.
 
-.PHONY: start klient test korpus sporsmaalskorpus ytelse profil modeller \
+.PHONY: start klient test korpus sporsmaalskorpus ytelse profil kalibrering modeller \
         trening eksporter-korreksjoner finjuster valider rull-tilbake \
         rydd prefect-server prefect-kjor \
         pakk-offline installer-offline sjekk-miljo lovtekst
@@ -59,6 +59,9 @@ ytelse:                      ## Phase 0-maaling: hva klarer DENNE maskinen?
 
 profil:                      ## Maskinprofilen: hvilke tak ga kortet?
 	python -m delt.maskinprofil
+
+kalibrering:                 ## Betyr OCR-konfidensen noe? (R149/R197)
+	python skript/kalibreringsrapport.py
 
 # ─── Offline-distribusjon (isolert server) ───────────────────────────
 pakk-offline:                ## Pakk alt for en frakoblet server → offline_pakke/

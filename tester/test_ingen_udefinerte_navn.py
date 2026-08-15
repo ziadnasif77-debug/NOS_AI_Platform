@@ -94,6 +94,26 @@ def _brukt_her(kropp) -> list:
     return ut
 
 
+def _direkte_rom(kropp) -> list:
+    """Navnerom som ligger DIREKTE i denne kroppen — uten å gå inn i
+    dypere rom. Hvert nestet rom skal besøkes med SITT eget ytre rom,
+    ikke med et ytre rom lenger ute enn det faktisk har."""
+    ut, stabel = [], list(kropp)
+    while stabel:
+        n = stabel.pop()
+        if isinstance(n, (*FUNKSJON, ast.Lambda)):
+            ut.append(n)
+            continue           # dypere rom hører til DETTE rommet
+        if isinstance(n, ast.ClassDef):
+            # Klassekroppen er et eget rom METODENE IKKE SER — de ser
+            # det som omgir klassen. Derfor hoppes kroppen over, mens
+            # metodene besøkes med rommet klassen står i.
+            ut.extend(m for m in n.body if isinstance(m, FUNKSJON))
+            continue
+        stabel.extend(ast.iter_child_nodes(n))
+    return ut
+
+
 def _gaa_inn(fn, ytre: set, funn: list) -> None:
     kropp = fn.body if isinstance(fn.body, list) else [fn.body]
     kjent = ytre | _parametre(fn) | _bundet_her(kropp)
@@ -101,10 +121,15 @@ def _gaa_inn(fn, ytre: set, funn: list) -> None:
     for linje, navn in _brukt_her(kropp):
         if navn not in kjent:
             funn.append((linje, navn_paa_fn, navn))
-    # Nestede funksjoner og lambdaer ser det ytre rommet — derfor `kjent`.
-    for n in ast.walk(fn):
-        if isinstance(n, (*FUNKSJON, ast.Lambda)) and n is not fn:
-            _gaa_inn(n, kjent, funn)
+    # Nestede rom ser det ytre — derfor `kjent`. Men bare de DIREKTE
+    # nestede: `ast.walk` flater ut hele treet, så en lambda inne i en
+    # nestet funksjon ville fått den YTTERSTE funksjonens navnerom i
+    # stedet for sitt eget. Da meldes en helt gyldig lukning over den
+    # nestede funksjonens parameter som «udefinert» — en falsk positiv,
+    # og en vakt som roper ulv får folk til å skrive dårligere kode for
+    # å blidgjøre den.
+    for n in _direkte_rom(kropp):
+        _gaa_inn(n, kjent, funn)
 
 
 def udefinerte_navn(kildekode: str) -> list:
