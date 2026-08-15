@@ -1,7 +1,7 @@
 # Phase 0 — beslutningsrapport
 
 **Dato:** 2026-08-15
-**Status:** Utkast — målt på utviklermaskin, IKKE på målserveren
+**Status:** Utkast, revidert 2026-08-15 etter forsøk — målt på utviklermaskin, IKKE på målserveren
 **Grunnlag:** `skript/kjor_ytelsesmaaling.py`, rådata i
 `data/ytelsesmaalinger/20260815-014541.json`
 **Krav den svarer på:** Implementeringsspesifikasjon v1.6 §24.1
@@ -87,18 +87,59 @@ Borealis Q8 legger beslag på kortet, og OCR får ikke de 2600 MB den
 trenger. Da faller den til RapidOCR på CPU — som er trygt og korrekt
 (R51/R140), men mye tregere:
 
-| OCR-vei | s/side | sider/s | Kilde |
-|---|---|---|---|
-| RapidOCR på CPU | 3,42 | 0,29 | Denne målingen |
-| EasyOCR på GPU | ~0,50 | ~2,0 | R51, samme maskin |
-
-**Faktor 6,9.** Flaskehalsen er altså ikke «for lite regnekraft» — det
-er at OCR ikke kommer til kortet.
+Hypotesen var at OCR på GPU ville løse dette. **Den ble prøvd, og
+svaret er mer nyansert enn ventet — se §2b.**
 
 ### 3. Ikke en flaskehals: språkmodellen
 
 0,41 s per kall. Utredningens Phase 3 (Borealis-pool, `--parallel N`)
 er derfor **ikke** utløst av denne målingen.
+
+---
+
+## 2b. Forsøket: kan OCR få kortet tilbake?
+
+Hypotesen fra første utkast av denne rapporten var at det å frigjøre
+VRAM ville gi OCR kortet og løse kapasitetsproblemet. Den ble prøvd med
+`BOREALIS_GPU_LAG` (flytter modellag til RAM). Resultatet endret
+konklusjonen.
+
+| Oppsett | Ledig VRAM | OCR-motor | s/side målt | Modell s/kall |
+|---|---|---|---|---|
+| Standard (alle lag på GPU) | 1149 MB | rapid på **CPU** | **3,42** (stabil) | **0,41** |
+| `BOREALIS_GPU_LAG=28` | 2900 MB | easy på **GPU** | **38,97 · 5,31 · 4,94** | — |
+| `BOREALIS_GPU_LAG=22` | 3570 MB | easy på **GPU** | **2,76** | 1,46 |
+
+**Tre funn, i stigende viktighet:**
+
+**(1) Ja, OCR kommer tilbake på GPU.** Frigjøres nok VRAM, bytter
+motorvalget fra `rapid`/CPU til `easy`/GPU av seg selv. Mekanismen
+virker som den skal.
+
+**(2) Gevinsten er 1,24×, ikke 6,9×.** Første utkast av denne rapporten
+antok ~0,5 s/side på GPU basert på R51. Det tallet ble målt på ETT
+bilde uten håndskriftpass og uten Borealis residerende. Målt her, på en
+ekte 10-siders bunke med alt i drift: **2,76 s/side**. R51-tallet er
+ikke feil, men det gjelder en annen situasjon, og det var galt av meg å
+regne kapasitet på det.
+
+**(3) DET FARLIGE FUNNET: å så vidt krysse terskelen er verre enn å
+la være.** Ved 2900 MB ledig — over kravet på 2600 — tar OCR GPU-en,
+men har ikke rom å arbeide i. Tre kjøringer ga 38,97, 5,31 og 4,94
+s/side: median **55 % tregere enn CPU-reserven**, med en hale 11×
+verre. Ustabiliteten er selve problemet: en tjeneste som noen ganger
+bruker 5 s/side og noen ganger 39 kan ikke kapasitetsplanlegges.
+
+Terskelen `OCR_MINSTE_LEDIG_GPU_MB = 2600` er kalibrert for å hindre
+KRASJ (R140) — ikke for å sikre FART. Mellom ca. 2600 og 3500 MB ledig
+ligger det et bånd der systemet ruter seg selv inn i det verste av to
+verdener. Se R194 og gjeldsposten i §9.
+
+**Konsekvens for Q4-hypotesen:** Q4_K_M ville frigjort ~1500 MB og
+landet på ~2650 MB ledig — midt i det farlige båndet. Den ville altså
+sannsynligvis gjort ting VERRE, ikke bedre. Forsøket ble derfor ikke
+gjennomført (llama.cpp nekter dessuten å rekvantisere fra q8_0, så det
+ville krevd nedlasting av originalvekter eller en ferdig Q4-fil).
 
 ---
 
@@ -115,22 +156,31 @@ Utredningens belastningsprofil, regnet mot målte tall:
 Med utredningens egen formel
 (`peak / målt_per_worker × sikkerhetsfaktor 1,3`):
 
-| OCR-vei | Arbeidere ved peak | Maskintimer/dag (snitt) |
-|---|---|---|
-| **CPU-fallback (målt her)** | **23** | 119,7 |
-| **GPU-OCR (R51)** | **4** | 17,4 |
+| OCR-vei | s/side | Arbeidere ved peak | Maskintimer/dag (snitt) |
+|---|---|---|---|
+| CPU-fallback (standard i dag) | 3,42 | **23** | 119,7 |
+| GPU, trangt (`GPU_LAG=28`) | 5,31 median | **36** | 184,4 |
+| **GPU med rom (`GPU_LAG=22`)** | **2,76** | **19** | 95,8 |
 
-Samme last. Samme kode. Forskjellen er om OCR får kortet.
+**Dette er hele historien om 8 GB-kortet: 23 arbeidere blir til 19.**
+Ikke 4. Det finnes ingen innstilling på dette kortet som løser
+kapasitetsproblemet — kortet er rett og slett for lite til å kjøre
+begge modellene godt samtidig. Og prisen for de 19 er at modellen blir
+3,6× tregere (0,41 → 1,46 s/kall), som rammer den interaktive bruken.
 
 ### Følsomhet — de to tallene ingen har målt
 
 Utredningen merker begge som antakelser (§27). De styrer alt:
 
-| Hvis … | OCR-sider/dag | Arbeidere (CPU / GPU) |
+| Hvis … | OCR-sider/dag | Arbeidere (CPU / beste GPU-oppsett) |
 |---|---|---|
-| Skannet andel 50 % *(antatt)* | 125 000 | 23 / 4 |
-| Skannet andel 10 % | 25 000 | 5 / 1 |
+| Skannet andel 50 % *(antatt)* | 125 000 | 23 / 19 |
+| Skannet andel 10 % | 25 000 | 5 / 4 |
 | Snitt 20 sider/dok, ikke 500 | 5 000 | 1 / 1 |
+
+Legg merke til hva tabellen sier: **belastningsantakelsen betyr mer enn
+maskinvaretrimmingen.** Å halvere sider/dokument sparer 22 arbeidere; å
+trimme kortet sparer 4.
 
 **Måles disse to før noe kjøpes, kan hele Phase 2–4 vise seg unødvendig.**
 Et NAV-dokument på 500 sider i snitt er en arkivboks, ikke et brev.
@@ -145,12 +195,15 @@ skal kjøpes:
 
 | Scenario | Maskintimer/dag | I praksis |
 |---|---|---|
-| CPU-OCR, 125 000 sider | 119,7 | ~5 maskiner i døgndrift bare for snittlasten |
-| GPU-OCR, 125 000 sider | 17,4 | Under én maskin |
-| GPU-OCR, 25 000 sider | 3,5 | En brøkdel av én maskin |
+| 8 GB-kort, CPU-OCR, 125 000 sider | 119,7 | ~5 maskiner i døgndrift bare for snittlasten |
+| 8 GB-kort, best mulig (GPU_LAG=22) | 95,8 | ~4 maskiner — og treg interaktiv bruk |
+| 25 000 sider (10 % skannet) | 23,9 | Én maskin |
+| 5 000 sider (20 sider/dok) | 4,8 | En brøkdel av én maskin |
 
-Den billigste kapasitetsøkningen er ikke en maskin til. Det er å
-frigjøre 1,5 GB VRAM på maskinen som allerede står der.
+Merk hva som IKKE står her: et scenario der 8 GB-kortet løser
+250 000 sider. Det finnes ikke. Kostnaden styres av to ting — hvor mye
+som faktisk er skannet, og om kortet er stort nok til at OCR og
+språkmodell får plass ved siden av hverandre uten å trenge hverandre.
 
 ---
 
@@ -209,17 +262,24 @@ billigste optimaliseringen ennå.
 Rekkefølge, billigst først:
 
 1. **Mål de to ukjente på ekte NAV-data:** skannet andel og
-   sider/dokument. Dette er den ene handlingen som kan endre alt.
-2. **Frigjør VRAM så OCR kommer på GPU.** To gratis forsøk, begge
-   målbare med verktøy som allerede finnes:
-   - Kvantisert Borealis (Q4 i stedet for Q8) frigjør ~1,5–2 GB.
-     Kvalitetstapet måles av `bytt_modell.py`, som nekter byttet hvis
-     modellen blir målbart dårligere.
-   - `BOREALIS_GPU_LAG` lavere flytter lag til RAM. Modellen bruker
-     0,41 s/kall, så det er rom å gi av.
-   Lykkes én av dem: 23 arbeidere → 4.
-3. **Kjør riggen på målserveren** og skriv denne rapporten om.
-4. **Så, og bare så,** vurder Phase 1 (lokal page fan-out).
+   sider/dokument. Dette er fortsatt den ene handlingen som kan endre
+   alt — er andelen 10 % i stedet for 50 %, holder én maskin.
+2. **Ikke bruk tid på å trimme 8 GB-kortet.** Det er prøvd og målt
+   (§2b): beste oppnåelige er 19 arbeidere mot 23, og prisen er en 3,6×
+   tregere språkmodell. Det er ikke en løsning, det er en omfordeling
+   av smerten.
+3. **Spesifiser kortet, ikke antall maskiner.** Behovet er ett kort der
+   Borealis OG OCR får plass med rom — ikke så vidt plass (§2b, funn 3).
+   Med Borealis Q8 (~4,5 GB residererende), OCR-arbeidsrom (~3,5 GB) og
+   KV-cache: **minst 12 GB, helst 16.** `python -m delt.maskinprofil`
+   sier hva et gitt kort vil gi før det kjøpes.
+4. **Kjør riggen på målserveren** og skriv denne rapporten om.
+5. **Så, og bare så,** vurder Phase 1 (lokal page fan-out).
+
+Det viktigste denne rapporten endret: første utkast anbefalte å trimme
+maskinen vi har. Målingen viste at det ikke virker. **Å oppdage det
+koster noen timer; å oppdage det etter å ha bygget Phase 2 rundt en feil
+antakelse koster måneder.**
 
 ---
 
@@ -228,14 +288,16 @@ Rekkefølge, billigst først:
 | ADR | Beslutning | Status |
 |---|---|---|
 | [0006](beslutninger/ADR-0006-plattformlag-utsatt.md) | Kø/database/multi-node utsatt til Phase 0 er målt | Gjeldende — denne rapporten er grunnlaget |
-| Ny, foreslått | Kvantiseringsnivå for Borealis (Q8 vs Q4) | Åpen — avventer måling i steg 2 |
+| Ny, foreslått | Kvantiseringsnivå for Borealis (Q8 vs Q4) | **Lukket uten forsøk** — Q4 ville landet på ~2650 MB ledig, midt i det farlige båndet (§2b) |
+| Ny, foreslått | Heve `OCR_MINSTE_LEDIG_GPU_MB` fra 2600 til ~3500 | Åpen — n=3 på én maskin er for tynt til å endre en sikkerhetsterskel (R148-disiplin) |
 | Ny, foreslått | OCR-motorvalg når VRAM er knapp | Åpen — dagens fallback er trygg, men kostbar |
 
 ## 9. Architectural Debt Register
 
 | Gjeld | Hvorfor akseptert nå | Review-trigger |
 |---|---|---|
-| OCR faller til CPU på et fullt kort | Alternativet er nativt krasj (R140). Trygt, men 6,9× tregere | Kort med ≥16 GB, eller Borealis kvantisert ned |
+| OCR faller til CPU på et fullt kort | Alternativet er nativt krasj (R140). Trygt, og målt bare 1,24× tregere enn beste GPU-oppsett | Kort med ≥12 GB |
+| **Terskelen 2600 MB slipper OCR inn på et for trangt kort** | Målt median 55 % tregere enn CPU, med 11× hale (R194). Terskelen hindrer krasj, ikke treghet | Målinger fra 2+ maskiner før verdien endres |
 | Ett kort brukes; kort 1+ står ubrukt | Flerkort krever arbeid ingen har målt behov for | To kort tilgjengelig OG målt bottleneck |
 | Terskelen 0,85 er umålt | Kalibreringsmekanismen finnes, men er av | ECE beregnbar (R149) |
 | Valideringssettet for norhand finnes ikke | Kvalitetsporten er dermed inert (R148) | Før neste modellbytte for håndskrift |
