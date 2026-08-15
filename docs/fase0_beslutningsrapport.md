@@ -61,6 +61,55 @@ som det er, ikke silt bort.
 
 ---
 
+## 1b. 500-sidersmålingen (§30)
+
+Kravet: «500-siders scanned path fullfører med full OCR coverage når
+dette kreves, uten stille truncation». Det kunne ikke prøves uten et
+500-siders skannet dokument, og et slikt fantes ikke. Bygget med
+`skript/lag_stor_bunke.py` (`make storbunke`) av den syntetiske
+10-siders bunken, gjentatt — sidene settes inn som REFERANSER, så fila
+blir 3,6 MB i stedet for ~180.
+
+| Måling | Resultat |
+|---|---|
+| Status | **ferdig** |
+| Sider | **500 av 500** |
+| Sidemarkører i teksten | **500 av 500** — ingen mangler |
+| Tid | 31,4 min (1882 s) |
+| Fart | 0,27 sider/s (3,76 s/side) |
+| Tegn lest | 359 863 |
+| OCR-regioner | rapidocr 13 450 · norhand+ufcn 318 |
+| Strekkoder funnet | 100 |
+| **Policy-avvik** | **ingen** — den frosne policyen holdt i 31 minutter |
+| Tilstander | `kjorer → ferdig` |
+
+**Kravet er innfridd: ingen stille avkorting.** Alle 500 sidemarkører
+står i teksten, og `sider_ferdig == sider_totalt == 500`.
+
+**Farten faller svakt over lengden:** 0,30 sider/s de første 150 sidene,
+0,27 samlet. Rundt 10 % degradering over en halvtime. Ikke dramatisk,
+men det betyr at en kort måling overvurderer kapasiteten — og
+dimensjonering skal gjøres på det LANGE tallet:
+
+| Grunnlag | sider/s | Arbeidere ved 5,2 sider/s |
+|---|---|---|
+| 10-siders bunke | 0,29 | 23 |
+| **500-siders bunke (ekte)** | **0,27** | **25** |
+
+**Det viktigste funnet er negativt, og det er meningen:** OCR-policyen
+ble frosset ved jobbstart og holdt gjennom hele løpet uten ett avvik
+(R199). Det var her den kunne sviktet — over 31 minutter varierer
+VRAM-situasjonen, og før R199 ville motorvalget blitt tatt på nytt per
+side.
+
+**Én ærlighetsnote om målingen selv:** første utgave av måleskriptet
+rapporterte at `[Side 500 av 500]` manglet. Det var skriptet som spurte
+feil sted — jobbsvaret bærer ikke teksten, den hentes fra
+`/jobb/{id}/tekst`. Systemet var riktig hele tiden. Et måleverktøy kan
+lyve på nøyaktig samme måte som koden det måler.
+
+---
+
 ## 2. Top Bottlenecks
 
 ### 1. OCR — og den er ikke der man tror

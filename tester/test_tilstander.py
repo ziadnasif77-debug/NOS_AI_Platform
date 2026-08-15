@@ -184,3 +184,33 @@ def test_jobben_registrerer_policyen():
     kilde = inspect.getsource(api._jobb_arbeider)
     assert 'jobb["ocr_policy"]' in kilde
     assert "los_policy()" in kilde
+
+
+# ------------------------------------------------------------------ #
+#  Stor bunke: ingen stille avkorting (§30)                           #
+# ------------------------------------------------------------------ #
+
+def test_jobbveien_har_ingen_skjult_sidegrense():
+    """§30 krever at 500-siders scanned path fullfører med FULL
+    dekning «uten stille truncation». De synkrone grensene
+    (OCR_MAKS_SIDER / OCR_TAK_SIDER) gjelder /dokument — kryper en av
+    dem inn i jobbarbeideren, ville en 500-siders bunke stoppet på 50
+    og meldt «ferdig»."""
+    import inspect
+    import dokument_api as api
+    kilde = inspect.getsource(api._jobb_arbeider)
+    for grense in ("OCR_MAKS_SIDER", "OCR_TAK_SIDER"):
+        assert grense not in kilde, (
+            f"{grense} brukes i jobbarbeideren — da har /jobb en skjult "
+            "sidegrense, og «ubegrenset» i dokumentasjonen er en løgn")
+
+
+def test_generatoren_lager_bunke_uten_tekstlag():
+    """En stor bunke MED tekstlag ville hoppet forbi OCR helt, og
+    målingen ville målt noe annet enn den utgir seg for."""
+    import inspect
+    import lag_stor_bunke
+    kilde = inspect.getsource(lag_stor_bunke)
+    assert "show_pdf_page" in kilde, (
+        "sidene må settes inn som referanse til det SKANNEDE bildet — "
+        "ellers får bunken tekstlag og OCR kjører aldri")
