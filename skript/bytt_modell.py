@@ -316,6 +316,32 @@ def overlapper(a, b) -> bool:
     return a[0] <= b[1] and b[0] <= a[1]
 
 
+def mcnemar(live, kandidat):
+    """(rettet, ødelagt, p) for to kjøringer av SAMME korpus.
+
+    R196: dette er den riktige testen her, og porten brukte feil.
+    De to modellene svarer på nøyaktig de samme spørsmålene i samme
+    rekkefølge — dataene er PARVISE. To uavhengige konfidensintervaller
+    kaster den koblingen, og blir dermed langt for konservative: målt
+    på et ekte tilfelle sa intervallene «ikke skillbar» om en endring
+    som rettet 27 spørsmål og ødela 7 (p = 0,0008).
+
+    Bare spørsmålene som ENDRET seg bærer informasjon om forskjellen —
+    de 100 som var riktige begge ganger sier ingenting om hvilken
+    modell som er best. Eksakt binomialtest, ingen tilnærming: korpuset
+    er lite nok til at khikvadrat ikke er til å stole på."""
+    from math import comb
+    if not live or not kandidat or len(live) != len(kandidat):
+        return 0, 0, None
+    rettet = sum(1 for a, b in zip(live, kandidat) if a == 0 and b == 1)
+    odelagt = sum(1 for a, b in zip(live, kandidat) if a == 1 and b == 0)
+    n = rettet + odelagt
+    if n == 0:
+        return 0, 0, 1.0          # ingen forskjell i det hele tatt
+    hale = sum(comb(n, k) for k in range(min(rettet, odelagt) + 1))
+    return rettet, odelagt, min(1.0, 2.0 * hale / (2 ** n))
+
+
 def dom(live: dict, kandidat: dict) -> dict:
     """Fire utfall — samme sett som kvalitetsporten for norhand."""
     if not live or not kandidat:
@@ -351,28 +377,27 @@ def dom(live: dict, kandidat: dict) -> dict:
     ki_kand = bootstrap_ki(kandidat["utfall"])
     andel_live = sum(live["utfall"]) / max(1, len(live["utfall"]))
     andel_kand = sum(kandidat["utfall"]) / max(1, len(kandidat["utfall"]))
+    rettet, odelagt, p_verdi = mcnemar(live["utfall"], kandidat["utfall"])
+    tall = (f"{andel_kand:.0%} mot {andel_live:.0%} — {rettet} spørsmål "
+            f"rettet, {odelagt} ødelagt (McNemar p = {p_verdi:.4f}). "
+            f"Konfidensintervall {ki_kand} mot {ki_live}")
 
-    if overlapper(ki_kand, ki_live):
+    if p_verdi is None or p_verdi >= 0.05:
         return {"godkjent": False, "grunn": "ikke_skillbar",
                 "ki_live": ki_live, "ki_kandidat": ki_kand,
+                "p_verdi": p_verdi, "rettet": rettet, "odelagt": odelagt,
                 "forklaring": (
-                    f"Kandidaten fikk {andel_kand:.0%} riktige mot live sine "
-                    f"{andel_live:.0%}, men konfidensintervallene overlapper "
-                    f"({ki_kand} mot {ki_live}). På et korpus av denne "
-                    "størrelsen er forskjellen ikke målbar — den kan være "
-                    "ren tilfeldighet. Da byttes ingenting.")}
-    if ki_kand[0] > ki_live[1]:
+                    f"Forskjellen er ikke målbar: {tall}. På dette korpuset "
+                    "kan den være ren tilfeldighet, og da byttes ingenting.")}
+    if rettet > odelagt:
         return {"godkjent": True, "grunn": "bedre",
                 "ki_live": ki_live, "ki_kandidat": ki_kand,
-                "forklaring": (
-                    f"Kandidaten er målbart bedre: {andel_kand:.0%} mot "
-                    f"{andel_live:.0%}, og intervallene overlapper ikke "
-                    f"({ki_kand} mot {ki_live}).")}
+                "p_verdi": p_verdi, "rettet": rettet, "odelagt": odelagt,
+                "forklaring": f"Kandidaten er målbart bedre: {tall}."}
     return {"godkjent": False, "grunn": "daarligere",
             "ki_live": ki_live, "ki_kandidat": ki_kand,
-            "forklaring": (
-                f"Kandidaten er målbart DÅRLIGERE: {andel_kand:.0%} mot "
-                f"{andel_live:.0%} ({ki_kand} mot {ki_live}).")}
+            "p_verdi": p_verdi, "rettet": rettet, "odelagt": odelagt,
+            "forklaring": f"Kandidaten er målbart DÅRLIGERE: {tall}."}
 
 
 # ------------------------------------------------------------------ #

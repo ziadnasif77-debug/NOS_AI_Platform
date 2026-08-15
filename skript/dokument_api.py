@@ -144,18 +144,26 @@ MAKS_BYTES = int(os.environ.get("MAKS_OPPLASTING_MB", "200")) * 1024 * 1024
 # grense på nøyaktig det brukeren merker (hvor mye av dokumentet
 # modellen får se).
 MAKS_LLM_TEGN = maskinprofil.verdi("maks_llm_tegn", 12000)
-# R195: gi modellen bare de sidene spørsmålet gjelder, på en bunke.
-# AV som standard: hypotesen om at mindre kontekst gir mindre
-# forveksling er MÅLT, ikke antatt — og den skrus bare på hvis
-# spørsmålskorpuset viser at den er målbart bedre.
+# R195/R196: gi modellen bare de sidene spørsmålet gjelder, på en bunke.
+# PÅ som standard siden 2026-08-15, og bare fordi målingen bærer det:
+# på et korpus utvidet til 133 spørsmål gikk resultatet fra 89 til 109
+# riktige — 27 spørsmål rettet, 7 ødelagt, McNemar p = 0,0008 — og
+# svartiden falt fra 1,71 til 0,78 s. Kontrollgruppen (koden svarer) var
+# 15/15 begge ganger, så rutingen er urørt.
+#
+# På 46 spørsmål så det samme tiltaket ut som «ikke skillbar». Det var
+# korpuset som var for lite, ikke tiltaket som var for svakt.
 # Verdirommet er det FELLES (BRYTER_JA nedenfor), ikke en egen liste:
 # R12 slo fast at hver bryter med sitt eget verdirom er en felle —
 # «on» virket ett sted og ikke et annet, uten at noe sa fra. Listen
 # gjentas her fordi den defineres lenger nede i fila; vakttesten
 # `test_ett_verdirom_for_alle_brytere` fanger det hvis de sprikjer.
-BEVISVALG = (os.environ.get("BEVISVALG", "").strip().lower()
+BEVISVALG = (os.environ.get("BEVISVALG", "ja").strip().lower()
              in ("ja", "1", "true", "on", "yes", "pa", "på"))
-BEVISVALG_MAKS_SIDER = int(os.environ.get("BEVISVALG_MAKS_SIDER", "3"))
+# Fem, ikke tre: målt ga tre sider 103/133 og fem sider 109/133. Et for
+# smalt vindu fjerner konteksten et riktig svar trengte — de sju som
+# fortsatt feiler, feiler av nettopp den grunnen.
+BEVISVALG_MAKS_SIDER = int(os.environ.get("BEVISVALG_MAKS_SIDER", "5"))
 # OCR er ekte GPU-arbeid per side — standardgrense, kan økes per
 # forespørsel med multipart-feltet maks_sider (tak: OCR_TAK_SIDER).
 # Kuttes det, sier svaret det ALLTID eksplisitt i 'advarsel'.

@@ -290,3 +290,43 @@ def test_manglende_uttrekk_teller_ikke_som_bestatt():
 def test_tomt_svar_er_aldri_bestatt():
     import kjor_sporsmaalskorpus as k
     assert k.vurder_svar({"ett_av": ["noe"]}, "", {})[0] is False
+
+
+# ------------------------------------------------------------------ #
+#  Parvis dom (R196): riktig test for to kjøringer av SAMME korpus    #
+# ------------------------------------------------------------------ #
+
+def test_mcnemar_teller_bare_det_som_endret_seg(bytt):
+    """De spørsmålene som var riktige begge ganger sier ingenting om
+    hvilken modell som er best. Bare endringene bærer informasjon."""
+    live = [1, 1, 1, 0, 0]
+    kand = [1, 1, 0, 1, 1]
+    rettet, odelagt, p = bytt.mcnemar(live, kand)
+    assert (rettet, odelagt) == (2, 1)
+
+
+def test_parvis_test_ser_forskjellen_uavhengige_intervaller_mister(bytt):
+    """DEN EKTE MÅLINGEN som avslørte at porten brukte feil test: 27
+    spørsmål rettet, 7 ødelagt av 133. Uavhengige konfidensintervaller
+    overlapper og sier «ikke skillbar»; den parvise testen ser det
+    tydelig (p = 0,0008)."""
+    live = [1] * 89 + [0] * 44
+    kand = [1] * 82 + [0] * 7 + [1] * 27 + [0] * 17
+    assert sum(kand) == 109
+    rettet, odelagt, p = bytt.mcnemar(live, kand)
+    assert (rettet, odelagt) == (27, 7)
+    assert p < 0.01
+    assert bytt.overlapper(bytt.bootstrap_ki(kand),
+                           bytt.bootstrap_ki(live)) is True, (
+        "forutsetningen for testen er borte — intervallene overlapper ikke "
+        "lenger, og da illustrerer den ikke poenget")
+    assert bytt.dom(_maaling(live), _maaling(kand))["grunn"] == "bedre"
+
+
+def test_identiske_kjoringer_er_ikke_en_forbedring(bytt):
+    rettet, odelagt, p = bytt.mcnemar([1, 0, 1], [1, 0, 1])
+    assert (rettet, odelagt, p) == (0, 0, 1.0)
+
+
+def test_ulik_lengde_gir_ingen_dom(bytt):
+    assert bytt.mcnemar([1, 0], [1, 0, 1])[2] is None

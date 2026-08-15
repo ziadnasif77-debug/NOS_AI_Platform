@@ -133,11 +133,15 @@ def test_flere_sider_kommer_i_rekkefolge():
 #  Serverbryteren                                                     #
 # ------------------------------------------------------------------ #
 
-def test_bevisvalg_er_av_som_standard():
-    """Hypotesen er MÅLT, ikke antatt: bryteren står av til
-    spørsmålskorpuset har dømt (R148/R189-disiplinen)."""
+def test_bevisvalg_er_paa_fordi_maalingen_baerer_det():
+    """R196: PÅ som standard — men bare fordi korpuset dømte.
+
+    På 46 spørsmål så tiltaket ut som «ikke skillbar». På 133 rettet det
+    27 spørsmål og ødela 7 (McNemar p = 0,0008), og ble raskere. Det var
+    korpuset som var for lite, ikke tiltaket som var for svakt."""
     sys.path.insert(0, "skript")
     import dokument_api as api
-    assert api.BEVISVALG is False, (
-        "bevisvalg er slått på som standard uten at korpuset har vist "
-        "at det er målbart bedre")
+    assert api.BEVISVALG is True
+    assert api.BEVISVALG_MAKS_SIDER == 5, (
+        "fem sider er den MÅLTE verdien (109/133 mot 103/133 med tre) — "
+        "endres den, skal korpuset kjøres på nytt")
