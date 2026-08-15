@@ -115,7 +115,7 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
 from delt import (bevisvalg, kalibrering, maalinger, maskinprofil, prompter,
-                  typeforventninger)
+                  tilstander, typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -2618,7 +2618,19 @@ def _jobb_status(jobb: dict, ny_status: str, **felter) -> None:
     """Setter status og øker versjon — grunnlaget for optimistisk låsing.
     Hver endring løfter versjon med 1, så en klient som avbryter med en
     utdatert versjon oppdager at noen (typisk arbeidstråden) har rukket å
-    endre jobben i mellomtiden, og får 409 i stedet for en stille no-op."""
+    endre jobben i mellomtiden, og får 409 i stedet for en stille no-op.
+
+    R198: overgangen kontrolleres mot den kanoniske livssyklusen
+    (`delt/tilstander.py`). En ulovlig overgang — typisk en tråd som
+    skriver over en terminal tilstand — logges og AVVISES. Uten den
+    kontrollen kunne en avbrutt jobb bli «ferdig» fordi arbeidstråden
+    rakk en siste oppdatering, og klienten fikk et resultat den
+    uttrykkelig hadde avbestilt."""
+    fra = jobb.get("status")
+    if fra and not tilstander.kan_gaa_til(fra, ny_status):
+        print(f"  [jobb] AVVIST tilstandsovergang {fra} → {ny_status} "
+              f"(jobb {jobb.get('jobb_id', '?')})")
+        return
     jobb["status"] = ny_status
     jobb["versjon"] = jobb.get("versjon", 1) + 1
     for k, v in felter.items():
@@ -2759,6 +2771,21 @@ def _jobb_arbeider() -> None:
             except ImportError:
                 _dekode = None
 
+            # R199: OCR-POLICYEN LØSES OG FRYSES HER, ved jobbstart —
+            # ikke per side. Registreres i jobbmetadata, så et resultat
+            # kan spores til nøyaktig den lesemåten som produserte det,
+            # og alle Page Tasks bruker samme policy (§27.1). Fasen
+            # heter «sender» i den kanoniske livssyklusen: jobben er
+            # hentet fra køen, og det avgjøres HVORDAN den skal leses.
+            _jobb_status(jobb, "sender")
+            try:
+                from delt.region_ocr import los_policy
+                jobb["ocr_policy"] = los_policy()
+                print(f"  [jobb {jobb.get('jobb_id', '?')}] OCR-policy frosset: "
+                      f"{jobb['ocr_policy']['motor']} på "
+                      f"{jobb['ocr_policy']['enhet']}")
+            except Exception as exc:                            # noqa: BLE001
+                jobb["ocr_policy"] = {"motor": "ukjent", "feil": str(exc)[:120]}
             _jobb_status(jobb, "pågår")
             with _jobb_las:
                 data = jobb.pop("_data", None)
@@ -2775,8 +2802,14 @@ def _jobb_arbeider() -> None:
                                   for i, s in enumerate(sider_tekst)).strip()
                 else:
                     t = tekstlag.strip()
+                # Går gjennom _jobb_status, ikke rundt den: en
+                # oppdatering som setter status direkte omgår
+                # overgangskontrollen, og da er kontrollen bare et
+                # løfte (R198).
+                _jobb_status(jobb, "sammenstiller")
+                _jobb_status(jobb, "ferdig")
                 jobb.update(
-                    status="ferdig", versjon=jobb.get("versjon", 1) + 1,
+                    versjon=jobb.get("versjon", 1) + 1,
                     tekst=t, antall_tegn=len(t),
                     felter=utvid_entiteter(t, {}), datoer=finn_alle_datoer(t),
                     # tekstlag = digitalt født, ingen OCR (ocr_brukt=False)
@@ -2790,6 +2823,16 @@ def _jobb_arbeider() -> None:
             tekster, handskrift, strekkoder = [], [], []
             motorer = {}
             start = time.time()
+            # Kan den frosne policyen fortsatt innfris? Endres svaret
+            # underveis, SIER vi fra — vi bytter aldri stille (R199).
+            try:
+                from delt.region_ocr import policy_holder
+                _holder, _avvik = policy_holder(jobb.get("ocr_policy"))
+                if not _holder and _avvik:
+                    jobb.setdefault("varsler_ocr", []).append(_avvik)
+                    print(f"  [jobb {jobb.get('jobb_id', '?')}] {_avvik}")
+            except Exception:                                   # noqa: BLE001
+                pass
             for i, side in enumerate(doc):
                 if jobb.get("avbrutt"):
                     _jobb_status(jobb, "avbrutt")
@@ -2832,6 +2875,13 @@ def _jobb_arbeider() -> None:
                 # 30 s igjen». Et estimat på noe som ikke skjer.
                 jobb["sekunder_igjen_estimat"] = None
             if jobb.get("status") != "avbrutt":
+                # R198: SAMMENSTILLER er en ekte fase, ikke pynt. Alle
+                # sider er lest; her bygges tekst, felter, datoer,
+                # dokumentdato og strekkoder. På en stor bunke tar den
+                # sekunder, og en klient som poller fortjener å vite at
+                # lesingen er ferdig og at resultatet settes sammen —
+                # ikke se «kjorer» helt til alt plutselig er ferdig.
+                _jobb_status(jobb, "sammenstiller")
                 if len(tekster) > 1:
                     tekst = "\n".join(
                         f"[Side {i + 1} av {jobb['sider_totalt']}]\n{t}"
@@ -2839,8 +2889,9 @@ def _jobb_arbeider() -> None:
                 else:
                     tekst = "\n".join(tekster).strip()
                 jobb["sekunder_igjen_estimat"] = None
+                _jobb_status(jobb, "ferdig")
                 jobb.update(
-                    status="ferdig", versjon=jobb.get("versjon", 1) + 1,
+                    versjon=jobb.get("versjon", 1) + 1,
                     tekst=tekst, antall_tegn=len(tekst),
                     felter=utvid_entiteter(tekst, {}),
                     datoer=finn_alle_datoer(tekst),
@@ -3750,8 +3801,7 @@ def _skjemaer() -> dict:
             "properties": {
                 "ok": b(),
                 "jobb_id": s(example="5040da9e205d"),
-                "status": s(example="ko", enum=["ko", "arbeider", "ferdig",
-                                                "feil", "avbrutt"]),
+                "status": s(example="i_ko", enum=tilstander.openapi_enum()),
                 "fremdrift": s(nullable=True,
                                description="Menneskelesbar fremdrift"),
                 "versjon": {"type": "integer",
@@ -3775,9 +3825,7 @@ def _skjemaer() -> dict:
             "properties": {
                 "ok": b(),
                 "jobb_id": s(example="5040da9e205d"),
-                "status": s(example="ferdig", enum=["ko", "arbeider",
-                                                    "ferdig", "feil",
-                                                    "avbrutt"]),
+                "status": s(example="ferdig", enum=tilstander.openapi_enum()),
                 "filnavn": s(nullable=True),
                 "opprettet": s(example="2026-08-07 17:31:19"),
                 "versjon": {"type": "integer"},
@@ -5152,6 +5200,11 @@ class Handler(BaseHTTPRequestHandler):
             # samtidig statuspoll ikke krasjer på «dict changed size»
             with _jobb_las:
                 jobb = {k: v for k, v in jobb.items() if not k.startswith("_")}
+            # R198: ADAPTEREN. Den interne tilstanden mappes til den
+            # kanoniske livssyklusen (§6.1) FØR den forlater plattformen.
+            # Uten dette gikk «kø»/«pågår» rett ut — verdier OpenAPI
+            # aldri har erklært, og med æøå som §26 forbyr i enum.
+            jobb["status"] = tilstander.offentlig(jobb.get("status"))
             if len(deler) == 3 and deler[2] == "tekst":
                 if jobb.get("status") != "ferdig":
                     return self._svar(409, {"ok": False, "status": jobb.get("status"),

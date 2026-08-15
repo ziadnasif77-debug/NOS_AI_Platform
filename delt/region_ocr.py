@@ -269,6 +269,45 @@ def _velg_motor_for_maskinen() -> str:
     return _valgt["motor"]
 
 
+def los_policy() -> dict:
+    """OCR-policyen slik den gjelder NÅ — motor, enhet og innstillingene
+    som påvirker resultatet (R199).
+
+    Kalles ved JOBBSTART og fryses i jobbmetadata. Alle sider i jobben
+    leses så med samme policy. Grunnen er determinisme (R6), ikke
+    ytelse: bytter motoren midt i en bunke fordi VRAM ble ledig eller
+    opptatt, blir side 1 og side 50 lest av ulike modeller — og samme
+    dokument gir ulikt resultat avhengig av hva som tilfeldigvis kjørte
+    på maskinen da. Det er uetterprøvbart, og et avvik ingen kan
+    gjenskape kan heller ingen rette."""
+    motor = _velg_motor_for_maskinen()
+    return {
+        "motor": motor,
+        "enhet": ("gpu" if (motor == "easy" and _easyocr.get("gpu"))
+                  else "cpu"),
+        "norhand_enhet": _norhand.get("enhet") or "ikke_lastet",
+        "dpi_krav_mb": MINSTE_LEDIG_GPU_MB,
+        "maks_norhand_per_side": MAKS_NORHAND_PER_SIDE,
+        "maks_norhand_sekunder": MAKS_NORHAND_SEKUNDER,
+    }
+
+
+def policy_holder(policy: dict) -> tuple:
+    """(holder, avvik) — kan den frosne policyen fortsatt innfris?
+
+    Returnerer ALDRI en stille erstatning. Kan den ikke innfris, er det
+    kalleren som må bestemme hva som skjer, og svaret må si det."""
+    if not policy:
+        return True, None
+    naa = _velg_motor_for_maskinen()
+    if naa != policy.get("motor"):
+        return False, (f"OCR-policyen for denne jobben er «{policy['motor']}», "
+                       f"men maskinen ville nå valgt «{naa}». Sidene leses "
+                       "videre med den frosne policyen, ellers ville samme "
+                       "dokument fått ulikt resultat avhengig av timing.")
+    return True, None
+
+
 def _les_regioner(bilde_np) -> list:
     """Motoruavhengig regionlesing: liste av (punkter, tekst, konfidens)."""
     if _velg_motor_for_maskinen() == "rapid":

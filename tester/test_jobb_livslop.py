@@ -142,10 +142,23 @@ def test_tekstveien_lofter_versjonen():
 
 
 def test_jobb_status_lofter_versjonen():
-    jobb = {"status": "kø", "versjon": 1}
+    """R198: overgangen må være LOVLIG. «kø → ferdig» sto her før, men
+    en jobb som går rett fra kø til ferdig har ikke lest noe — og
+    tilstandsvakten avviser den nå. Bruker den ekte veien i stedet."""
+    jobb = {"status": "pågår", "versjon": 1}
     api._jobb_status(jobb, "ferdig", antall_tegn=5)
     assert jobb["versjon"] == 2 and jobb["status"] == "ferdig"
     assert jobb["antall_tegn"] == 5
+
+
+def test_jobb_status_avviser_ulovlig_overgang():
+    """Motprøven: vakten skal ikke bare slippe det lovlige gjennom, den
+    skal stoppe det ulovlige — og la jobben stå urørt."""
+    jobb = {"status": "kø", "versjon": 1}
+    api._jobb_status(jobb, "ferdig", antall_tegn=5)
+    assert jobb["status"] == "kø" and jobb["versjon"] == 1
+    assert "antall_tegn" not in jobb, (
+        "en avvist overgang skrev felter likevel")
 
 
 def test_ferdig_tekstjobb_har_sidetall():
