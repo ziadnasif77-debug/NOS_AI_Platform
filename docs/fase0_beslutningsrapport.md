@@ -247,6 +247,78 @@ parallellitet UTEN taket.
 25 arbeidere til 18, og begge tall er en klynge. Gapet til 5,2 sider/s
 er ~16×, og §24.1-dommen fra forrige avsnitt står uendret.
 
+### 500-siders maalingen paa nytt — gevinsten er stoerre i stor skala
+
+Riggens 30 sider ga 1,38×. Den EKTE veien, gjennom serveren og
+jobbsystemet, ga mer:
+
+| | Basis (R200) | Med parallellitet |
+|---|---|---|
+| Tid | 31,4 min | **18,5 min** |
+| Fart | 0,27 sider/s | **0,45 sider/s** |
+| s/side | 3,76 | **2,22** |
+| Dekning | 500/500 | **500/500** |
+| Sidemarkører | 500/500 | **500/500** |
+| `rapidocr`-regioner | 13 450 | **13 450** — identisk |
+| `norhand+ufcn` | 318 | 250 |
+| Policy-avvik | ingen | **ingen** |
+| Strekkoder | 100 | 100 |
+
+**1,70× totalt — mot 1,38× på 30 sider.** Og gevinsten deler seg i to,
+for de to endringene ble målt hver for seg:
+
+| | Tid | sider/s | Bidrag |
+|---|---|---|---|
+| R200-basis (tidsbudsjett, sekvensiell) | 31,4 min | 0,27 | — |
+| Deterministisk tak, sekvensiell | 27,7 min | 0,30 | 1,13× |
+| **Deterministisk tak + parallell** | **18,5 min** | **0,45** | **1,50×** |
+
+Det deterministiske taket er altså ikke gratis i den forstand at det
+koster noe — det GA 1,13×, fordi de 68 ekstra norhand-regionene
+tidsbudsjettet rakk, produserte duplikater ingen hadde bruk for.
+
+Grunnen til at parallelliteten gir mer i stor skala enn på 30 sider
+står i R200-tallene: basiskjøringen DEGRADERTE over lengden (0,30 →
+0,27 sider/s), mens den parallelle holdt 0,44–0,45 flatt gjennom hele
+kjøringen. Parallelliteten fjernet degraderingen.
+
+### Determinismen, prøvd i full skala
+
+De to 500-siders kjøringene ble sammenlignet på selve teksten:
+
+```
+parallell    len 358641  sha256 67b875bc069797e0
+sekvensiell  len 358641  sha256 67b875bc069797e0
+IDENTISKE:   True
+```
+
+500 sider, 13 450 OCR-regioner, seks tråder mot én — **bit for bit det
+samme dokumentet**. Det er den sterkeste determinismeprøven i prosjektet,
+og den gjelder nettopp den veien produksjonen bruker.
+
+**Én ærlighetsnote om målingen selv.** Riggen meldte FØRST at de to
+hashene var ulike. Det var riggen som tok feil: den hashet hele
+HTTP-svaret, og `/jobb/{id}/tekst` svarer med en JSON-konvolutt som
+inneholder `jobb_id`. Id-en er ny for hver kjøring og har fast lengde —
+så lengden stemte og hashen ikke, som ser nøyaktig ut som et
+determinismebrudd. Samme familie som R200-feilen: måleriggen kan lyve på
+samme måte som koden den måler, og et oppsiktsvekkende funn må
+etterprøves før det blir en påstand.
+
+### Kapasitet, oppdatert
+
+| | sider/s | arbeidere ved peak |
+|---|---|---|
+| Basis (R200) | 0,27 | 25 |
+| Deterministisk tak alene | 0,30 | 23 |
+| **Tak + parallellitet** | **0,45** | **15** |
+
+**Ti maskiner færre.** Det er en ekte sum — men den flytter fortsatt
+ikke §24.1-dommen: gapet til 5,2 sider/s er 11,6× i stedet for 19×, og
+én maskin er fortsatt ikke nok under belastningsantakelsen i §3. Ved
+10 % skannet andel holder tre maskiner, og ved 20 sider/dokument holder
+én. Antakelsen avgjør fortsatt mer enn optimaliseringen.
+
 ---
 
 ## 2. Top Bottlenecks
