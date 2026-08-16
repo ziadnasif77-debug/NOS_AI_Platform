@@ -105,6 +105,64 @@ MINSTE_LEDIG_GPU_NORHAND_MB = int(
 
 _las = threading.Lock()
 
+# ------------------------------------------------------------------ #
+#  R203: hvorfor det er TRE låser og ikke én                          #
+# ------------------------------------------------------------------ #
+# `_las` sto rundt HELE `ocr_side`, og målingen viste hva det kostet:
+# seks tråder brukte nøyaktig de samme 5,0 kjernene som én. Låsen — ikke
+# maskinen — var taket.
+#
+# Men den beskyttet noe ekte, og det er to forskjellige ting:
+#
+#   _LASTELAS       mutasjon av _valgt / _easyocr / _rapid ved lasting.
+#                   Skjer én gang, ikke per side.
+#   _HANDSKRIFT_LAS all bruk av norhand, fordi OOM-tilbakefallet BYTTER
+#                   UT modellen for alle (`_norhand.update(... "cpu")`)
+#                   midt i en inferens. To tråder der er et ekte
+#                   kappløp. RLock, fordi `_norhand_generer` kaller
+#                   tilbake hit etter OOM.
+#
+# Selve RapidOCR-lesingen — 97,7 % av regionene — trenger ingen av dem.
+#
+# ÆRLIGHET OM HVA DENNE LÅSEN IKKE LØSTE: den var også hypotesen for
+# hvorfor parallelle tråder leste 2 av 30 sider annerledes. Den
+# hypotesen ble MÅLT OG FORKASTET — avviket var der fortsatt etter at
+# all håndskriftbruk var serialisert. Den virkelige årsaken står ved
+# `PARALLELLE_SIDER` under: et tidsbudsjett, som ingen lås kan rette.
+# Låsen beholdes fordi kappløpet over er ekte, ikke fordi den fikset
+# det den ble skrevet for.
+_LASTELAS = threading.Lock()
+_HANDSKRIFT_LAS = threading.RLock()
+
+# AV som standard — og grunnen er en MÅLING, ikke forsiktighet.
+#
+# Maskineriet er bygget og virker: seks tråder gir 1,38× (5,0 → 8,6
+# kjerner). Men målingen viste at 2 av 30 sider ble LEST ANNERLEDES,
+# også etter at all håndskriftbruk ble serialisert. Årsaken er ikke et
+# kappløp som en lås kan lukke:
+#
+#   `_les_med_norhand` og UFCN-andrepasset har et TIDSBUDSJETT
+#   (MAKS_NORHAND_SEKUNDER). Hvor mange håndskriftregioner som rekkes,
+#   avhenger dermed av hvor rask maskinen var akkurat da. Kjører seks
+#   tråder, blir hver batch tregere i klokketid, budsjettet tar slutt
+#   før, og siden får færre regioner lest — altså en annen tekst.
+#
+# Ingen lås kan rette det, for parallellitet ENDRER klokketiden. Det er
+# selve poenget med den.
+#
+# Verdt å si rett ut: dette er et R6-brudd som finnes I DAG, uten en
+# eneste tråd. Samme dokument lest på en travel maskin gir allerede et
+# annet svar enn på en rolig. Parallelliteten skapte ikke feilen — den
+# gjorde den REPRODUSERBAR, og det er første gang den har vært det.
+#
+# Skal denne på, må tidsbudsjettet erstattes av et deterministisk tak
+# (antall regioner, utledet av den FROSNE enheten fra R199), og det
+# byttet endrer hva som faktisk leses. Det skal måles mot
+# spørsmålskorpuset før det skrus på, ikke antas.
+PARALLELLE_SIDER = (
+    os.environ.get("OCR_PARALLELLE_SIDER", "nei").strip().lower()
+    in ("ja", "1", "true", "on", "yes", "pa", "på"))
+
 # Delt GPU-lås: OCR og språkmodellen ligger på SAMME kort. Kjører de
 # samtidig, konkurrerer de om minnet og begge blir tregere (målt: modell
 # alene 3,3 s → 18,5 s samtidig med OCR). Denne låsen slippes bare rundt
@@ -386,6 +444,19 @@ def _norhand_les_batch(utsnitt_liste: list) -> list:
 
     if not utsnitt_liste:
         return []
+    # R203: HELE håndskriftbruken serialiseres — lasting, batching og
+    # generering under samme lås. Det er her den delte tilstanden ligger:
+    # OOM-tilbakefallet lenger nede bytter modellen til CPU for ALLE
+    # tråder, og en side lest før og etter det byttet får ulikt svar.
+    # Resten av siden (RapidOCR) går parallelt utenom denne låsen.
+    with _HANDSKRIFT_LAS:
+        return _norhand_les_batch_laast(utsnitt_liste)
+
+
+def _norhand_les_batch_laast(utsnitt_liste: list) -> list:
+    """Selve håndskriftlesingen. Kalles ALLTID med `_HANDSKRIFT_LAS`."""
+    from PIL import Image
+
     prosessor, modell, enhet = _hent_norhand()
     bilder = [Image.fromarray(u).convert("RGB") for u in utsnitt_liste]
     piksler = prosessor(images=bilder, return_tensors="pt").pixel_values
@@ -644,6 +715,16 @@ def regioner_for_omraade(register: list, start: int, slutt: int) -> list:
 #  Hovedinngang: OCR av én side med regionruting                      #
 # ------------------------------------------------------------------ #
 
+def kan_lese_parallelt(motor: str) -> bool:
+    """Kan flere sider leses SAMTIDIG med denne motoren? (R203)
+
+    Bare RapidOCR på CPU. EasyOCR er aldri prøvd for trådsikkerhet, og
+    ligger den på GPU-en skal kortet serialiseres uansett — da er det
+    ingenting å vinne og alt å tape. norhand er ikke med i vurderingen:
+    den serialiserer seg selv i `_norhand_les_batch`."""
+    return PARALLELLE_SIDER and motor == "rapid" and not _easyocr["gpu"]
+
+
 def ocr_side(bilde_np) -> dict:
     """OCR av ett sidebilde (numpy RGB) med regionbasert modellruting.
 
@@ -652,23 +733,42 @@ def ocr_side(bilde_np) -> dict:
          "konfidens": float, "easyocr_tekst": str, "easyocr_konfidens": float,
          "norhand_tekst": str|None, "norhand_konfidens": float|None}
     ]}"""
-    with _las:
-        # Motoren velges og lastes her (ikke inne i løkken) så vi VET om
-        # den havnet på GPU før vi bestemmer om GPU-låsen trengs.
-        if _velg_motor_for_maskinen() == "easy":
+    # Motoren velges og lastes her (ikke inne i løkken) så vi VET om den
+    # havnet på GPU før vi bestemmer om GPU-låsen trengs. Lastingen er
+    # ALLTID enerådig — det er den `_las` egentlig beskyttet; resten av
+    # siden ble bare med på kjøpet, og kostet all parallellitet (R203).
+    with _LASTELAS:
+        motor = _velg_motor_for_maskinen()
+        if motor == "easy":
             _hent_easyocr()
-        try:
-            if _paa_gpu():
-                # OCR og språkmodellen deler samme kort — la dem aldri
-                # kjøre samtidig, ellers konkurrerer de om minnet og
-                # begge blir tregere (målt: 3,3 s → 18,5 s).
-                with GPU_LAS:
-                    return _ocr_side_intern(bilde_np)
-            # OCR på CPU (R51-fallback): ingen GPU-lås, så språkmodellen
-            # kan svare parallelt på kortet uten å vente på OCR.
-            return _ocr_side_intern(bilde_np)
-        finally:
-            frigjor_gpu()
+        else:
+            _hent_rapid()
+        parallelt = kan_lese_parallelt(motor)
+
+    if not parallelt:
+        # Uendret vei: hele siden serialisert, som før R203.
+        with _las:
+            try:
+                if _paa_gpu():
+                    # OCR og språkmodellen deler samme kort — la dem
+                    # aldri kjøre samtidig, ellers konkurrerer de om
+                    # minnet og begge blir tregere (målt: 3,3 s → 18,5 s).
+                    with GPU_LAS:
+                        return _ocr_side_intern(bilde_np)
+                # OCR på CPU (R51-fallback): ingen GPU-lås, så
+                # språkmodellen kan svare parallelt på kortet uten å
+                # vente på OCR.
+                return _ocr_side_intern(bilde_np)
+            finally:
+                frigjor_gpu()
+
+    # RapidOCR på CPU: sidene kan leses samtidig. De to delene som IKKE
+    # tåler det, låser seg selv der de er — håndskriften i
+    # `_norhand_les_batch`, kortet i den samme funksjonen via `GPU_LAS`.
+    try:
+        return _ocr_side_intern(bilde_np)
+    finally:
+        frigjor_gpu()
 
 
 def _paa_gpu() -> bool:

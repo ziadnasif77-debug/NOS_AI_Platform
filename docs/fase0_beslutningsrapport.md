@@ -187,12 +187,52 @@ andel kreves 4 maskiner, og ved 20 sider/dokument i snitt holder ÉN.
 Antakelsen avgjør mellom en klynge og en PC, og fan-out-tallet endrer
 ikke det bildet.
 
-**Den smale fiksen anbefales IKKE nå.** 1,21× flytter ingen beslutning
-(25 eller 21 arbeidere er begge en klynge), og `_las` beskytter mer enn
-lasting — blant annet at norhand-modellen byttes til CPU MIDT i en
-inferens ved GPU-mangel. To tråder der er et kappløp i den farligste
-kodestien vi har. Gevinsten hentes når belastningen er målt og tallene
-står stille; da er 16 % færre maskiner en ekte sum.
+### Den smale fiksen ble bygget — og strøk sin egen port
+
+Låsene er delt i tre (`_LASTELAS`, `_HANDSKRIFT_LAS`, `GPU_LAS`),
+jobbarbeideren leser sider i tråder med rekkefølgen bevart, og
+maskineriet virker: **1,38× (5,0 → 8,6 kjerner)**, med 16 vakttester.
+
+Men determinismeporten strøk. **2 av 30 sider ble fortsatt lest
+annerledes** — også etter at ALL håndskriftbruk var serialisert.
+
+Hypotesen (norhand byttes til CPU midt i en inferens) ble altså målt og
+FORKASTET. Den virkelige årsaken er et **tidsbudsjett**:
+
+```
+_les_med_norhand:        if brukt >= MAKS_NORHAND_SEKUNDER: break
+UFCN-andrepasset:        if brukt >= MAKS_NORHAND_SEKUNDER * 2: break
+```
+
+Hvor mange håndskriftregioner en side rekker, avhenger av hvor rask
+maskinen var akkurat da. Under seks tråder blir hver batch tregere i
+klokketid, budsjettet tar slutt før, og siden får færre regioner lest.
+
+**Ingen lås kan rette det**, for parallellitet ENDRER klokketiden — det
+er hele poenget med den.
+
+### Funnet er større enn fan-out (R204)
+
+Dette er et **R6-brudd som finnes i dag, uten en eneste tråd**. Samme
+dokument lest mens serveren er travel gir allerede et annet svar enn når
+den er rolig. Det har ligget der hele tiden, uoppdaget nettopp fordi det
+ikke var reproduserbart — parallelliteten gjorde det reproduserbart for
+første gang.
+
+### Hva som må til før parallellitet kan på
+
+Tidsbudsjettet må byttes mot et **deterministisk tak**: antall regioner,
+utledet av den FROSNE enheten (R199), ikke av klokka. Det byttet endrer
+hva som faktisk leses, og er derfor en kvalitetsendring — den skal måles
+mot spørsmålskorpuset før den gjøres, ikke antas.
+
+Inntil da står `OCR_PARALLELLE_SIDER` **av**, og en vakttest holder den
+der med begrunnelsen. Koden er bygget, målt og portet; det som mangler
+er ikke maskineri, men en kvalitetsmåling.
+
+**Og gevinsten flytter uansett ingen beslutning:** 1,38× tar 25
+arbeidere til 18, og begge tall er en klynge. Gapet til 5,2 sider/s er
+~16×.
 
 ---
 

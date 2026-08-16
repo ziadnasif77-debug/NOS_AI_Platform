@@ -2816,6 +2816,35 @@ def _jobb_last_fra_disk() -> None:
         _jobber[jobb_id] = jobb
 
 
+# R203: hvor mange sider en jobb leser SAMTIDIG. Målt på ankermaskinen
+# (12 logiske kjerner): seks tråder ga 1,30× på RapidOCR-delen, og med
+# håndskriftpasset serialisert 1,21× samlet. Halvparten av kjernene er
+# ikke en forsiktighetsmargin — ONNX Runtime bruker allerede ~5 av 12 på
+# EN side, så flere tråder enn dette kjemper mot motorens egen
+# parallellitet i stedet for å legge noe til.
+OCR_SIDETRAADER = int(os.environ.get(
+    "OCR_SIDETRAADER", str(max(1, (os.cpu_count() or 4) // 2))))
+
+
+def _sidetraader(policy) -> int:
+    """Hvor mange sider som kan leses samtidig med DENNE jobbens policy.
+
+    Svaret er 1 med mindre den frosne policyen (R199) er RapidOCR på
+    CPU. EasyOCR er aldri prøvd for trådsikkerhet, og ligger OCR-en på
+    GPU-en skal kortet serialiseres uansett — da er det ingenting å
+    vinne og alt å tape.
+
+    Regelen står i `region_ocr.kan_lese_parallelt`, ikke her: det er den
+    samme avgjørelsen som styrer låsene inne i `ocr_side`, og to steder
+    som svarer på det samme spørsmålet blir før eller siden uenige."""
+    try:
+        from delt.region_ocr import kan_lese_parallelt
+    except Exception:                                           # noqa: BLE001
+        return 1
+    motor = (policy or {}).get("motor") or ""
+    return max(1, OCR_SIDETRAADER) if kan_lese_parallelt(motor) else 1
+
+
 def _jobb_arbeider() -> None:
     """Én arbeidstråd — GPU-en tar uansett én OCR-side om gangen.
     Renderer hver side ÉN gang og kjører både region-OCR og
@@ -2911,39 +2940,96 @@ def _jobb_arbeider() -> None:
                     print(f"  [jobb {jobb.get('jobb_id', '?')}] {_avvik}")
             except Exception:                                   # noqa: BLE001
                 pass
-            for i, side in enumerate(doc):
+            # R203: SIDENE KAN LESES SAMTIDIG — men bare når den frosne
+            # policyen er RapidOCR på CPU. Er den EasyOCR på GPU, skal
+            # kortet serialiseres uansett, og da er `traader` 1 og
+            # løkken under er nøyaktig den samme som før.
+            traader = _sidetraader(jobb.get("ocr_policy"))
+            if traader > 1:
+                print(f"  [jobb {jobb.get('jobb_id', '?')}] leser "
+                      f"{traader} sider samtidig")
+
+            # ETT fitz-dokument PER TRÅD. Et Document er ikke trådsikkert:
+            # rendrer to tråder hver sin side av samme objekt, deler de
+            # intern tilstand i MuPDF.
+            sidelokal = threading.local()
+            aapne, dok_las = [], threading.Lock()
+
+            def _traad_dokument():
+                d = getattr(sidelokal, "doc", None)
+                if d is None:
+                    d = sidelokal.doc = fitz.open(stream=data, filetype="pdf")
+                    with dok_las:
+                        aapne.append(d)
+                return d
+
+            def _les_en_side(i):
+                """Én Page Task: rendre + OCR + strekkoder — det samme
+                arbeidet som før, bare flyttbart til en egen tråd."""
                 if jobb.get("avbrutt"):
-                    _jobb_status(jobb, "avbrutt")
-                    break
-                pix = side.get_pixmap(matrix=ocr_skala(doc, side))
+                    return None
+                d = _traad_dokument()
+                side = d[i]
+                pix = side.get_pixmap(matrix=ocr_skala(d, side))
                 bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                     pix.height, pix.width, pix.n)
                 if pix.n == 4:
                     bilde = bilde[:, :, :3]
                 res = ocr_side(bilde)
-                tekster.append(res["tekst"])
-                for r in res["regioner"]:
-                    motorer[r["motor"]] = motorer.get(r["motor"], 0) + 1
-                    if r.get("skrift") == "handskrift" and r["tekst"]:
-                        handskrift.append(r["tekst"])
+                koder = []
                 if _dekode is not None:
                     try:
                         for kode in _dekode(Image.fromarray(bilde)):
-                            strekkoder.append({
+                            koder.append({
                                 "type": kode.type,
                                 "verdi": kode.data.decode("utf-8", "replace"),
                                 "side": i + 1,
                             })
                     except Exception:
                         pass
-                jobb["sider_ferdig"] = i + 1
-                brukt = time.time() - start
-                jobb["sekunder_brukt"] = round(brukt)
-                gjenstaar = jobb["sider_totalt"] - (i + 1)
-                if gjenstaar > 0:
-                    jobb["sekunder_igjen_estimat"] = round(brukt / (i + 1) * gjenstaar)
-                if (i + 1) % 25 == 0:
-                    _jobb_lagre(jobb)
+                return i, res, koder
+
+            pool = None
+            if traader > 1:
+                from concurrent.futures import ThreadPoolExecutor
+                pool = ThreadPoolExecutor(max_workers=traader)
+                # `map` gir resultatene i SIDEREKKEFØLGE uansett hvilken
+                # tråd som ble ferdig først. Rekkefølgen er ikke en
+                # bekvemmelighet her — teksten settes sammen av den, og
+                # en bunke i feil rekkefølge er et annet dokument.
+                utfall = pool.map(_les_en_side, range(doc.page_count))
+            else:
+                utfall = (_les_en_side(i) for i in range(doc.page_count))
+
+            try:
+                for side_utfall in utfall:
+                    if side_utfall is None:
+                        _jobb_status(jobb, "avbrutt")
+                        break
+                    i, res, koder = side_utfall
+                    tekster.append(res["tekst"])
+                    for r in res["regioner"]:
+                        motorer[r["motor"]] = motorer.get(r["motor"], 0) + 1
+                        if r.get("skrift") == "handskrift" and r["tekst"]:
+                            handskrift.append(r["tekst"])
+                    strekkoder.extend(koder)
+                    jobb["sider_ferdig"] = i + 1
+                    brukt = time.time() - start
+                    jobb["sekunder_brukt"] = round(brukt)
+                    gjenstaar = jobb["sider_totalt"] - (i + 1)
+                    if gjenstaar > 0:
+                        jobb["sekunder_igjen_estimat"] = round(
+                            brukt / (i + 1) * gjenstaar)
+                    if (i + 1) % 25 == 0:
+                        _jobb_lagre(jobb)
+            finally:
+                if pool is not None:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                for d in aapne:
+                    try:
+                        d.close()
+                    except Exception:
+                        pass
             doc.close()
 
             if jobb.get("status") == "avbrutt":
