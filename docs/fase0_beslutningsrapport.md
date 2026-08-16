@@ -110,6 +110,92 @@ lyve på nøyaktig samme måte som koden det måler.
 
 ---
 
+## 1c. Lokal fan-out (§24.1) — porten til Phase 2
+
+Spesifikasjonen slipper ikke Phase 2 (RabbitMQ/Redis, flere noder) løs
+før lokal fan-out ETTER optimalisering ikke lenger tilfredsstiller
+målkravene. Den porten kan bare åpnes av en måling, og målingen fantes
+ikke: jobbarbeideren leser sidene én om gangen.
+
+`skript/kjor_fanout_maaling.py` måler det. Én «Page Task» = rendre siden
++ `ocr_side`, altså nøyaktig det arbeidet en fan-out ville delt på.
+30 sider, 12 logiske kjerner, `OCR_MOTOR=rapid` (policyen maskinen
+faktisk fryser med Borealis på kortet).
+
+| Modus | sider/s | speedup | kjerner brukt | tekst |
+|---|---|---|---|---|
+| sekvensiell (i dag) | 0,311 | 1,00× | 5,0 | — |
+| 6 tråder gjennom `ocr_side` | 0,302 | **0,97×** | **5,0** | identisk |
+| 6 tråder uten modullåsen | 0,437 | 1,41× | 8,7 | **2 av 30 sider avvek** |
+
+**Kjernerekken er beviset, ikke speedup-en.** Seks tråder bruker NØYAKTIG
+de samme 5,0 kjernene som én. `ocr_side` holder en modulglobal lås rundt
+hele siden, så trådene står i kø uansett hvor mange de er. Det er en
+måling, ikke en lesning av koden.
+
+Uten låsen løftes kjernebruken 5,0 → 8,7 og farten 1,41×. Men to sider
+ble LEST ANNERLEDES, og da er farten verdiløs: R6 krever at samme
+dokument gir samme svar.
+
+### Hvor avviket kom fra — og hva det åpner
+
+En sonde (`--uten-ufcn`) satte UFCN-andrepasset ut av spill og gjentok
+målingen:
+
+| | speedup uten lås | tekst |
+|---|---|---|
+| med UFCN-andrepass | 1,41× | 2 sider avvek |
+| uten UFCN-andrepass | 1,30× | **identisk** |
+
+Avviket kommer altså fra HÅNDSKRIFTPASSET, ikke fra RapidOCR. norhand
+(TrOCR) leser i BATCH, og parallelle tråder setter batchene sammen ulikt
+fra gang til gang — en generativ modell gir da litt ulikt svar.
+
+Sonden ga også et tall ingen hadde: **UFCN-andrepasset koster 24,7 % av
+tiden** (0,311 → 0,413 sider/s når det er borte) — langt mer enn
+andelen regioner tilsier (318 av 13 768 = 2,3 % i 500-sidersmålingen).
+
+Det gjør den smale fiksen REGNBAR i stedet for gjettet: låser man bare
+håndskriftpasset og lar RapidOCR gå parallelt, blir 24,7 % av tiden
+seriell og resten 1,30× raskere:
+
+| | sider/s | speedup | arbeidere ved peak |
+|---|---|---|---|
+| i dag | 0,27 | 1,00× | 25 |
+| smal lås (regnet) | 0,33 | **1,21×** | **21** |
+
+### Prosess-fan-out: ikke bare nytteløst — skadelig
+
+Seks prosesser uten trådpinning ble målt til de KOLLAPSET: alle seks lå
+på ~95 % CPU og hadde brent 9 700 CPU-sekunder HVER (~16 CPU-timer til
+sammen) uten å bli ferdige med 180 sider, mens minnebruken sto i 17 GB.
+72 ONNX-tråder på 12 kjerner, og hvert barn med sin egen norhand på CPU
+fordi seks CUDA-kontekster ikke får plass på kortet.
+
+Dette er verdt å si høyt fordi det er nøyaktig hva «bare legg til flere
+arbeidere» produserer.
+
+### Dommen
+
+**Lokal fan-out, ferdig optimalisert, gir 1,21× med determinismen i
+behold.** Peak-kravet er 5,2 OCR-sider/s; én maskin gir 0,33. Gapet er
+~16×, og ingen trådstrategi lukker det.
+
+**Porten til Phase 2 er dermed formelt åpen** — men bare under
+belastningsantakelsen i §3, som fortsatt ikke er målt. Ved 10 % skannet
+andel kreves 4 maskiner, og ved 20 sider/dokument i snitt holder ÉN.
+Antakelsen avgjør mellom en klynge og en PC, og fan-out-tallet endrer
+ikke det bildet.
+
+**Den smale fiksen anbefales IKKE nå.** 1,21× flytter ingen beslutning
+(25 eller 21 arbeidere er begge en klynge), og `_las` beskytter mer enn
+lasting — blant annet at norhand-modellen byttes til CPU MIDT i en
+inferens ved GPU-mangel. To tråder der er et kappløp i den farligste
+kodestien vi har. Gevinsten hentes når belastningen er målt og tallene
+står stille; da er 16 % færre maskiner en ekte sum.
+
+---
+
 ## 2. Top Bottlenecks
 
 ### 1. OCR — og den er ikke der man tror

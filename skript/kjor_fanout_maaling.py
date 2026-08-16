@@ -130,17 +130,40 @@ def les_side_uten_laas(nr: int) -> tuple:
 
 
 def _varm_opp() -> None:
-    """Last motoren FØR målingen. Havner lastingen inne i den målte
-    tiden, måler man oppstart og kaller det gjennomstrømning."""
-    les_side(0)
+    """Last motoren OG les hver kildeside minst én gang FØR målingen.
+
+    To grunner, og den andre kostet en hel runde:
+
+    1. Havner modellastingen inne i den målte tiden, måler man oppstart
+       og kaller det gjennomstrømning.
+
+    2. Bare side 0 ble lest på forhånd. De ni andre ble dermed hentet
+       fra DISK under den første målte kjøringen, mens alle senere
+       moduser fant dem i filbufferet. Den sekvensielle grunnlinjen — som
+       alt måles mot — betalte altså en kaldpris ingen andre betalte, og
+       hver eneste speedup i tabellen arvet den. Målt: grunnlinjen 0,13
+       sider/s ved start mot 0,30 ved slutt, altså 141 % drift på en
+       maskin som ellers sto stille."""
+    doc = _dokument()
+    for nr in range(doc.page_count):
+        les_side(nr)
 
 
 def _barn_start() -> None:
+    """Barnet trenger bare å laste motoren — IKKE hele oppvarmingen.
+
+    Filbufferet er en egenskap ved MASKINEN, ikke ved prosessen: har
+    forelderen lest sidene, er de varme for alle barna. Å kjøre full
+    oppvarming i hvert barn ga i stedet seks prosesser som leste ti
+    sider hver, samtidig, med tolv ONNX-tråder per prosess — 72 tråder
+    på 12 kjerner. Målt: alle seks lå på ~95 % CPU og hadde brent
+    9 700 CPU-sekunder HVER (~16 CPU-timer til sammen) uten å bli
+    ferdige med 180 sider. Det var ikke treghet, det var kollaps."""
     for k, v in BETINGELSER.items():
         os.environ[k] = v
     sys.path.insert(0, ROT)
     sys.path.insert(0, os.path.join(ROT, "skript"))
-    _varm_opp()
+    les_side(0)
 
 
 # ------------------------------------------------------------------ #
@@ -210,6 +233,9 @@ def main() -> int:
     p.add_argument("--grader", default="2,4,6",
                    help="antall arbeidere å prøve, kommaseparert")
     p.add_argument("--hopp-prosesser", action="store_true")
+    p.add_argument("--uten-ufcn", action="store_true",
+                   help="slå av UFCN-andrepasset (sonde: er DET kilden til "
+                        "at parallelle tråder leser noen sider annerledes?)")
     p.add_argument("--ut", default=os.path.join(
         ROT, "data", "maalinger", "fanout.json"))
     args = p.parse_args()
@@ -222,6 +248,23 @@ def main() -> int:
     kjerner = multiprocessing.cpu_count()
     for k, v in BETINGELSER.items():
         os.environ[k] = v
+
+    if args.uten_ufcn:
+        # SONDE, ikke et forslag. UFCN-andrepasset kjører norhand
+        # (TrOCR) i BATCH, og en generativ modell kan gi litt ulikt svar
+        # avhengig av hvordan batchen ble satt sammen. Kjører flere
+        # tråder uten modullåsen, settes batchene sammen ulikt fra gang
+        # til gang — og det er nøyaktig den mistanken denne sonden
+        # prøver: forsvinner tekstavvikene når andrepasset er borte, er
+        # det HÅNDSKRIFTPASSET som ikke tåler parallellitet, ikke
+        # RapidOCR. Da holder det å låse det ene passet.
+        #
+        # Passet kan ikke slås av med miljøvariabler: to av de seks
+        # utløserne (`tomt` og `lav_andel >= 0.25`) er hardkodet. Derfor
+        # settes det ut her, i målingen, og ikke i produksjonskoden.
+        from delt import region_ocr as _r
+        _r._kanskje_ufcn_andrepass = lambda _bilde, resultat: resultat
+        BETINGELSER["UFCN_ANDREPASS"] = "av (satt ut i riggen)"
 
     print(f"  Sider per kjøring: {args.sider}   Logiske kjerner: {kjerner}")
     print(f"  Betingelser: {BETINGELSER}")
