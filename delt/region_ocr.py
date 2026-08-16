@@ -63,6 +63,55 @@ MAKS_NORHAND_SEKUNDER = float(os.environ.get("MAKS_NORHAND_SEKUNDER", "4.0"))
 NORHAND_BATCH = int(os.environ.get("NORHAND_BATCH", "8"))
 
 
+# R204: DETERMINISTISK TAK — antall regioner i stedet for sekunder.
+#
+# Tidsbudsjettet (MAKS_NORHAND_SEKUNDER) gjør resultatet avhengig av hvor
+# rask maskinen var akkurat da: en travel server rekker færre
+# håndskriftregioner enn en rolig, og samme dokument får dermed ulik
+# tekst. Det er et R6-brudd som har ligget der hele tiden — det ble bare
+# aldri oppdaget, fordi det ikke var reproduserbart før parallell
+# sidelesing gjorde det synlig (R203).
+#
+# Tallene er valgt slik at de treffer det tidsbudsjettet FAKTISK ga:
+#   GPU  ~0,3 s/region → 4 s ≈ 13 regioner. Antallstaket er alt 12, så
+#         tidsbudsjettet bandt i praksis aldri her. Uendret oppførsel.
+#   CPU  ~3,7 s/region → 4 s ≈ 1-2 regioner. Her BANT det hardt, og her
+#         er det taket må settes bevisst i stedet for av klokka.
+# Andrepasset har dobbelt tak, som det hadde dobbelt budsjett.
+NORHAND_TAK_GPU = int(os.environ.get("NORHAND_TAK_GPU", "12"))
+NORHAND_TAK_CPU = int(os.environ.get("NORHAND_TAK_CPU", "2"))
+
+# PÅ — etter måling, ikke etter antakelse. Byttet endrer HVA som leses,
+# så det ble prøvd på tre nivåer før det ble standard:
+#
+#   OCR-tekst, CPU   0 av 10 sider endret seg. Taket (2 regioner) traff
+#                    nøyaktig det tidsbudsjettet alt ga.
+#   OCR-tekst, GPU   1 av 10 sider. Endringen var at «Homburg v. d.
+#                    Höhe.» gikk fra å stå TRE ganger etter hverandre
+#                    til én — altså at dobbeltlesing forsvant.
+#   Spørsmålskorpus  109 av 133 (82 %), nøyaktig som før byttet, og
+#                    «samme svar hver gang».
+#
+# Bryteren blir stående: den dagen tallene ser annerledes ut på en annen
+# maskin, skal dette kunne av uten en utrulling.
+DETERMINISTISK_TAK = (
+    os.environ.get("OCR_DETERMINISTISK_TAK", "ja").strip().lower()
+    in ("ja", "1", "true", "on", "yes", "pa", "på"))
+
+
+def _norhand_regiontak(dobbelt: bool = False) -> int:
+    """Hvor mange håndskriftregioner en side får lese — deterministisk.
+
+    Enheten leses lat fra `_norhand`-tilstanden, samme mønster som
+    `_norhand_porsjon()`: før første kall er den ukjent, og da brukes
+    GPU-taket. Fra og med andre porsjon er enheten kjent. Enheten
+    avgjøres ÉN gang per prosess og registreres i jobbens frosne policy
+    (R199), så taket er konstant gjennom en jobb."""
+    tak = (NORHAND_TAK_CPU if _norhand.get("enhet") == "cpu"
+           else NORHAND_TAK_GPU)
+    return tak * 2 if dobbelt else tak
+
+
 def _norhand_porsjon() -> int:
     """Porsjonsstørrelse for norhand-batcher AKKURAT NÅ. På CPU er én full
     porsjon dyrere enn hele tidstaket — da krympes den, så taket faktisk
@@ -134,33 +183,31 @@ _las = threading.Lock()
 _LASTELAS = threading.Lock()
 _HANDSKRIFT_LAS = threading.RLock()
 
-# AV som standard — og grunnen er en MÅLING, ikke forsiktighet.
+# PÅ — men den var AV først, og rekkefølgen er hele historien.
 #
-# Maskineriet er bygget og virker: seks tråder gir 1,38× (5,0 → 8,6
-# kjerner). Men målingen viste at 2 av 30 sider ble LEST ANNERLEDES,
-# også etter at all håndskriftbruk ble serialisert. Årsaken er ikke et
-# kappløp som en lås kan lukke:
+# Maskineriet virket med en gang: seks tråder gir 1,38× (5,0 → 8,6
+# kjerner). Likevel strøk det determinismeporten — 2 av 30 sider ble
+# LEST ANNERLEDES, også etter at all håndskriftbruk var serialisert bak
+# `_HANDSKRIFT_LAS`. Hypotesen om et kappløp var altså feil.
 #
-#   `_les_med_norhand` og UFCN-andrepasset har et TIDSBUDSJETT
-#   (MAKS_NORHAND_SEKUNDER). Hvor mange håndskriftregioner som rekkes,
-#   avhenger dermed av hvor rask maskinen var akkurat da. Kjører seks
-#   tråder, blir hver batch tregere i klokketid, budsjettet tar slutt
-#   før, og siden får færre regioner lest — altså en annen tekst.
+# Årsaken var TIDSBUDSJETTET i norhand-veien: hvor mange
+# håndskriftregioner en side rekker, avhang av hvor rask maskinen var
+# akkurat da. Under seks tråder ble hver batch tregere i klokketid —
+# ikke minst fordi ventingen på låsene teller med i budsjettet —
+# budsjettet tok slutt før, og siden fikk færre regioner lest.
 #
-# Ingen lås kan rette det, for parallellitet ENDRER klokketiden. Det er
-# selve poenget med den.
+# Ingen lås kunne rettet det: parallellitet ENDRER klokketiden, det er
+# selve poenget med den. Det som måtte til var å fjerne klokka fra
+# avgjørelsen (DETERMINISTISK_TAK over). Med den på er de samme seks
+# trådene BIT-IDENTISKE med sekvensiell lesing.
 #
-# Verdt å si rett ut: dette er et R6-brudd som finnes I DAG, uten en
-# eneste tråd. Samme dokument lest på en travel maskin gir allerede et
-# annet svar enn på en rolig. Parallelliteten skapte ikke feilen — den
-# gjorde den REPRODUSERBAR, og det er første gang den har vært det.
-#
-# Skal denne på, må tidsbudsjettet erstattes av et deterministisk tak
-# (antall regioner, utledet av den FROSNE enheten fra R199), og det
-# byttet endrer hva som faktisk leses. Det skal måles mot
-# spørsmålskorpuset før det skrus på, ikke antas.
+# Og funnet var større enn parallelliteten: tidsbudsjettet er et
+# R6-brudd som fantes uten en eneste tråd. Samme dokument lest på en
+# travel server ga allerede et annet svar enn på en rolig. Det hadde
+# ligget der hele tiden, uoppdaget fordi det ikke var reproduserbart —
+# parallelliteten gjorde det reproduserbart for første gang (R204).
 PARALLELLE_SIDER = (
-    os.environ.get("OCR_PARALLELLE_SIDER", "nei").strip().lower()
+    os.environ.get("OCR_PARALLELLE_SIDER", "ja").strip().lower()
     in ("ja", "1", "true", "on", "yes", "pa", "på"))
 
 # Delt GPU-lås: OCR og språkmodellen ligger på SAMME kort. Kjører de
@@ -1054,7 +1101,12 @@ def _kanskje_ufcn_andrepass(bilde_np, resultat: dict) -> dict:
     brukt = 0.0
     start = 0
     while start < len(utsnitt):
-        if brukt >= MAKS_NORHAND_SEKUNDER * 2:
+        # R204: samme bytte som i `_les_med_norhand` — dobbelt tak her,
+        # slik andrepasset hadde dobbelt budsjett.
+        if DETERMINISTISK_TAK:
+            if start >= _norhand_regiontak(dobbelt=True):
+                break            # taket er nådd — døm på det vi rakk
+        elif brukt >= MAKS_NORHAND_SEKUNDER * 2:
             break                # budsjettet er brukt — døm på det vi rakk
         porsjon = utsnitt[start:start + _norhand_porsjon()]
         t0 = time.perf_counter()
@@ -1161,7 +1213,15 @@ def _les_med_norhand(regioner: list, kandidater: list) -> dict:
     brukt = 0.0
     start = 0
     while start < len(kandidater):
-        if brukt >= MAKS_NORHAND_SEKUNDER:
+        # R204: to tak, og bare ett av dem er skrudd på om gangen.
+        # Regiontaket gir SAMME svar uansett hvor travel maskinen er;
+        # tidsbudsjettet gir det ikke, og er derfor på vei ut.
+        if DETERMINISTISK_TAK:
+            if start >= _norhand_regiontak():
+                utelatt["grunn"] = "regiontak"
+                utelatt["ulest"] = len(kandidater) - start
+                break
+        elif brukt >= MAKS_NORHAND_SEKUNDER:
             utelatt["grunn"] = "tidsbudsjett"
             utelatt["ulest"] = len(kandidater) - start
             break

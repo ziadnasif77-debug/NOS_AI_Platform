@@ -11,23 +11,30 @@ Hypotesen var håndskriftpasset: norhand byttes til CPU for alle tråder
 ved GPU-mangel, midt i en inferens. Låsen ble bygget, og hypotesen ble
 MÅLT — og forkastet. Avviket var der fortsatt.
 
-Den virkelige årsaken er et TIDSBUDSJETT (MAKS_NORHAND_SEKUNDER): hvor
-mange håndskriftregioner en side rekker, avhenger av hvor rask maskinen
+Den virkelige årsaken var et TIDSBUDSJETT (MAKS_NORHAND_SEKUNDER): hvor
+mange håndskriftregioner en side rekker, avhang av hvor rask maskinen
 var akkurat da. Ingen lås kan rette det, for parallellitet ENDRER
 klokketiden — det er hele poenget med den.
 
-Og det gjør funnet større enn parallellitet: dette er et R6-brudd som
-finnes I DAG, uten en eneste tråd. Samme dokument lest på en travel
-maskin gir allerede et annet svar enn på en rolig.
+Og funnet var større enn parallelliteten: dette er et R6-brudd som
+fantes UTEN en eneste tråd. Samme dokument lest på en travel maskin ga
+allerede et annet svar enn på en rolig — uoppdaget fordi det ikke var
+reproduserbart før tråder gjorde det synlig (R204).
 
-Parallelliteten står derfor AV. Denne fila vokter tre ting:
+Klokka er nå ute av avgjørelsen: taket er et ANTALL regioner, utledet av
+den frosne enheten (R199). Målt før det ble standard — 0 av 10 sider
+endret seg på CPU, 1 av 10 på GPU (dobbeltlest tekst forsvant), og
+korpuset ga 109 av 133, nøyaktig som før. Med det på er seks tråder
+BIT-IDENTISKE med sekvensiell lesing, og parallelliteten er PÅ.
 
-  1. AT DEN ER AV — og hvorfor, så ingen skrur den på uten å ha byttet
-     tidsbudsjettet mot et deterministisk tak først.
+Denne fila vokter tre ting:
+
+  1. AT DE TO HENGER SAMMEN. Parallellitet uten det deterministiske
+     taket er R6-brudd — testen nekter kombinasjonen.
   2. REKKEFØLGEN. Teksten settes sammen av sidenes rekkefølge, og en
      bunke i feil rekkefølge er et ANNET dokument. Testen tvinger sidene
      til å bli ferdige i motsatt rekkefølge av den de ble sendt inn i.
-  3. HVEM som får lov, den dagen den skrus på: bare RapidOCR på CPU.
+  3. HVEM som får lov: bare RapidOCR på CPU.
 """
 import sys
 import threading
@@ -46,41 +53,55 @@ from delt import region_ocr
 #  Hvem får lese parallelt                                            #
 # ------------------------------------------------------------------ #
 
-def test_parallellitet_er_AV_som_standard():
-    """Den viktigste testen i fila, og den handler om en MÅLING.
+def test_parallellitet_krever_deterministisk_tak():
+    """Den viktigste testen i fila: de to bryterne henger sammen.
 
-    Maskineriet virker — seks tråder gir 1,38× — men porten det skal
-    igjennom er determinisme, og den strøk: 2 av 30 sider ble lest
-    annerledes, også etter at all håndskriftbruk ble serialisert.
+    Parallell sidelesing var AV først, fordi den strøk
+    determinismeporten — 2 av 30 sider ble lest annerledes, også etter
+    at all håndskriftbruk var serialisert. Årsaken var ikke et kappløp,
+    men TIDSBUDSJETTET i norhand-veien: hvor mange håndskriftregioner
+    en side rekker, avhang av maskinens fart akkurat da.
 
-    Ingen lås kan rette det: `_les_med_norhand` og UFCN-andrepasset har
-    et TIDSBUDSJETT, så hvor mange håndskriftregioner som rekkes
-    avhenger av hvor rask maskinen var akkurat da. Parallellitet endrer
-    klokketiden — det er hele poenget med den.
+    Med det deterministiske taket på er de samme seks trådene
+    BIT-IDENTISKE med sekvensiell lesing. Uten det er de ikke det.
 
-    Skrus denne på uten at tidsbudsjettet først er byttet ut med et
-    deterministisk tak, brytes R6."""
-    assert region_ocr.PARALLELLE_SIDER is False, (
-        "parallell sidelesing er skrudd PÅ, men den strøk "
-        "determinismeporten: tidsbudsjettet i norhand-veien gjør "
-        "resultatet avhengig av maskinens fart (R203)")
+    Skrur noen av taket og lar parallelliteten stå, er R6 brutt igjen —
+    og denne gangen uten at noen målte det."""
+    if region_ocr.PARALLELLE_SIDER:
+        assert region_ocr.DETERMINISTISK_TAK, (
+            "parallell sidelesing er PÅ mens det deterministiske taket "
+            "er AV. Da avgjør klokka hvor mange håndskriftregioner en "
+            "side rekker, og parallelle tråder gir en annen tekst enn "
+            "sekvensielle (R203/R204)")
 
 
-def test_tidsbudsjettet_er_fortsatt_der_og_er_grunnen():
-    """Vakten peker på selve årsaken, så den ikke blir borte i en
-    kommentar. Forsvinner tidsbudsjettet, skal noen ta stilling til om
-    parallelliteten kan på — ikke oppdage det ved et uhell."""
+def test_taket_erstatter_klokka_i_begge_norhand_veiene():
+    """Vakten peker på selve mekanismen. Begge veiene hadde et
+    tidsbudsjett, og begge må ha fått et deterministisk tak — ellers er
+    den ene fortsatt avhengig av hvor rask maskinen var."""
     import inspect
-    kilde = inspect.getsource(region_ocr._les_med_norhand)
-    assert "MAKS_NORHAND_SEKUNDER" in kilde, (
-        "tidsbudsjettet er borte fra norhand-veien — da kan "
-        "determinismeporten kjøres på nytt, og parallelliteten kanskje "
-        "skrus på (R203)")
+    for funk in (region_ocr._les_med_norhand,
+                 region_ocr._kanskje_ufcn_andrepass):
+        kilde = inspect.getsource(funk)
+        assert "DETERMINISTISK_TAK" in kilde, (
+            f"{funk.__name__} har ingen deterministisk grense — der "
+            "avgjør klokka fortsatt hva som blir lest (R204)")
+
+
+def test_taket_er_konstant_for_en_gitt_enhet(monkeypatch):
+    """Selve determinismekravet, uttrykt direkte: samme enhet skal gi
+    samme tak, uansett hvor travel maskinen er."""
+    monkeypatch.setitem(region_ocr._norhand, "enhet", "cpu")
+    assert region_ocr._norhand_regiontak() == region_ocr.NORHAND_TAK_CPU
+    monkeypatch.setitem(region_ocr._norhand, "enhet", "cuda")
+    assert region_ocr._norhand_regiontak() == region_ocr.NORHAND_TAK_GPU
+    # Andrepasset hadde dobbelt budsjett, og har dobbelt tak.
+    assert (region_ocr._norhand_regiontak(dobbelt=True)
+            == 2 * region_ocr.NORHAND_TAK_GPU)
 
 
 def test_bare_rapid_paa_cpu_kan_leses_parallelt(monkeypatch):
-    """Regelen om HVEM som kan gå parallelt, prøvd med bryteren på —
-    ellers ville testen bare målt at alt er av.
+    """Regelen om HVEM som kan gå parallelt.
 
     BEGGE inngangene settes eksplisitt. `_easyocr["gpu"]` er ekte delt
     tilstand: laster en annen test EasyOCR på kortet, blir den True og
@@ -127,8 +148,9 @@ def test_jobben_velger_traadtall_etter_den_frosne_policyen(
     assert n >= 1
 
 
-def test_jobben_leser_sekvensielt_naar_bryteren_er_av():
-    """Standardtilstanden i dag: ingen jobb leser sider parallelt."""
+def test_jobben_leser_sekvensielt_naar_bryteren_er_av(monkeypatch):
+    """Bryteren skal virke hele veien ut i jobben, ikke bare i låsene."""
+    monkeypatch.setattr(region_ocr, "PARALLELLE_SIDER", False)
     assert api._sidetraader({"motor": "rapid"}) == 1
 
 

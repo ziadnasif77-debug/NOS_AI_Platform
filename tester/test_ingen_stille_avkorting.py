@@ -127,7 +127,30 @@ def test_alt_lest_gir_ingen_grunn(monkeypatch):
     assert ut["grunn"] is None and ut["ulest"] == 0
 
 
-def test_tidsbudsjettet_meldes(monkeypatch):
+def test_regiontaket_meldes(monkeypatch):
+    """R204: grensen er nå et ANTALL regioner, ikke sekunder — men
+    kravet er uendret: stopper vi før alt er lest, skal svaret SI DET.
+
+    Enheten settes fra stubben, slik den ekte `_norhand_les_batch`
+    gjør: taket følger enheten, og på CPU er det lavt."""
+    from delt import region_ocr as ro
+
+    def _stubb(u):
+        ro._norhand["enhet"] = "cpu"      # som etter en ekte lasting
+        return [("x", 0.9)] * len(u)
+
+    monkeypatch.setattr(ro, "_norhand_les_batch", _stubb)
+    monkeypatch.setattr(ro, "DETERMINISTISK_TAK", True)
+    monkeypatch.setitem(ro._norhand, "enhet", None)
+    ut = ro._les_med_norhand(_regioner(20), [(i, None) for i in range(20)])
+    assert ut["grunn"] == "regiontak"
+    assert ut["ulest"] > 0
+
+
+def test_tidsbudsjettet_meldes_naar_det_er_i_bruk(monkeypatch):
+    """Bryteren kan settes tilbake til klokka. Da skal DEN grensen
+    melde fra like tydelig — en vei ut som er taus er like ille
+    uansett hva som utløste den (R165)."""
     import time as _t
     from delt import region_ocr as ro
 
@@ -136,6 +159,7 @@ def test_tidsbudsjettet_meldes(monkeypatch):
         return [("x", 0.9)] * len(u)
 
     monkeypatch.setattr(ro, "_norhand_les_batch", _tregt)
+    monkeypatch.setattr(ro, "DETERMINISTISK_TAK", False)
     ut = ro._les_med_norhand(_regioner(20), [(i, None) for i in range(20)])
     assert ut["grunn"] == "tidsbudsjett"
     assert ut["ulest"] > 0

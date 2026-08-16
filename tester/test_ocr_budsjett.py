@@ -138,8 +138,18 @@ def test_tidstaket_holder(monkeypatch):
         teller["porsjoner"] += 1
         teller["regioner"] += len(utsnitt_liste)
         klokke["na"] += 3.7 * len(utsnitt_liste)     # CPU-takt, målt
+        # Den ekte `_norhand_les_batch` setter enheten via
+        # `_hent_norhand()`. Stubben må gjøre det samme: etter R204
+        # følger taket ENHETEN, ikke klokka, og en stubb som lar
+        # enheten stå ukjent ville målt GPU-taket på en CPU-test.
+        region_ocr._norhand["enhet"] = "cpu"
         return [("tekst", 0.90) for _ in utsnitt_liste]
 
+    # Stubben under setter `_norhand["enhet"]`. Uten denne linja ville
+    # den mutasjonen blitt LIGGENDE og fulgt med inn i neste testfil —
+    # `monkeypatch.setitem` husker den opprinnelige verdien og setter
+    # den tilbake uansett hva testen gjør med den etterpå.
+    monkeypatch.setitem(region_ocr._norhand, "enhet", None)
     monkeypatch.setattr(region_ocr, "_norhand_les_batch", treg_batch)
     monkeypatch.setattr(region_ocr, "frigjor_gpu", lambda: None)
     monkeypatch.setattr(region_ocr, "_paa_gpu", lambda: False)
@@ -152,9 +162,13 @@ def test_tidstaket_holder(monkeypatch):
     bilde = np.full((1000, 500, 3), 255, dtype=np.uint8)
     region_ocr.ocr_side(bilde)
 
-    # Budsjettet sjekkes FØR hver porsjon, så den siste kan krysse
-    # grensen: det avgjørende er at det STOPPER, ikke at det treffer
-    # eksakt. Uten taket ville alle 12 kandidatene blitt lest.
+    # Grensen sjekkes FØR hver porsjon, så den siste kan krysse den:
+    # det avgjørende er at det STOPPER, ikke at det treffer eksakt.
+    # Uten noen grense ville alle 12 kandidatene blitt lest.
+    #
+    # R204 byttet klokka mot et antall, men VIRKNINGEN er den samme:
+    # på CPU leses én porsjon, og svartiden skalerer ikke med antall
+    # regioner. Det er kravet — mekanismen er middelet.
     assert teller["porsjoner"] == 1
     assert teller["regioner"] < region_ocr.MAKS_NORHAND_PER_SIDE
 

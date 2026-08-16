@@ -187,52 +187,65 @@ andel kreves 4 maskiner, og ved 20 sider/dokument i snitt holder ÉN.
 Antakelsen avgjør mellom en klynge og en PC, og fan-out-tallet endrer
 ikke det bildet.
 
-### Den smale fiksen ble bygget — og strøk sin egen port
+### Den smale fiksen ble bygget, strøk sin egen port — og avdekket en eldre feil
 
-Låsene er delt i tre (`_LASTELAS`, `_HANDSKRIFT_LAS`, `GPU_LAS`),
-jobbarbeideren leser sider i tråder med rekkefølgen bevart, og
-maskineriet virker: **1,38× (5,0 → 8,6 kjerner)**, med 16 vakttester.
+Låsene ble delt i tre, jobbarbeideren fikk trådet sidelesing med
+rekkefølgen bevart, og maskineriet virket: **1,38×**. Likevel strøk det
+determinismeporten — **2 av 30 sider ble lest annerledes**, også etter
+at ALL håndskriftbruk var serialisert. Hypotesen om et kappløp ble
+dermed målt og forkastet.
 
-Men determinismeporten strøk. **2 av 30 sider ble fortsatt lest
-annerledes** — også etter at ALL håndskriftbruk var serialisert.
-
-Hypotesen (norhand byttes til CPU midt i en inferens) ble altså målt og
-FORKASTET. Den virkelige årsaken er et **tidsbudsjett**:
+Årsaken var et **tidsbudsjett**:
 
 ```
-_les_med_norhand:        if brukt >= MAKS_NORHAND_SEKUNDER: break
-UFCN-andrepasset:        if brukt >= MAKS_NORHAND_SEKUNDER * 2: break
+_les_med_norhand:   if brukt >= MAKS_NORHAND_SEKUNDER: break
+UFCN-andrepasset:   if brukt >= MAKS_NORHAND_SEKUNDER * 2: break
 ```
 
-Hvor mange håndskriftregioner en side rekker, avhenger av hvor rask
-maskinen var akkurat da. Under seks tråder blir hver batch tregere i
-klokketid, budsjettet tar slutt før, og siden får færre regioner lest.
+Hvor mange håndskriftregioner en side rakk avhang av hvor rask maskinen
+var akkurat da — og under tråder teller også ventingen på låsene med i
+budsjettet.
 
-**Ingen lås kan rette det**, for parallellitet ENDRER klokketiden — det
-er hele poenget med den.
+**Dette var et R6-brudd som fantes uten en eneste tråd (R204).** Samme
+dokument lest på en travel server ga allerede et annet svar enn på en
+rolig. Det hadde ligget der hele tiden, uoppdaget nettopp fordi det ikke
+var reproduserbart. Parallelliteten gjorde det reproduserbart for første
+gang — funnet er større enn funksjonen som avdekket det.
 
-### Funnet er større enn fan-out (R204)
+### Rettingen: klokka ut av avgjørelsen
 
-Dette er et **R6-brudd som finnes i dag, uten en eneste tråd**. Samme
-dokument lest mens serveren er travel gir allerede et annet svar enn når
-den er rolig. Det har ligget der hele tiden, uoppdaget nettopp fordi det
-ikke var reproduserbart — parallelliteten gjorde det reproduserbart for
-første gang.
+Taket er nå et **antall regioner**, utledet av den FROSNE enheten
+(R199): 12 på GPU, 2 på CPU, dobbelt i andrepasset. Tallene er valgt
+slik at de treffer det tidsbudsjettet faktisk ga.
 
-### Hva som må til før parallellitet kan på
+Byttet endrer hva som leses, så det ble målt på tre nivåer før det ble
+standard:
 
-Tidsbudsjettet må byttes mot et **deterministisk tak**: antall regioner,
-utledet av den FROSNE enheten (R199), ikke av klokka. Det byttet endrer
-hva som faktisk leses, og er derfor en kvalitetsendring — den skal måles
-mot spørsmålskorpuset før den gjøres, ikke antas.
+| Nivå | Resultat |
+|---|---|
+| OCR-tekst, CPU | **0 av 10 sider** endret seg |
+| OCR-tekst, GPU | 1 av 10 — «Homburg v. d. Höhe.» gikk fra **tre identiske linjer til én** |
+| Spørsmålskorpus | **109 av 133 (82 %)** — nøyaktig som før, «samme svar hver gang» |
 
-Inntil da står `OCR_PARALLELLE_SIDER` **av**, og en vakttest holder den
-der med begrunnelsen. Koden er bygget, målt og portet; det som mangler
-er ikke maskineri, men en kvalitetsmåling.
+Den ene GPU-endringen er verdt å lese to ganger: de to regionene
+tidsbudsjettet rakk EKSTRA, produserte duplikater. Taket fjernet dem.
 
-**Og gevinsten flytter uansett ingen beslutning:** 1,38× tar 25
-arbeidere til 18, og begge tall er en klynge. Gapet til 5,2 sider/s er
-~16×.
+### Resultat
+
+| | sider/s | speedup | tekst |
+|---|---|---|---|
+| sekvensiell | 0,31 | 1,00× | — |
+| 6 tråder, før | 0,30 | 0,97× | identisk |
+| 6 tråder, med narrow lock | 0,43 | 1,38× | 2 sider avvek |
+| **6 tråder + deterministisk tak** | **0,43** | **1,38×** | **identisk** |
+
+Begge bryterne står nå PÅ (`OCR_PARALLELLE_SIDER`,
+`OCR_DETERMINISTISK_TAK`), og en vakttest nekter kombinasjonen
+parallellitet UTEN taket.
+
+**Men gevinsten flytter fortsatt ingen arkitekturbeslutning:** 1,38× tar
+25 arbeidere til 18, og begge tall er en klynge. Gapet til 5,2 sider/s
+er ~16×, og §24.1-dommen fra forrige avsnitt står uendret.
 
 ---
 
