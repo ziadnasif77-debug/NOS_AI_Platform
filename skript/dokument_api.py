@@ -114,8 +114,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import (bevisvalg, kalibrering, maalinger, maskinprofil, prompter,
-                  tilstander, typeforventninger)
+from delt import (bevisvalg, kalibrering, maalinger, maskinprofil,
+                  personbinding, prompter, tilstander, typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -1803,6 +1803,29 @@ BOREALIS_GGUF_MAPPE = os.path.join(ROT, "modeller", "borealis-gguf")
 # hever seg aldri over KONTEKST_AUTO_TAK av seg selv, for et for høyt
 # tall gir ikke en feilmelding her, men et nativt krasj uten traceback.
 BOREALIS_KONTEKST = maskinprofil.verdi("borealis_kontekst", 4096)
+
+
+# R213: holder vi tilbake et svar som gjelder feil person?
+#
+# PÅ — etter at korpuset dømte, samme framgangsmåte som bevisvalg
+# (R195). En garanti som koster riktige svar er ikke en garanti, den er
+# en regresjon med god samvittighet. Målt:
+#
+#     før:  109 av 133      etter:  111 av 133
+#     rettet:     ikke_epost_marit, ikke_neste_utbetaling_marit
+#     regresjoner: INGEN
+#     determinisme: samme svar hver gang
+PERSONBINDING = (
+    os.environ.get("PERSONBINDING", "ja").strip().lower()
+    in ("ja", "1", "true", "on", "yes", "pa", "på"))
+
+# Svaret klienten får i stedet. Sier BÅDE at det ikke finnes for denne
+# personen OG at dokumentet kan inneholde det for en annen — ellers
+# ville en saksbehandler trodd opplysningen ikke fantes i bunken.
+PERSONBINDING_SVAR = (
+    "Ikke oppgitt for denne personen i dette dokumentet. (Dokumentet "
+    "inneholder opplysningen for en annen person — se advarselen for "
+    "hvilke sider.)")
 
 
 # Under dette er fila ikke en språkmodell. En 4B-modell er ~2,5 GB selv
@@ -7837,6 +7860,44 @@ def kan_svares_uten_modell(sporsmal: str) -> bool:
 def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                       handskrift: list, strekkoder: list,
                       strekkoder_lest: bool = True) -> dict:
+    """Svarkjernen MED personbindingsgarantien (R213).
+
+    Garantien maatte ligge her og ikke inne i kjernen: kjernen har elleve
+    returpunkter, og det VERSTE tilfellet gikk ut av et av de tidlige.
+    «Hva er e-postadressen til Marit Testperson?» ble besvart av den
+    deterministiske feltuttrekkeren — `modell_brukt: false` — med bunkens
+    eneste e-post, som var Olas. En sjekk plassert ved det siste
+    returpunktet saa aldri det svaret i det hele tatt.
+
+    Samme moenster som `_ocr_side_intern` og `_do_get_intern` ellers i
+    fila: kjernen gjoer jobben, innpakningen holder loeftet."""
+    kjerne = _svar_paa_sporsmal_intern(
+        raa_tekst, sporsmal, ocr_brukt, handskrift, strekkoder,
+        strekkoder_lest)
+    if not PERSONBINDING or not raa_tekst or kjerne.get("tom"):
+        return kjerne
+    _antall, _sider = del_i_sider(raa_tekst)
+    dom = personbinding.doem(sporsmal, kjerne.get("svar") or "", _sider)
+    if not dom["gjelder"]:
+        return kjerne
+    kjerne = dict(kjerne)
+    kjerne.setdefault("advarsler", []).append(
+        f"Spoersmaalet gjelder «{dom['navn']}», som staar paa side "
+        + ", ".join(str(x) for x in dom["personsider"])
+        + ". Verdiene i svaret sto bare paa side "
+        + ", ".join(str(x) for x in dom["funnet_paa"])
+        + " — altsaa hos en annen person. Svaret er derfor holdt "
+        "tilbake (R213).")
+    kjerne["svar"] = PERSONBINDING_SVAR
+    kjerne["personbinding"] = {
+        "holdt_tilbake": True, "navn": dom["navn"],
+        "personsider": dom["personsider"], "verdi_sider": dom["funnet_paa"]}
+    return kjerne
+
+
+def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
+                              handskrift: list, strekkoder: list,
+                              strekkoder_lest: bool = True) -> dict:
     """Felles kjerne for /spor og /dokument: beriker dokumentteksten
     (håndskriftmerking, strekkoder, stort-dokument-supplement,
     datoklassifisering), spør Borealis og kjører ALLE vaktene

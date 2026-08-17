@@ -115,7 +115,7 @@ def test_antall_forsok_skilles_fra_utfallet():
     """Det som var usynlig: et svar som traff første gang og et som
     måtte skrives om, så helt like ut."""
     import inspect
-    kilde = inspect.getsource(api.svar_paa_sporsmal)
+    kilde = inspect.getsource(api._svar_paa_sporsmal_intern)
     kode = "\n".join(l.split("#")[0] for l in kilde.splitlines())
     assert "tallvakt_forsok = 1" in kode
     assert "tallvakt_forsok = 2" in kode
@@ -124,7 +124,7 @@ def test_antall_forsok_skilles_fra_utfallet():
 
 def test_de_stoppede_tallene_foelger_med_i_svaret():
     import inspect
-    kilde = inspect.getsource(api.svar_paa_sporsmal)
+    kilde = inspect.getsource(api._svar_paa_sporsmal_intern)
     assert '"uverifiserte_tall": list(mangler)' in kilde
 
 

@@ -196,7 +196,7 @@ def test_svarveien_bruker_hele_lista():
     import inspect
 
     import dokument_api
-    kilde = inspect.getsource(dokument_api.svar_paa_sporsmal)
+    kilde = inspect.getsource(dokument_api._svar_paa_sporsmal_intern)
     assert "klassifiser_datoer(raa_tekst, maks=" not in kilde
     assert "MAKS_DATOER_I_PROMPT" in kilde
 

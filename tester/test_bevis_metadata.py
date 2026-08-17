@@ -107,7 +107,7 @@ def test_ingen_seleksjon_er_en_EGEN_tilstand_ikke_et_tomt_svar():
 def test_antall_sider_settes_paa_beviset():
     """«side 4, 5, 9» betyr noe helt annet av 10 enn av 500."""
     import inspect
-    kilde = inspect.getsource(api.svar_paa_sporsmal)
+    kilde = inspect.getsource(api._svar_paa_sporsmal_intern)
     assert 'bevis["antall_sider"]' in kilde
 
 
@@ -120,7 +120,7 @@ def test_prosaadvarselen_staar_fortsatt():
     nettleser skal fortsatt få vite at bare noen sider ble brukt —
     å bytte den ut med et objekt ville flyttet problemet, ikke løst det."""
     import inspect
-    kilde = inspect.getsource(api.svar_paa_sporsmal)
+    kilde = inspect.getsource(api._svar_paa_sporsmal_intern)
     assert "Svaret er basert på side" in kilde, (
         "prosaadvarselen er borte — da mister mennesket beskjeden om at "
         "svaret hviler på et utvalg")
@@ -131,7 +131,7 @@ def test_bevis_er_none_naar_seleksjonen_ikke_kjorte():
     en deterministisk vei uten modellen). Det er noe annet enn «alle
     sider ble brukt», og de to skal ikke se like ut."""
     import inspect
-    kilde = inspect.getsource(api.svar_paa_sporsmal)
+    kilde = inspect.getsource(api._svar_paa_sporsmal_intern)
     assert "bevis = None" in kilde
     assert '"bevis": None}' in kilde, (
         "de deterministiske returveiene setter ikke «bevis» — da mangler "
