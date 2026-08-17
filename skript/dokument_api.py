@@ -2771,6 +2771,21 @@ def _jobb_status(jobb: dict, ny_status: str, **felter) -> None:
     jobb["versjon"] = jobb.get("versjon", 1) + 1
     for k, v in felter.items():
         jobb[k] = v
+    # R214: §30 krever at den kanoniske livssyklusen brukes av «API,
+    # eventer, adaptere OG OBSERVABILITY». De tre første var på plass;
+    # metrikkene visste ingenting om jobbtilstander — `/metrics` kunne
+    # fortelle hvor mange forespørsler som kom inn, men ikke hvor mange
+    # jobber som endte i `feil` eller ble stående i `i_ko`.
+    #
+    # Etiketten er den OFFENTLIGE verdien fra `tilstander.offentlig()`,
+    # ikke den interne. Ellers ville et Grafana-panel vist «pågår» og
+    # «kjorer» som to ulike ting, og æøå i en metrikk-etikett er dessuten
+    # forbudt av §26.
+    try:
+        maalinger.tell("nav_jobb_tilstand_total",
+                       tilstand=tilstander.offentlig(ny_status))
+    except Exception:                                           # noqa: BLE001
+        pass    # en metrikk skal aldri kunne felle en jobb
 
 
 def _jobb_lagre(jobb: dict) -> None:

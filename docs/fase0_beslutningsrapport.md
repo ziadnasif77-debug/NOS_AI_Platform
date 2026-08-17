@@ -609,6 +609,76 @@ antakelse koster måneder.**
 
 ---
 
+## 11. §26 og §30 — full verifisering, punkt for punkt
+
+Denne tabellen er gått gjennom mot spesifikasjonsteksten, ikke mot
+hukommelsen. Hvert punkt er enten grønt med en referanse til hvor det
+er bevist, eller åpent med en eksplisitt grunn.
+
+### §26 Acceptance Criteria
+
+| # | Krav | Status | Bevis |
+|---|---|---|---|
+| 1 | 100 samtidige brukere → ingen prosessomfattende kollaps | **grønn** | R210: tjenesten svarte HTTP 200 rett etter stormen |
+| 2 | 500/1000-siders jobber asynkrone og observerbare | **grønn** | R200/R205 (500), R215 (1000) |
+| 3 | Interaktive beholder reservert kapasitet under batch-burst | **RØD** | R210: interaktiv p95 91 s mot batchens 720 ms |
+| 4 | Worker-krasj → ingen tap av ikke-ACKet arbeid | åpen | forutsetter kø = Phase 2, som §24.1 ikke har åpnet |
+| 5 | Duplicate delivery → ingen dobbel dyr prosessering | **grønn** | `Idempotency-Key`, `test_idempotens_form` |
+| 6 | Partial OCR eksplisitt, aldri presentert som full dekning | **grønn** | R165, `delvis`-tilstand, `varsler_ocr` |
+| 7 | Deterministisk extraction på komplett dokumentrepresentasjon | **grønn** | kanonisk representasjon |
+| 8 | Semantic cache aldri data fra et annet dokument | **grønn** | R216: nøkkelen er sha256 av innholdet + parametrene |
+| 9 | Resultater korrelerbare til job_id, modellversjon, evidence metadata | **grønn** | `jobb_id`, `_versjon_stempel()`, R207 |
+| 10 | GPU OOM isolert til Worker, ingen stille prosesskollaps | **grønn** | R163/R166 |
+| 11 | Rollback uten å endre klientintegrasjoner | **grønn** | `bytt_modell.py` |
+| 12 | UiPath-kontrakten ikke brutt | **grønn** | R118-vaktene |
+| 13 | Offline installasjon reproduserbar og checksum-verifisert | **grønn** | R211 |
+| 14 | Alle kritiske alarmer har navngitt operativ mottaker | åpen | organisatorisk — krever navn og vaktordning |
+| 15 | R6: 10 kjøringer, byte-for-byte identisk | **grønn** | R206 — og porten FANT et brudd |
+| 16 | Kanonisk state machine i API, eventer, adapter, logger, metrics | **grønn** | R198 + R214 (metrikkene manglet) |
+| 17 | R118 komplett nøkkelsett, null/[]/objekter | **grønn** | `test_spor_formstabilitet` |
+| 18 | Ingen æøå i maskinlesbar nøkkel eller enum | **grønn** | `test_tilstander`, R214 |
+| 19 | OCR-motorpolicy låst per Job, registrert i jobbmetadata | **grønn** | R199, verifisert over 500 og 1000 sider |
+| 20 | /innsyn 30-min TTL + sticky routing-policy | **grønn** (TTL) | R209 — sticky routing er en deployment-beslutning på flernode |
+| 21 | `test_portabilitet` grønn etter plattformendringer | **grønn** | kjørt etter hver endring, også etter Locust-installasjonen |
+
+### §30 Definition of Done
+
+| # | Krav | Status |
+|---|---|---|
+| 1 | R6 verifisert med minst 10 identiske kjøringer | **grønn** (R206) |
+| 2 | Canonical state machine brukt av API, eventer, adaptere **og observability** | **grønn** (R198 + R214) |
+| 3 | R118 testet, inkl. null/array/objekt og UiPath-bakoverkompatibilitet | **grønn** |
+| 4 | Repository constitution og `test_portabilitet` verifisert | **grønn** |
+| 5 | OCR Job-policy deterministisk, ingen stille motorbytte | **grønn** (R199) |
+| 6 | /innsyn TTL/sticky-routing testet i relevant deployment | **delvis** — TTL og sesjonspolicy testet; «relevant deployment» betyr flernode, som ikke finnes |
+
+### Det ene røde punktet
+
+**§26.3 er den eneste funksjonelle mangelen.** Interaktive forespørsler
+har ingen reservert kapasitet: `POST /jobb` køer arbeidet og svarer 202
+med en gang, mens det tunge skjer i arbeidstråden etterpå og spiser den
+kapasiteten de interaktive står og venter på. Målt p95: 91 s mot
+batchens 720 ms.
+
+Rettingen er en arkitekturendring — to atskilte baner med hvert sitt
+budsjett — og hører hjemme i en ADR med målt problem, baseline og
+acceptance test (§20.1). Den er ikke gjort, og den er ikke skjult.
+
+### De tre hullene denne gjennomgangen selv fant
+
+Alle tre kom fram ved å lese spesifikasjonen på nytt og sjekke KODEN,
+ikke ved å huske hva som var gjort:
+
+1. **§30.2 sa «og observability».** Livssyklusen var i API, eventer og
+   adaptere — men `/metrics` visste ingenting om jobbtilstander. Den
+   kunne fortelle hvor mange forespørsler som kom inn, ikke hvor mange
+   jobber som endte i `feil` (R214).
+2. **§26.8 var oppfylt, men uprøvd.** Cachen nøkler på innhold, ikke
+   filnavn — riktig, og uten en eneste test som sa det (R216).
+3. **§26.2 sa «500/1000».** Bare 500 var kjørt (R215).
+
+---
+
 ## 10. Exit-gate: kan Phase 1 starte?
 
 Utredningen krever måling av sju ledd før Phase 1 (§24.1):

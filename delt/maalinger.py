@@ -65,6 +65,16 @@ _BESKRIVELSER = {
                            "(stoppet/rent)", "counter"),
     "nav_gjennomgang_total": ("Dokumenter sendt til menneskelig "
                               "gjennomgang, per grunn", "counter"),
+    # R214 (§30): livssyklusen skal brukes av «API, eventer, adaptere OG
+    # observability». De tre første var på plass; her var det et hull —
+    # `/metrics` kunne fortelle hvor mange forespørsler som kom inn, men
+    # ikke hvor mange jobber som endte i `feil` eller ble stående i
+    # `i_ko`. Etiketten er den OFFENTLIGE tilstanden fra
+    # `delt/tilstander.py`, så et dashbord og et API-svar bruker samme
+    # ord om samme ting.
+    "nav_jobb_tilstand_total": ("Tilstandsoverganger for jobber, per "
+                                "kanonisk tilstand (delt/tilstander.py)",
+                                "counter"),
     "nav_i_flukt": ("Tunge forespørsler under behandling akkurat nå", "gauge"),
     "nav_kapasitet": ("Hvor mange tunge forespørsler maskinen slipper inn "
                       "samtidig", "gauge"),
