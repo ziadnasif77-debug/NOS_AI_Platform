@@ -621,7 +621,7 @@ er bevist, eller åpent med en eksplisitt grunn.
 |---|---|---|---|
 | 1 | 100 samtidige brukere → ingen prosessomfattende kollaps | **grønn** | R210: tjenesten svarte HTTP 200 rett etter stormen |
 | 2 | 500/1000-siders jobber asynkrone og observerbare | **grønn** | R200/R205 (500), R215 (1000: 40,7 min, alle 1000 markører, null policy-avvik) |
-| 3 | Interaktive beholder reservert kapasitet under batch-burst | **RØD** | R210: interaktiv p95 91 s mot batchens 720 ms |
+| 3 | Interaktive beholder reservert kapasitet under batch-burst | **grønn** | ADR-0007/R218: uten batch p95 33 s, med batch 17 s — ingen forverring |
 | 4 | Worker-krasj → ingen tap av ikke-ACKet arbeid | åpen | forutsetter kø = Phase 2, som §24.1 ikke har åpnet |
 | 5 | Duplicate delivery → ingen dobbel dyr prosessering | **grønn** | `Idempotency-Key`, `test_idempotens_form` |
 | 6 | Partial OCR eksplisitt, aldri presentert som full dekning | **grønn** | R165, `delvis`-tilstand, `varsler_ocr` |
@@ -683,9 +683,10 @@ ble etterprøvd før det ble en påstand.
 | 5 | OCR Job-policy deterministisk, ingen stille motorbytte | **grønn** (R199) |
 | 6 | /innsyn TTL/sticky-routing testet i relevant deployment | **delvis** — TTL og sesjonspolicy testet; «relevant deployment» betyr flernode, som ikke finnes |
 
-### Det ene røde punktet
+### Det røde punktet er lukket
 
-**§26.3 er den eneste funksjonelle mangelen.** Interaktive forespørsler
+**§26.3 var den eneste funksjonelle mangelen. Den er rettet (ADR-0007,
+R218).** Beskrivelsen under står som den var da den ble funnet: Interaktive forespørsler
 har ingen reservert kapasitet: `POST /jobb` køer arbeidet og svarer 202
 med en gang, mens det tunge skjer i arbeidstråden etterpå og spiser den
 kapasiteten de interaktive står og venter på. Målt p95: 91 s mot

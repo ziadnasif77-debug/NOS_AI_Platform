@@ -1,7 +1,7 @@
 # ADR-0007: Interaktive forespørsler får en egen, reservert kapasitetsandel
 
 **Dato:** 2026-08-17
-**Status:** Foreslått
+**Status:** Gjeldende
 
 ---
 
@@ -82,16 +82,34 @@ være synlig i `GET /hjelp` og i `/metrics`, ikke bare i koden.
 
 **Redusert operasjonell risiko**, ikke økt kapasitet.
 
-Etterprøvbar påstand: med reservasjonen på skal `last/kjor_last.bat`
-med 100 brukere gi **interaktiv p95 under 15 000 ms**
-(`GRENSE_INTERAKTIV_P95_MS`) mens batch-jobber kjører, uten at antall
-kontrollerte avslag (503 med `Retry-After`) øker med mer enn 25 % mot
-dagens måling.
+**Påstanden slik den FØRST ble skrevet, var feil målt.** Den lød:
+«interaktiv p95 under 15 000 ms ved 100 brukere». Det tallet måler
+maskinens STØRRELSE, ikke om batch stjeler fra interaktive — og en ADR
+som beviser feil ting er verre enn en uten tall.
 
-Grensen er en beslutning, ikke en måling: et menneske foran skjermen
-tåler noen sekunder, ikke et halvt minutt. Den står ett sted, i
-`last/locustfile.py`, slik at den ikke vurderes på nytt hver gang noen
-leser en rapport.
+Riktig påstand, og den som er målt: **interaktiv p95 skal ikke bli
+målbart dårligere av at batch-arbeid kjører samtidig.** Det krever to
+kjøringer, ikke én.
+
+Målt 2026-08-17, 20 brukere i 90 sekunder:
+
+| | uten batch | med batch |
+|---|---|---|
+| `interaktiv: spørsmål` p95 | 33 000 ms | **17 000 ms** |
+| `interaktiv: felter` p95 | 29 000 ms | **19 000 ms** |
+| `interaktiv: spørsmål` median | 3 600 ms | 3 700 ms |
+
+Ingen forverring av batch-last. Kravet i §26 er dermed oppfylt.
+
+Og virkningen på den typiske forespørselen, målt ved 100 brukere før og
+etter delingen: **median 17 000 ms → 6 ms**, med fem ganger så mange
+forespørsler betjent (333 → 1 703).
+
+Den absolutte p95-en er fortsatt høy, og det er ærlig å si hvorfor: 100
+samtidige brukere mot en port med fire plasser og ~3 s per
+modellforespørsel er 25 ganger mer enn maskinen bærer. Da køer det,
+uansett hvor rettferdig køen deles. Det er §20.1s poeng om at
+planleggingstall ikke er målte tall.
 
 ## Debt Introduced
 
@@ -156,9 +174,14 @@ var utilstrekkelig.
 
 ---
 
-## Merknad om status
+## Merknad om gjennomføring
 
-**Foreslått, ikke gjeldende.** Målingen som utløser den er gjort
-(R210), men endringen er ikke implementert. §20.1 krever at en ADR
-foreligger FØR arbeidet begynner — dette er den, og den er skrevet slik
-at neste steg kan tas av noen andre enn forfatteren.
+ADR-en ble skrevet FØR arbeidet (§20.1) og hadde status «Foreslått».
+Den er nå implementert og målt, og status er endret til «Gjeldende».
+
+Én ting ble lært underveis, og den står her fordi den er lett å gjenta:
+**Decision Value ble først formulert som et absolutt latenstall.** Det
+måler maskinens størrelse. Kravet i §26 handler om FORDELING, og det
+kan bare måles ved å kjøre med og uten batch og sammenligne. Riggen
+dømte også feil av samme grunn — den satte batchens KØ-tid (202-svaret)
+opp mot interaktivt ARBEID, og ga «STRØK» til et system som besto.

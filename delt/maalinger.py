@@ -75,6 +75,14 @@ _BESKRIVELSER = {
     "nav_jobb_tilstand_total": ("Tilstandsoverganger for jobber, per "
                                 "kanonisk tilstand (delt/tilstander.py)",
                                 "counter"),
+    # ADR-0007. De to hører sammen: `nav_kapasitet` er hele grensen,
+    # `nav_tak_batch` er det jobbarbeidet får bruke, og differansen er
+    # den reserverte andelen. Uten dem ser lavere batch-gjennomstrømning
+    # ut som en regresjon i stedet for en beslutning.
+    "nav_reservert_interaktiv": ("Plasser batch-arbeid aldri får ta "
+                                 "(ADR-0007)", "gauge"),
+    "nav_tak_batch": ("Hvor mange plasser jobbarbeidet får bruke",
+                      "gauge"),
     "nav_i_flukt": ("Tunge forespørsler under behandling akkurat nå", "gauge"),
     "nav_kapasitet": ("Hvor mange tunge forespørsler maskinen slipper inn "
                       "samtidig", "gauge"),

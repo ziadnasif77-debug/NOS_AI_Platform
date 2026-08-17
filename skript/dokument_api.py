@@ -354,6 +354,20 @@ def mal_kapasitet() -> dict:
     }
 
 
+# ADR-0007: hvor mange av plassene batch-arbeidet ALDRI får ta.
+#
+# §26 krever at «interaktive forespørsler beholder reservert kapasitet
+# under batch-burst». Målt i R210 gjorde de ikke det: interaktiv p95 var
+# 91 000 ms mot batchens 720 ms.
+#
+# Utledes av maskinen (R190-mønsteret) og ikke satt fritt: én plass på en
+# liten maskin, en firedel på en stor. Et gulv på 1 håndheves i
+# `_tak_for` — en reservasjon på null er ingen reservasjon.
+RESERVERT_INTERAKTIV = int(os.environ.get(
+    "RESERVERT_INTERAKTIV",
+    str(max(1, (maskinprofil.verdi("samtidige_per_gpu", 4) or 4) // 4))))
+
+
 class _Kapasitetsport:
     """Slipper inn så mange samtidige tunge forespørsler som maskinen
     faktisk bærer NÅ. Grensen måles på nytt hvert KAPASITET_MAAL_S, så en
@@ -377,17 +391,45 @@ class _Kapasitetsport:
             self._kapasitet = mal_kapasitet()
         return self._kapasitet
 
+    def _tak_for(self, for_batch: bool) -> int:
+        """Hvor mange plasser denne typen arbeid får bruke.
+
+        ADR-0007: batch stopper FØR den siste plassen. Interaktivt får
+        hele grensen; batch får grensen minus den reserverte andelen.
+        Kalles med _las holdt."""
+        grense = self._gjeldende()["grense"]
+        if not for_batch:
+            return grense
+        # Gulv på 1: en reservasjon på null er ingen reservasjon, og
+        # skal ikke kunne konfigureres bort ved et uhell. Og batch må
+        # alltid ha minst én plass, ellers stopper jobbene helt.
+        reservert = max(1, min(grense - 1, RESERVERT_INTERAKTIV))
+        return max(1, grense - reservert)
+
     def status(self) -> dict:
         with self._las:
             kap = dict(self._gjeldende())
             kap["i_arbeid"] = self._inne
+            # ADR-0007: synlig i /hjelp. En operatør som lurer på hvorfor
+            # batch går saktere enn maskinen tåler, skal finne svaret
+            # her — ikke i koden.
+            kap["reservert_interaktiv"] = (kap["grense"]
+                                           - self._tak_for(True))
+            kap["tak_batch"] = self._tak_for(True)
             return kap
 
-    def ta(self, frist: float) -> bool:
+    def ta(self, frist: float, for_batch: bool = False) -> bool:
+        """`for_batch=True` for jobbarbeidet, som må vike (ADR-0007).
+
+        Målt før delingen (R210, 100 brukere): interaktiv p95 var
+        91 000 ms mot batchens 720 ms — omvendt av hva navnene antyder.
+        Grunnen var at `POST /jobb` bare KØER arbeidet og svarer 202 med
+        en gang, mens arbeidstråden etterpå gikk helt UTENOM denne
+        porten og spiste kapasiteten de interaktive ventet på."""
         slutt = time.monotonic() + frist
         with self._las:
             while True:
-                if self._inne < self._gjeldende()["grense"]:
+                if self._inne < self._tak_for(for_batch):
                     self._inne += 1
                     return True
                 igjen = slutt - time.monotonic()
@@ -3036,11 +3078,36 @@ def _jobb_arbeider() -> None:
                         aapne.append(d)
                 return d
 
+            def _vent_paa_batchplass():
+                """ADR-0007: jobbarbeidet må gjennom kapasitetsporten det
+                før gikk helt utenom.
+
+                Plassen tas PER SIDE, ikke per jobb. Holdt arbeidstråden
+                én plass i 40 minutter, ville reservasjonen bare flyttet
+                problemet: interaktive ville ventet på en plass som aldri
+                ble ledig. Per side slipper de inn mellom sidene.
+
+                Ingen frist utover avbrudd: en jobb er asynkron, ingen
+                sitter og venter på HTTP-svaret, og batch har alltid minst
+                én plass garantert av `_tak_for`."""
+                while not jobb.get("avbrutt"):
+                    if _kapasitet_port.ta(2.0, for_batch=True):
+                        return True
+                return False
+
             def _les_en_side(i):
                 """Én Page Task: rendre + OCR + strekkoder — det samme
                 arbeidet som før, bare flyttbart til en egen tråd."""
                 if jobb.get("avbrutt"):
                     return None
+                if not _vent_paa_batchplass():
+                    return None
+                try:
+                    return _les_en_side_intern(i)
+                finally:
+                    _kapasitet_port.slipp()
+
+            def _les_en_side_intern(i):
                 d = _traad_dokument()
                 side = d[i]
                 pix = side.get_pixmap(matrix=ocr_skala(d, side))
@@ -5122,6 +5189,12 @@ class Handler(BaseHTTPRequestHandler):
             kap = _kapasitet_port.status()
             maalinger.sett("nav_kapasitet", kap.get("grense") or 0)
             maalinger.sett("nav_i_flukt", kap.get("i_arbeid") or 0)
+            # ADR-0007: uten disse to ville en operatør sett at batch går
+            # saktere enn maskinen tåler, uten å kunne se hvorfor — og
+            # lest det som en regresjon i stedet for en beslutning.
+            maalinger.sett("nav_reservert_interaktiv",
+                           kap.get("reservert_interaktiv") or 0)
+            maalinger.sett("nav_tak_batch", kap.get("tak_batch") or 0)
             # HVA som binder kapasiteten er hele poenget for
             # kapasitetsplanleggingen: er det GPU, blir mer RAM bortkastet.
             for navn in ("gpu", "cpu", "ram"):

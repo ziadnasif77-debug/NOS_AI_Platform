@@ -24,15 +24,44 @@ from delt import maskinprofil                                   # noqa: E402
 _KILDE = open("skript/dokument_api.py", encoding="utf-8").read()
 
 
+def _uttrykk_etter(navn):
+    """Verdien til `navn = …`, også når den går over flere linjer.
+
+    Leste før BARE første linje. Det holdt så lenge alle konstantene var
+    ettlinjede, og brøt i det øyeblikket en av dem ikke var det:
+    `RESERVERT_INTERAKTIV` (ADR-0007) er tre linjer, og utdraget ga
+    «SyntaxError: '(' was never closed» — en feil som ser ut som om
+    KODEN er gal, mens det var lesningen av den som var det.
+
+    Nå leses det til parentesene går opp."""
+    rest = _KILDE.split(navn + " = ", 1)[1]
+    ut, dybde = [], 0
+    for linje in rest.splitlines():
+        ut.append(linje)
+        dybde += linje.count("(") - linje.count(")")
+        if dybde <= 0:
+            break
+    return "\n".join(ut)
+
+
 def _last_kapasitetskode():
     """Kjører kapasitetsdelen av dokument_api i et eget navnerom."""
     start = _KILDE.index("def _gpu_ressurser")
     slutt = _KILDE.index("_kapasitet_port = _Kapasitetsport()")
-    ns = {"os": os, "threading": threading, "time": time}
+    # `maskinprofil` med: utdraget inneholder nå konstantlinjer som slår
+    # opp i profilen (R190, ADR-0007), og de kjøres på nytt av exec-en
+    # under. Uten navnet her feiler utdraget med NameError.
+    ns = {"os": os, "threading": threading, "time": time,
+          "maskinprofil": maskinprofil}
     for navn in ("SAMTIDIGE_PER_GPU", "SAMTIDIGE_UTEN_GPU", "RAM_PER_JOBB_MB",
                  "VRAM_PER_JOBB_MB", "MIN_SAMTIDIGE", "MAKS_SAMTIDIGE_TAK",
-                 "KAPASITET_MAAL_S"):
-        linje = _KILDE.split(navn + " = ")[1].split("\n")[0]
+                 "KAPASITET_MAAL_S",
+                 # ADR-0007: porten deler kapasiteten i to baner, og
+                 # `_tak_for` slår opp i denne. Uten den her feiler
+                 # utdraget med NameError — ikke fordi koden er gal,
+                 # men fordi navnerommet er ufullstendig.
+                 "RESERVERT_INTERAKTIV"):
+        linje = _uttrykk_etter(navn)
         # `maskinprofil` med: takene hentes nå fra maskinprofilen (R190),
         # så konstantlinjene kan referere den. Profilen leser miljøet
         # selv, og gir ankermaskinens verdier her.
