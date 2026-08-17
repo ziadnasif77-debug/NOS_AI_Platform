@@ -55,7 +55,9 @@ README-avsnittet om hva tjenesten ikke gjør.
 
 ## Owner
 
-Prosjekteier NAV dokument-AI.
+**Ziad Nasif** — eier av dokument-API-et, og den som svarer når
+review-triggeren slår inn. Overføres skriftlig i denne fila hvis
+eierskapet flyttes.
 
 ## Review Trigger
 

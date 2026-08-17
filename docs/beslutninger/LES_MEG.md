@@ -55,3 +55,4 @@ De to utfyller hverandre, og blandes ikke:
 | [0004](ADR-0004-mellombaand-av-som-standard.md) | Mellombåndet i gjennomgangsrutingen er AV som standard | Midlertidig | Kalibreringstabellen har nok data (ECE < 0,05) |
 | [0005](ADR-0005-kontekst-auto-tak.md) | Maskinprofilen hever aldri konteksten over et fast tak | Gjeldende | Et krasjfritt løp på et større kort er dokumentert |
 | [0006](ADR-0006-plattformlag-utsatt.md) | Kø/database/multi-node utsettes til Phase 0 er målt | Gjeldende | Målt bottleneck som lokal fan-out ikke løser |
+| [0007](ADR-0007-reservert-kapasitet-for-interaktive.md) | Interaktive får en egen, reservert kapasitetsandel | **Foreslått** | Interaktiv p95 over 15 s i to påfølgende lastkjøringer |
