@@ -114,9 +114,9 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import (bevisvalg, kalibrering, maalinger, maskinprofil,
-                  personbinding, prompter, tabeller, tilstander,
-                  typeforventninger)
+from delt import (bevisvalg, dokumentruting, kalibrering, maalinger,
+                  maskinprofil, personbinding, prompter, sidegeometri,
+                  tilstander, typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -169,9 +169,17 @@ BEVISVALG_MAKS_SIDER = int(os.environ.get("BEVISVALG_MAKS_SIDER", "5"))
 # (R219). Uten dette er en tabell bare én celle per linje, og modellen
 # må gjette hvilken kolonne en verdi hørte til — den gjettet feil på
 # fem korpusspørsmål på rad, og hentet hver gang et EKTE tall fra feil
-# kolonne. Samme verdirom som de andre bryterne (R12).
-TABELLER = (os.environ.get("TABELLER", "ja").strip().lower()
-            in ("ja", "1", "true", "on", "yes", "pa", "på"))
+# kolonne. Samme bryter setter tegnbiter i utfylte felter sammen igjen
+# til ord (R227): «Dr a mm e n» var svaret på hvor egenerklæringen ble
+# underskrevet. Samme verdirom som de andre bryterne (R12).
+SIDEGEOMETRI = (os.environ.get("SIDEGEOMETRI", "ja").strip().lower()
+                in ("ja", "1", "true", "on", "yes", "pa", "på"))
+# Nevner spørsmålet ETT dokument i bunken, hentes svaret derfra (R226).
+# En bunke er ikke ett dokument, og «hvem er saksbehandler for klagen?»
+# ble besvart med vedtakets saksbehandler fra side 1. Samme verdirom
+# som de andre bryterne (R12).
+DOKUMENTRUTING = (os.environ.get("DOKUMENTRUTING", "ja").strip().lower()
+                  in ("ja", "1", "true", "on", "yes", "pa", "på"))
 # OCR er ekte GPU-arbeid per side — standardgrense, kan økes per
 # forespørsel med multipart-feltet maks_sider (tak: OCR_TAK_SIDER).
 # Kuttes det, sier svaret det ALLTID eksplisitt i 'advarsel'.
@@ -1636,7 +1644,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
         total_tekst += len(tekst.strip())
         sider.append({"side_nummer": i, "tegn": len(tekst),
                       "felter": utvid_entiteter(tekst, {})})
-        tekster.append(tabeller.med_tabeller(side, tekst) if TABELLER
+        tekster.append(sidegeometri.bygg_om(side, tekst) if SIDEGEOMETRI
                        else tekst)
     doc.close()
     if len(tekster) > 1:
@@ -3033,9 +3041,9 @@ def _jobb_arbeider() -> None:
             tekstlag = "\n".join(sider_tekst)
             if len(tekstlag.strip()) >= 20:
                 # Terskelen over er sjekket på ren tekst (se analyser_bytes);
-                # først når siden ER et tekstlag, bygges tabellene tilbake.
-                if TABELLER:
-                    sider_tekst = [tabeller.med_tabeller(s, t)
+                # først når siden ER et tekstlag, bygges den om.
+                if SIDEGEOMETRI:
+                    sider_tekst = [sidegeometri.bygg_om(s, t)
                                    for s, t in zip(doc, sider_tekst)]
                     tekstlag = "\n".join(sider_tekst)
                 doc.close()
@@ -8099,7 +8107,16 @@ def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     if BEVISVALG and len((raa_tekst or "").strip()) >= 5:
         _antall, _sider = del_i_sider(raa_tekst)
         if _antall > 1:
-            bevis = bevisvalg.velg_sider(_sider, sporsmal,
+            # R226: nevner spørsmålet ETT av dokumentene i bunken,
+            # snevres kandidatene til det FØR poengsettingen. Bevisvalg
+            # rangerer sider mot hverandre og kan ikke vite at side 1 og
+            # side 9 tilhører ulike dokumenter — «hvem er saksbehandler
+            # for klagen?» hentet derfor vedtakets saksbehandler.
+            _rutet = (dokumentruting.rut(sporsmal, raa_tekst)
+                      if DOKUMENTRUTING else None)
+            _kandidater = ({nr: t for nr, t in _sider.items()
+                            if nr in _rutet["sider"]} if _rutet else _sider)
+            bevis = bevisvalg.velg_sider(_kandidater, sporsmal,
                                          maks_sider=BEVISVALG_MAKS_SIDER)
             # R207: sidetallet er ALT registrert — men bare som en
             # norsk setning i `advarsler`. §26 krever at et resultat
@@ -8109,15 +8126,25 @@ def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
             # objekt. Setningen blir stående — mennesker leser den,
             # maskiner leser objektet.
             bevis["antall_sider"] = _antall
-            if bevis["valgte"]:
-                tekst = bevisvalg.bygg_utvalgstekst(
-                    _sider, bevis["valgte"], _antall)
+            # R118: nøkkelen finnes alltid, null når rutingen ikke slo til.
+            bevis["dokument"] = _rutet
+            # Traff rutingen, men skilte ingen side seg ut INNENFOR
+            # dokumentet, er dokumentets egne sider fortsatt en ekte
+            # innsnevring — og den skal beholdes, ikke falle tilbake
+            # til hele bunken.
+            _valgte = bevis["valgte"] or (_rutet["sider"] if _rutet else [])
+            if _valgte:
+                bevis["valgte"] = _valgte
+                tekst = bevisvalg.bygg_utvalgstekst(_sider, _valgte, _antall)
+                _grunn = ("bevisvalg" if not _rutet else
+                          f"dokumentruting: spørsmålet gjelder "
+                          f"{_rutet['type']}-dokumentet i bunken")
                 advarsler.append(
                     "Svaret er basert på side "
-                    + ", ".join(str(n) for n in bevis["valgte"])
+                    + ", ".join(str(n) for n in _valgte)
                     + f" av {_antall} — de øvrige ble vurdert som "
                     "irrelevante for spørsmålet og ikke sendt til "
-                    "modellen (bevisvalg)")
+                    f"modellen ({_grunn})")
             else:
                 bevis = None
     # Merk håndskriftregioner så Borealis kan skille dem fra trykt

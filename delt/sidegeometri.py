@@ -1,5 +1,22 @@
 """
-Bygger tabeller tilbake fra ord med posisjon — kolonnene overlever (R219).
+Bygger sideteksten opp igjen fra ordenes POSISJON (R219, R227).
+
+`get_text()` gir en flat strøm av linjer. To slags informasjon går tapt
+på veien, og begge finnes fortsatt i koordinatene:
+
+  KOLONNENE i en tabell. Én celle per linje, og rekkefølgen er alt
+  modellen har å gjette struktur ut av.
+
+  ORDGRENSENE i utfylte felter. Håndskrift og skjemafelter kommer tegn
+  for tegn — «Dr a mm e n», «1 8.0 6. 20 2 6» — fordi hvert tegn er sin
+  egen tekstoperasjon i PDF-en. Modellen svarte «Dr a mm e n» på
+  spørsmålet om hvor egenerklæringen var underskrevet, og leste
+  «8. juni 2020» ut av mottatt-datoen 18.06.2026.
+
+Begge løses av det samme: les ordene med koordinatene sine, og sett
+teksten sammen igjen ut fra hvor de STÅR.
+
+TABELLENE — KOLONNENE OVERLEVER
 
 Målt på beregningstabellen i et sykepengevedtak. Modellen fikk fem
 spørsmål om den, og bommet på alle fem — men ikke ved å dikte:
@@ -49,6 +66,20 @@ STIL = (os.environ.get("TABELLSTIL", "navngitt").strip().lower()
 # mens «970» og «41» står 51 fra hverandre og er to kolonner.
 CELLEGAP = 12.0
 
+# Under dette hører bitene til SAMME ORD, og settes sammen uten
+# mellomrom. Målt på skjemaene i testbunken er de to avstandene skarpt
+# atskilt: bitene i et håndskrevet felt står −1,4 til +0,5 punkter fra
+# hverandre (de rører hverandre eller overlapper), mens et ekte
+# ordmellomrom er 1,8 til 3,7.
+#
+# Terskelen er en ANDEL av tegnbredden på linja, ikke et fast tall:
+# et fast tall er bundet til skriftstørrelsen, og en side med liten
+# skrift ville fått vanlige ord limt sammen. Målt ga 0,35 nettopp det
+# («Leggdennesida», «NAVSkanning» på returslippen), 0,25 slo sammen
+# «I. Hansen» til «I.Hansen», og 0,20 traff hver eneste håndskriftlinje
+# i bunken uten å røre en eneste trykt.
+BITGAP_ANDEL = 0.20
+
 # Loddrett slingring innenfor samme RAD. Tekstlinjer i en tabell ligger
 # ikke på nøyaktig samme y — en brøkdel av et punkt er vanlig.
 RADSLING = 3.0
@@ -75,10 +106,52 @@ def _rader(ord_liste, sling=RADSLING):
     return [(y, sorted(rader[y])) for y in sorted(rader)]
 
 
+def _tegnbredde(rad) -> float:
+    """Median bredde per tegn på linja — målestokken for avstandene."""
+    bredder = sorted((x1 - x0) / max(1, len(t))
+                     for x0, x1, t in rad if (t or "").strip())
+    if not bredder:
+        return 0.0
+    midt = len(bredder) // 2
+    return (bredder[midt] if len(bredder) % 2
+            else (bredder[midt - 1] + bredder[midt]) / 2)
+
+
+def _slaa_sammen_biter(rad):
+    """Tegnbiter fra samme ord satt sammen igjen, uten mellomrom.
+
+    Et utfylt skjemafelt er én tekstoperasjon per tegn i PDF-en, og
+    `get_text("words")` leverer dem som separate «ord». Da blir stedet
+    egenerklæringen er underskrevet, stående som «Dr a mm e n», og
+    mottatt-datoen på returslippen som «1 8.0 6. 20 2 6» — som modellen
+    leste som «8. juni 2020».
+
+    Bitene røper seg på avstanden: de rører hverandre. Se `BITGAP_ANDEL`
+    for hvorfor terskelen er en andel av tegnbredden og ikke et tall."""
+    if len(rad) < 2:
+        return list(rad)
+    grense = BITGAP_ANDEL * _tegnbredde(rad)
+    if grense <= 0:
+        return list(rad)
+    ut = [list(rad[0])]
+    for x0, x1, tekst in rad[1:]:
+        if x0 - ut[-1][1] < grense:
+            ut[-1][1] = x1
+            ut[-1][2] += tekst
+        else:
+            ut.append([x0, x1, tekst])
+    return [tuple(c) for c in ut]
+
+
 def _celler(rad, gap=CELLEGAP):
-    """Ord slått sammen til celler. Returnerer [(x_start, tekst), …]."""
+    """Ord slått sammen til celler. Returnerer [(x_start, tekst), …].
+
+    To nivåer: først settes tegnbiter sammen til ORD (uten mellomrom),
+    så settes ord sammen til CELLER (med mellomrom). Rekkefølgen er
+    ikke likegyldig — slår man sammen til celler først, er bitene
+    allerede limt med mellomrom mellom seg."""
     ut = []
-    for x0, x1, tekst in rad:
+    for x0, x1, tekst in _slaa_sammen_biter(rad):
         if ut and x0 - ut[-1][2] <= gap:
             ut[-1] = (ut[-1][0], ut[-1][1] + " " + tekst, x1)
         else:
@@ -279,13 +352,24 @@ def _radlinje(tab: dict, rad: list, er_overskrift: bool) -> str:
     return " | ".join(deler)
 
 
-def med_tabeller(side, tekst: str) -> str:
-    """Sideteksten der tabellene har fått kolonnene sine tilbake.
+def _har_biter(ord_liste) -> bool:
+    """Finnes det tegnbiter på siden som hører til samme ord?"""
+    for _y, rad in _rader(ord_liste):
+        if len(_slaa_sammen_biter(rad)) < len(rad):
+            return True
+    return False
 
-    `side` er et PyMuPDF-sideobjekt. Har siden ingen tabell, leveres
-    teksten fra kalleren urørt — vi bytter ikke ut `get_text()` for
-    sider som ikke trenger det. Feiler ordhentingen, samme sak: en
-    tabell vi ikke klarte å bygge, skal ikke koste dokumentet."""
+
+def bygg_om(side, tekst: str) -> str:
+    """Sideteksten bygget opp igjen fra ordenes posisjon.
+
+    `side` er et PyMuPDF-sideobjekt. Teksten byttes bare ut når siden
+    har noe å vinne på det — en tabell, eller ord som er delt i
+    tegnbiter. Har den ingen av delene, leveres `get_text()` urørt; vi
+    skriver ikke om sider som ikke trenger det.
+
+    Feiler ordhentingen, leveres teksten også urørt: en side vi ikke
+    klarte å bygge om, skal ikke koste dokumentet."""
     try:
         ord_ = [(o[0], o[1], o[2], o[4]) for o in side.get_text("words")]
     except Exception:                                           # noqa: BLE001
@@ -293,7 +377,7 @@ def med_tabeller(side, tekst: str) -> str:
     if not ord_:
         return tekst
     try:
-        if not _blokker(_linjer(ord_)):
+        if not _blokker(_linjer(ord_)) and not _har_biter(ord_):
             return tekst
         ny = sidetekst(ord_)
     except Exception:                                           # noqa: BLE001

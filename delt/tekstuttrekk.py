@@ -2275,6 +2275,13 @@ _DOKUMENTTYPER = [
     ("sykmelding", r"sykmelding|sjukmelding"),
     ("klage", r"\bklage[nr]?\b|\bklagar\b|klage p(?:å|aa|a)"),
     ("egenerklaring", r"egenerkl(?:æ|ae|a)ring"),
+    # Returslippen er skanneløypas eget følgeark, og den LISTER OPP hva
+    # bunken inneholder: «Dokumenttype: Egenerklaering og legeerklaering».
+    # Uten en egen type fant tittelen ingenting, brødteksten fikk
+    # bestemme, og slippen ble klassifisert som en legeerklæring — den
+    # dokumenttypen den nevnte. Et følgeark som arver etiketten til
+    # dokumentene det følger, gjør bunkedelingen verre, ikke bedre.
+    ("returslipp", r"returslipp|retur[- ]?slipp|dokumentkontroll"),
     ("meldekort", r"meldekort"),
     ("pensjonsbrev", r"pensjonsbrev"),
     ("attest", r"\battest"),
@@ -2300,6 +2307,7 @@ DOKUMENTTYPE_TERM = {
     "sykmelding": "Sykmelding",
     "klage": "Klage",
     "egenerklaring": "Egenerklæring",
+    "returslipp": "Returslipp",
     "meldekort": "Meldekort",
     "pensjonsbrev": "Pensjonsbrev",
     "attest": "Attest",
@@ -2338,21 +2346,37 @@ def _tittelen(tekst: str) -> str:
     return "\n".join(linjer)
 
 
-def gjett_dokumenttype(tekst: str) -> str:
-    """Dokumentets type, avgjort av TITTELEN når den sier noe.
+def dokumenttype_i_tittel(tekst: str) -> str:
+    """Typen TITTELEN sier, eller "" — brødteksten spørres ikke.
+
+    Skilt ut fordi de to kildene er ulikt sterke, og bunkedelingen kan
+    bare bygge på den sterke. En tittel ER en kunngjøring: her begynner
+    et nytt dokument, og det er dette slaget. Et treff i brødteksten er
+    bare et ord som forekommer — en klage nevner vedtaket den klager
+    på, en returslipp lister opp hva bunken inneholder, og en side midt
+    i et vedtak kan nevne en faktura. Delte vi på det, ville hvert
+    dokument sprukket opp i småbiter ved første ord som lignet.
 
     Rekkefølgen i tittelen avgjør: «Klage på vedtak om …» er en KLAGE,
     ikke et vedtak — dokumentets egen art står først, og det den handler
-    OM kommer etter. Teller vi i stedet forekomster, vinner «vedtak»,
-    fordi en klage nevner vedtaket den klager på mange ganger."""
+    OM kommer etter."""
     tittel = _tittelen(tekst)
     i_tittel = []
     for navn, monster in _DOKUMENTTYPER:
         treff = re.search(monster, tittel, re.IGNORECASE)
         if treff:
             i_tittel.append((treff.start(), -len(treff.group(0)), navn))
+    return min(i_tittel)[2] if i_tittel else ""
+
+
+def gjett_dokumenttype(tekst: str) -> str:
+    """Dokumentets type, avgjort av TITTELEN når den sier noe.
+
+    Teller vi i stedet forekomster, vinner «vedtak», fordi en klage
+    nevner vedtaket den klager på mange ganger."""
+    i_tittel = dokumenttype_i_tittel(tekst)
     if i_tittel:
-        return min(i_tittel)[2]
+        return i_tittel
 
     # Ingen type i tittelen: da får brødteksten bestemme, som før
     beste, beste_poeng = "", 0

@@ -1,5 +1,5 @@
 """
-Tester for tabellgjenoppbyggingen (delt/tabeller.py, R219).
+Tester for sidegeometrien (delt/sidegeometri.py, R219, R227).
 
 Feilen som ga opphav til modulen var ikke at modellen diktet — den
 hentet ekte tall fra feil kolonne, fordi kolonnene ikke fantes lenger i
@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, ".")
 
-from delt import tabeller                                       # noqa: E402
+from delt import sidegeometri                            # noqa: E402
 
 
 def _ord(rader):
@@ -51,7 +51,7 @@ BEREGNING = _ord([
 
 @pytest.fixture
 def tabell():
-    funnet = tabeller.finn_tabeller(BEREGNING)
+    funnet = sidegeometri.finn_tabeller(BEREGNING)
     assert len(funnet) == 1, f"forventet én tabell, fikk {len(funnet)}"
     return funnet[0]
 
@@ -94,7 +94,7 @@ def test_overskriftene_blir_kjent_igjen_som_overskrifter(tabell):
 
 def test_tekstformen_navngir_hver_verdi(tabell):
     """Modellen skal ikke trenge å telle noe som helst."""
-    tekst = tabeller.som_tekst(tabell)
+    tekst = sidegeometri.som_tekst(tabell)
     assert "Bruttobeloep: 45 310" in tekst
     assert "Bruttobeloep: 254 130" in tekst
     # Den tomme cellen nevnes ikke — den har ingen verdi å oppgi.
@@ -109,7 +109,7 @@ def test_lopende_tekst_blir_ikke_tabell():
         (114, [(57, "fra og med 1. april 2026. Vedtaket bygger paa")]),
         (128, [(57, "folketrygdloven kapittel 8.")]),
     ])
-    assert tabeller.finn_tabeller(avsnitt) == []
+    assert sidegeometri.finn_tabeller(avsnitt) == []
 
 
 def test_to_korte_rader_er_ikke_nok():
@@ -119,17 +119,17 @@ def test_to_korte_rader_er_ikke_nok():
         (100, [(57, "Navn"), (200, "Ola"), (300, "Nordmann")]),
         (120, [(57, "Sak"), (200, "4417820"), (300, "aktiv")]),
     ])
-    assert tabeller.finn_tabeller(to) == []
+    assert sidegeometri.finn_tabeller(to) == []
 
 
 def test_tom_inndata_gir_ingenting():
-    assert tabeller.finn_tabeller([]) == []
-    assert tabeller.tabelltekst_for_side([]) == ""
+    assert sidegeometri.finn_tabeller([]) == []
+    assert sidegeometri.tabelltekst_for_side([]) == ""
 
 
 # ---------- formen på utdata ----------
 def test_vedlegget_merkes_saa_det_ikke_forveksles_med_dokumentteksten():
-    ut = tabeller.tabelltekst_for_side(BEREGNING)
+    ut = sidegeometri.tabelltekst_for_side(BEREGNING)
     assert ut.startswith("[TABELL:")
     assert "Maaned" in ut.splitlines()[0]
 
@@ -137,16 +137,16 @@ def test_vedlegget_merkes_saa_det_ikke_forveksles_med_dokumentteksten():
 def test_ord_uten_tekst_hoppes_over():
     """Tomme ord finnes i ekte PDF-er og skal ikke lage tomme celler."""
     med_tomme = BEREGNING + [(600.0, 186.0, 601.0, "   ")]
-    funnet = tabeller.finn_tabeller(med_tomme)
+    funnet = sidegeometri.finn_tabeller(med_tomme)
     assert len(funnet) == 1
     assert funnet[0]["kolonner"] == 6
 
 
 def test_deterministisk(tabell):
     """R6: samme inndata, samme utdata — hver gang."""
-    en = tabeller.tabelltekst_for_side(BEREGNING)
+    en = sidegeometri.tabelltekst_for_side(BEREGNING)
     for _ in range(5):
-        assert tabeller.tabelltekst_for_side(BEREGNING) == en
+        assert sidegeometri.tabelltekst_for_side(BEREGNING) == en
 
 
 # ---------- adapteren mot PyMuPDF ----------
@@ -164,7 +164,7 @@ class _FalskSide:
 
 def test_med_tabeller_gir_kolonnenavn_paa_verdiene():
     flat = "Vedlegg 1 - Beregning\nJuli 2026\n23\n45 310"
-    ut = tabeller.med_tabeller(_FalskSide(BEREGNING), flat)
+    ut = sidegeometri.bygg_om(_FalskSide(BEREGNING), flat)
     assert "Bruttobeloep: 45 310" in ut
     assert "Bruttobeloep: 254 130" in ut
 
@@ -176,7 +176,7 @@ def test_hvert_tall_staar_bare_en_gang():
     to ganger, side 2 og 6 fikk dobbelt så mange tall, og fire spørsmål
     som var riktige før — tre av dem om datoer — begynte å feile. Netto
     gevinst null. Teksten skal bære tallet én gang, med navn."""
-    ut = tabeller.med_tabeller(_FalskSide(BEREGNING), "Beregning\n45 310")
+    ut = sidegeometri.bygg_om(_FalskSide(BEREGNING), "Beregning\n45 310")
     assert ut.count("45 310") == 1
     assert ut.count("177 891") == 1
     assert ut.count("31 717") == 1
@@ -185,7 +185,7 @@ def test_hvert_tall_staar_bare_en_gang():
 def test_ingen_ord_forsvinner():
     """Erstatning er bare forsvarlig hvis den ikke mister noe. Hvert ord
     fra tabellen skal finnes igjen i den nye teksten."""
-    ut = tabeller.med_tabeller(_FalskSide(BEREGNING), "Beregning av sykepenger")
+    ut = sidegeometri.bygg_om(_FalskSide(BEREGNING), "Beregning av sykepenger")
     for _x0, _y0, _x1, ord_ in BEREGNING:
         assert ord_ in ut, f"ordet {ord_!r} forsvant i rekonstruksjonen"
 
@@ -193,13 +193,13 @@ def test_ingen_ord_forsvinner():
 def test_side_uten_tabell_faar_teksten_uendret():
     """Vi bytter ikke ut `get_text()` for sider som ikke trenger det."""
     flat = "Bare loepende tekst."
-    assert tabeller.med_tabeller(_FalskSide([]), flat) == flat
+    assert sidegeometri.bygg_om(_FalskSide([]), flat) == flat
     løpende = _ord([
         (100, [(57, "Vi har innvilget soeknaden din om sykepenger")]),
         (114, [(57, "fra og med 1. april 2026. Vedtaket bygger paa")]),
         (128, [(57, "folketrygdloven kapittel 8.")]),
     ])
-    assert tabeller.med_tabeller(_FalskSide(løpende), flat) == flat
+    assert sidegeometri.bygg_om(_FalskSide(løpende), flat) == flat
 
 
 def test_tekst_utenfor_tabellen_blir_med():
@@ -208,14 +208,14 @@ def test_tekst_utenfor_tabellen_blir_med():
         (300, [(57, "Utbetalingsmaate: bankkonto")]),
         (320, [(57, "Utbetalingsdag: den 25. i maaneden")]),
     ])
-    ut = tabeller.sidetekst(blandet)
+    ut = sidegeometri.sidetekst(blandet)
     assert "Utbetalingsmaate: bankkonto" in ut
     assert "Utbetalingsdag: den 25. i maaneden" in ut
     assert "Bruttobeloep: 45 310" in ut
 
 
 def test_overskriftsraden_forsvinner_ikke_fra_teksten():
-    ut = tabeller.sidetekst(BEREGNING)
+    ut = sidegeometri.sidetekst(BEREGNING)
     assert "[TABELL:" in ut
     assert "Bruttobeloep" in ut.splitlines()[0]
 
@@ -223,13 +223,75 @@ def test_overskriftsraden_forsvinner_ikke_fra_teksten():
 def test_kortere_rekonstruksjon_gir_originalen_tilbake(monkeypatch):
     """Sikkerhetsnettet: mister rekonstruksjonen innhold, beholdes den
     originale teksten. Bedre en flat tabell enn en side med hull."""
-    monkeypatch.setattr(tabeller, "sidetekst", lambda _o: "nesten ingenting")
+    monkeypatch.setattr(sidegeometri, "sidetekst", lambda _o: "nesten ingenting")
     lang = "A" * 4000
-    assert tabeller.med_tabeller(_FalskSide(BEREGNING), lang) == lang
+    assert sidegeometri.bygg_om(_FalskSide(BEREGNING), lang) == lang
 
 
 def test_feil_i_ordhentingen_koster_ikke_dokumentet():
     """En tabell vi ikke klarer å bygge skal gi teksten tilbake — ikke
     et unntak som velter hele analysen."""
     flat = "Viktig innhold som IKKE skal forsvinne."
-    assert tabeller.med_tabeller(_FalskSide(sprenger=True), flat) == flat
+    assert sidegeometri.bygg_om(_FalskSide(sprenger=True), flat) == flat
+
+
+# ------------------------------------------------------------------ #
+#  Tegnbiter i utfylte felter (R227)                                  #
+# ------------------------------------------------------------------ #
+
+def _biter(y, stykker, x=57.0, bredde=5.0, gap=-0.3):
+    """Tegnbiter som rører hverandre — slik utfylte felter kommer."""
+    ut = []
+    for s in stykker:
+        b = bredde * len(s)
+        ut.append((x, y, x + b, s))
+        x += b + gap
+    return ut
+
+
+def test_handskrevet_sted_blir_ett_ord():
+    """Feilen: «Hvilket sted er egenerklaeringen underskrevet?» ble
+    besvart med «Dr a mm e n». Hvert tegn i et utfylt felt er sin egen
+    tekstoperasjon i PDF-en, saa `get_text` leverer dem som egne ord."""
+    ut = sidegeometri.sidetekst(_biter(100, ["Dr", "a", "mm", "e", "n"]))
+    assert "Drammen" in ut
+
+
+def test_handskrevet_dato_blir_lesbar():
+    """«1 8.0 6. 20 2 6» ble lest som «8. juni 2020»."""
+    ut = sidegeometri.sidetekst(_biter(100, ["1", "8.0", "6.", "20", "2", "6"]))
+    assert "18.06.2026" in ut
+
+
+def test_ekte_ordmellomrom_beholdes():
+    """Terskelen skal ikke lime sammen vanlige ord. Malt: 0,35 av
+    tegnbredden ga «Leggdennesida» og «NAVSkanning» paa returslippen."""
+    rad = _biter(100, ["Legg"], x=57.0)
+    rad += _biter(100, ["denne"], x=90.0)
+    rad += _biter(100, ["sida"], x=130.0)
+    ut = sidegeometri.sidetekst(rad)
+    assert "Legg denne sida" in ut
+
+
+def test_biter_og_ordmellomrom_paa_samme_linje():
+    """Signaturlinja har begge deler: «Dr a mm e n» og en dato, med et
+    ekte mellomrom mellom seg."""
+    rad = _biter(100, ["Dr", "a", "mm", "e", "n"], x=57.0)
+    rad += _biter(100, ["03.06.", "2", "0", "2", "6"], x=120.0)
+    ut = sidegeometri.sidetekst(rad)
+    assert "Drammen 03.06.2026" in ut
+
+
+def test_side_uten_biter_og_uten_tabell_roeres_ikke():
+    """Vi skriver ikke om sider som ikke trenger det."""
+    flat = "Vanlig loepende tekst uten noe spesielt."
+    rad = _biter(100, ["Vanlig"], x=57.0) + _biter(100, ["tekst"], x=100.0)
+    assert sidegeometri.bygg_om(_FalskSide(rad), flat) == flat
+
+
+def test_bitene_paavirker_ikke_tabellkolonnene():
+    """Sammenslaaingen skjer FOER cellene bygges, saa en tabellcelle med
+    et utfylt felt i seg fortsatt havner i riktig kolonne."""
+    ut = sidegeometri.tabelltekst_for_side(BEREGNING)
+    assert "Bruttobeloep: 45 310" in ut
+    assert "Bruttobeloep: 254 130" in ut

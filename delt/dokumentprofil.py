@@ -518,14 +518,31 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
     hele filen er da misvisende, uansett hvor riktig hver enkelt verdi
     er isolert sett.
 
-    Delingen følger dokumentDATOENE: en side som bærer en ny dato med
-    rolle «dokument», starter et nytt dokument; sider uten egen dato
-    hører til det foregående. Det er et deterministisk skille som kan
-    forklares — ikke en gjetning om hvor et dokument «føles» ferdig.
+    TO SIGNALER, FORDI DATOEN ALENE IKKE HOLDT.
+    Opprinnelig delte den bare på dokumentDATO: en side med en ny dato i
+    rollen «dokument» startet et nytt dokument. Det slo feil begge veier
+    i en ekte bunke, og begge feilene sto igjen som kjent gjeld:
+
+      sider 3-4  faktura + egenerklæring ble ETT dokument, fordi skjemaet
+                 er underskrevet samme dag som fakturaen er datert
+      sider 9-10 klage + returslipp ble ETT, fordi returslippens dato er
+                 håndskrevet og aldri ble lest som en dokumentdato
+
+    Et dokument er ikke definert av å ha en egen dato. Det er definert
+    av å KUNNGJØRE seg selv — «Krav om tilbakebetaling - faktura»,
+    «Skjema NAV 08-07.04 - Egenerklaering». Derfor starter en side også
+    et nytt dokument når TITTELEN dens oppgir en annen dokumenttype enn
+    den gruppa har.
+
+    Tittelen, ikke brødteksten (`dokumenttype_i_tittel`, ikke
+    `gjett_dokumenttype`). Et typeord i brødteksten er bare et ord som
+    forekommer — en klage nevner vedtaket den klager på — og delte vi på
+    det, ville hvert dokument sprukket i småbiter. Sider uten en slik
+    tittel er fortsatt fortsettelser, som før.
 
     Returnerer alltid minst én oppføring: en fil uten sidemarkører er
     ett dokument."""
-    from delt.tekstuttrekk import gjett_dokumenttype
+    from delt.tekstuttrekk import dokumenttype_i_tittel, gjett_dokumenttype
 
     sider = _sider(tekst)
     if not sider:
@@ -540,16 +557,28 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
     grupper = []
     for nr, sidetekst in sider:
         dato = dato_per_side.get(nr)
+        kunngjort = dokumenttype_i_tittel(sidetekst)
+        ny_type = bool(kunngjort) and bool(grupper) \
+            and kunngjort != grupper[-1]["kunngjort"]
         ny = (not grupper
+              or ny_type
               or (dato and grupper[-1]["dato"] and dato != grupper[-1]["dato"])
               or (dato and not grupper[-1]["dato"]))
         if ny:
             grupper.append({"sider": [nr] if nr else [],
-                            "dato": dato, "tekst": sidetekst})
+                            "dato": dato, "tekst": sidetekst,
+                            # Typen gruppa ble ÅPNET med. Fortsettelses-
+                            # sider har ingen tittel og endrer den ikke;
+                            # uten dette ville en side uten tittel nullet
+                            # den ut, og neste side med tittel sett ut
+                            # som en ny type igjen.
+                            "kunngjort": kunngjort})
         else:
             if nr:
                 grupper[-1]["sider"].append(nr)
             grupper[-1]["tekst"] += "\n" + sidetekst
+            if kunngjort and not grupper[-1]["kunngjort"]:
+                grupper[-1]["kunngjort"] = kunngjort
 
     ut = []
     for g in grupper:
