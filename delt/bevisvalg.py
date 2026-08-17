@@ -93,8 +93,46 @@ def _nokkelord(sporsmal: str) -> set:
 _FELLES_FORSTAVELSE = 5
 
 
+# Hvor stor DEL av det korte ordet forstavelsen må dekke. Fem felles
+# tegn alene sier for lite: «undertegnet» og «underskrift» deler fem, og
+# det er 45 % av ordet — mens «folketrygdloven» og «folketrygdlova»
+# deler tretten, som er 93 %. Målt på korpuset skiller 70 % de ekte
+# treffene fra de falske; se `docs/regler_lokal_api.md` R224.
+_MINSTE_ANDEL = 0.70
+
+_NORSKE_TEGN = (("æ", "ae"), ("ø", "oe"), ("å", "aa"))
+
+
+def _norsk(ord_: str) -> str:
+    """æøå skrevet ut, så de to skrivemåtene møtes.
+
+    NAV-dokumenter finnes i begge former — skannede skjemaer og eldre
+    fagsystemer skriver «legeerklaering», mens spørsmålet fra en
+    saksbehandler sier «legeerklæringen». Uten dette deler de bare åtte
+    tegn av fjorten, og en terskel på delt forstavelse ville kastet et
+    helt riktig treff."""
+    for tegn, erstatning in _NORSKE_TEGN:
+        ord_ = ord_.replace(tegn, erstatning)
+    return ord_
+
+
+def _delt_forstavelse(a: str, b: str) -> int:
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
 def _samme_ord(a: str, b: str) -> bool:
     """Er dette samme ord, bøyning til side?
+
+    RETNINGEN BETYR NOE. `a` er ordet fra SPØRSMÅLET, `b` fra siden.
+    At dokumentet er mer spesifikt enn spørsmålet («sykepenger» →
+    «sykepengegrunnlaget») er et ekte treff. Motsatt vei er det som
+    regel ikke: at dokumentet sier «under» og spørsmålet «undertegnet»,
+    betyr bare at siden inneholder en preposisjon.
 
     SAMMENSETNINGSMATCH BLE PRØVD OG FORKASTET — MÅLT.
     Norsk setter hodet sist: «betalingsmottaker» ER en mottaker, og
@@ -117,13 +155,32 @@ def _samme_ord(a: str, b: str) -> bool:
     korpusmåling."""
     if a == b:
         return True
-    kort, lang = (a, b) if len(a) <= len(b) else (b, a)
-    if len(kort) < 4:
+    a, b = _norsk(a), _norsk(b)
+    if a == b:
+        return True           # «legeerklæringen» og «legeerklaeringen»
+    if len(a) < 4 or len(b) < 4:
         return False          # korte ord må treffe eksakt
-    if lang.startswith(kort):
-        return True           # «dagsats» i «dagsatsen»
-    n = min(len(kort), _FELLES_FORSTAVELSE)
-    return len(kort) >= _FELLES_FORSTAVELSE and a[:n] == b[:n]
+    if b.startswith(a):
+        return True           # «dagsats» i «dagsatsen», «sykepenger» i
+                              # «sykepengegrunnlaget» — dokumentet er
+                              # mer spesifikt enn spørsmålet, og det er
+                              # nettopp da siden er relevant
+    delt = _delt_forstavelse(a, b)
+    if delt < _FELLES_FORSTAVELSE:
+        return False
+    if a.startswith(b):
+        # Dokumentordet er HELE forstavelsen i spørsmålets ord. Da må
+        # det dekke nok av spørsmålet, ellers gjør preposisjonen «under»
+        # hver side relevant for «undertegnet» — og side 1, den eneste
+        # med en tittel under signaturen, havnet bak to sider som bare
+        # inneholdt ordet «under».
+        return delt >= _MINSTE_ANDEL * len(a)
+    # Ordene skiller lag et sted inne i seg. Da måles andelen mot det
+    # KORTESTE — de deler en stamme, og stammen er hele poenget:
+    # «beregningen» og «beregnet» deler «beregn», som er 75 % av det
+    # korte ordet, men bare 55 % av det lange. Måler man mot det lange,
+    # ryker ekte ordpar for at et par falske skal ut.
+    return delt >= _MINSTE_ANDEL * min(len(a), len(b))
 
 
 def poeng_for_side(sidetekst: str, nokkelord: set, sporsmal: str) -> float:

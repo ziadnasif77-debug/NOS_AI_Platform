@@ -170,6 +170,57 @@ def test_endelse_er_ikke_morfem():
     assert not bevisvalg._samme_ord("legeerklaeringen", "ingen")
 
 
+def test_forstavelsen_maa_dekke_nok_av_ordet():
+    """«Fem felles tegn» sier for lite alene.
+
+    Målt paa korpuset: «undertegnet» traff preposisjonen «under», saa
+    to sider som bare inneholdt et vanlig ord slo side 1 — den eneste
+    med en tittel under signaturen. Terskelen er hvor stor DEL av ordet
+    forstavelsen dekker: «folketrygdloven»/«folketrygdlova» deler 93 %,
+    «undertegnet»/«underskrift» bare 45 %."""
+    ekte = [("folketrygdloven", "folketrygdlova"),
+            ("forvaltningsloven", "forvaltningslova"),
+            ("sykepenger", "sykepengegrunnlaget"),
+            ("dagsats", "dagsatsen"), ("maaneden", "maaneder"),
+            ("krever", "kreves"), ("innvilget", "innvilga"),
+            ("klagen", "klageadgang"),
+            ("arbeidsgiveren", "arbeidsgiverperiode"),
+            ("beregningen", "beregnet"),
+            ("underskrevet", "underskrift")]
+    falske = [("undertegnet", "under"), ("undertegnet", "underskrift"),
+              ("mottakeren", "mottakseining"),
+              ("klagefristen", "klageinstans"),
+              ("arbeidsgiveren", "arbeidsforhold"),
+              ("tilbakekrevingen", "tilbakebetaling"),
+              ("grunnlaget", "grunnbeloep"),
+              ("dokumentbunken", "dokumentasjonen"),
+              ("vedtaket", "ved")]
+    for spm, side in ekte:
+        assert bevisvalg._samme_ord(spm, side), f"mistet {spm} ~ {side}"
+    for spm, side in falske:
+        assert not bevisvalg._samme_ord(spm, side), \
+            f"falskt treff {spm} ~ {side}"
+
+
+def test_retningen_betyr_noe():
+    """At dokumentet er MER spesifikt enn spørsmålet, er et ekte treff.
+    Motsatt vei er det som regel ikke: «under» i «undertegnet» betyr
+    bare at siden inneholder en preposisjon."""
+    assert bevisvalg._samme_ord("sykepenger", "sykepengegrunnlaget")
+    assert not bevisvalg._samme_ord("sykepengegrunnlaget", "syke")
+
+
+def test_aeoeaa_skrives_ut_saa_de_to_formene_moetes():
+    """NAV-dokumenter finnes i begge former: skannede skjemaer skriver
+    «legeerklaering», saksbehandleren spør om «legeerklæringen». Uten
+    dette deler de bare aatte tegn av fjorten, og terskelen over ville
+    kastet et helt riktig treff."""
+    assert bevisvalg._samme_ord("legeerklæringen", "legeerklaering")
+    assert bevisvalg._samme_ord("egenerklæringen", "egenerklaering")
+    assert bevisvalg._samme_ord("bruttobeløpet", "bruttobeloep")
+    assert bevisvalg._samme_ord("nettobeløpet", "nettobeloep")
+
+
 def test_poststed_teller_som_adressesporsmaal():
     """«I hvilken by bor mottakeren?» inneholder ikke ordet «adresse»,
     og fikk derfor ingen hjelp av adressesignalet — mens svaret sto i et

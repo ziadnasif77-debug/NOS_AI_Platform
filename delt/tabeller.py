@@ -36,7 +36,13 @@ Funksjonene tar (x0, y0, x1, tekst) og bryr seg ikke om hvor de kommer
 fra: `page.get_text("words")` for tekstlag, eller OCR-regionenes bokser
 for skannede sider.
 """
+import os
 import re
+
+# Hvordan en tabellrad skrives ut. Se `_radlinje` for de to formene og
+# hva de koster. Verdien avgjøres av korpusmålingen, ikke av smak.
+STIL = (os.environ.get("TABELLSTIL", "navngitt").strip().lower()
+        or "navngitt")
 
 # Vannrett avstand som skiller to CELLER. Under dette hører ordene
 # sammen: «1» og «970» står 2 punkter fra hverandre og er ett tall,
@@ -236,22 +242,41 @@ def sidetekst(ord_liste) -> str:
     ut = []
     for i, (_y, celler) in enumerate(linjer):
         if i in plass:
-            tab, tab_nr, rad, er_overskrift = plass[i]
-            if er_overskrift:
-                navn = ", ".join(o.strip() for o in tab["overskrifter"]
-                                 if o.strip())
-                ut.append(f"[TABELL: {navn}]")
-                continue
-            if tab["overskrifter"]:
-                deler = [f"{o.strip()}: {v.strip()}"
-                         for o, v in zip(tab["overskrifter"], rad)
-                         if v.strip() and o.strip()]
-            else:
-                deler = [v.strip() for v in rad if v.strip()]
-            ut.append(" | ".join(deler) if deler else "")
+            tab, _tab_nr, rad, er_overskrift = plass[i]
+            ut.append(_radlinje(tab, rad, er_overskrift))
         else:
             ut.append(" ".join(t for _x, t in celler))
     return "\n".join(ut)
+
+
+def _radlinje(tab: dict, rad: list, er_overskrift: bool) -> str:
+    """Én tabellrad som tekst, i den valgte stilen.
+
+    To stiler, fordi de bytter presisjon mot lengde og bare en måling
+    kan si hva som lønner seg:
+
+    `navngitt` — hver celle bærer kolonnenavnet sitt. Modellen trenger
+    ikke telle noe som helst, og en tom celle kan ikke forskyve resten.
+    Koster ~500 tegn på beregningstabellen.
+
+    `kolonner` — én overskriftsrad, så bare verdier. Kortere, men
+    kolonnen må telles fram, og da må den tomme cellen merkes eksplisitt
+    («-») for at SUM-raden ikke skal forskyve seg — nettopp feilen hele
+    modulen finnes for."""
+    if er_overskrift:
+        navn = ", ".join(o.strip() for o in tab["overskrifter"] if o.strip())
+        if STIL == "kolonner":
+            return ("[TABELL] "
+                    + " | ".join(o.strip() for o in tab["overskrifter"]))
+        return f"[TABELL: {navn}]"
+    if not tab["overskrifter"]:
+        return " | ".join(v.strip() for v in rad if v.strip())
+    if STIL == "kolonner":
+        return " | ".join(v.strip() if v.strip() else "-" for v in rad)
+    deler = [f"{o.strip()}: {v.strip()}"
+             for o, v in zip(tab["overskrifter"], rad)
+             if v.strip() and o.strip()]
+    return " | ".join(deler)
 
 
 def med_tabeller(side, tekst: str) -> str:
