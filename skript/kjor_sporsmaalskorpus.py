@@ -97,6 +97,13 @@ def _normaliser(tekst: str) -> str:
         t = t.replace(tegn, " ")
     # mellomrom MELLOM sifre fjernes; mellomrom ellers beholdes
     t = re.sub(r"(?<=\d)[ ](?=\d)", "", t)
+    # æøå skrives ut, på BEGGE sider. Fasitfila bruker ae/oe/aa fordi de
+    # syntetiske dokumentene gjør det, mens modellen svarer på ekte
+    # norsk. Målt: «Returslippen skal ligge ØVERST i bunken» ble talt
+    # som feil mot fasiten «oeverst» — et riktig svar avvist på
+    # skrivemåte, samme feil som datoene i R223.
+    for tegn, erstatning in (("æ", "ae"), ("ø", "oe"), ("å", "aa")):
+        t = t.replace(tegn, erstatning)
     return t
 
 

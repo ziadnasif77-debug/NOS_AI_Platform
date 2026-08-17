@@ -114,9 +114,9 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import (bevisvalg, dokumentruting, kalibrering, maalinger,
-                  maskinprofil, personbinding, prompter, sidegeometri,
-                  tilstander, typeforventninger)
+from delt import (bevisvalg, bunkesporsmaal, dokumentruting, kalibrering,
+                  maalinger, maskinprofil, personbinding, prompter,
+                  sidegeometri, tilstander, typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -179,6 +179,10 @@ SIDEGEOMETRI = (os.environ.get("SIDEGEOMETRI", "ja").strip().lower()
 # ble besvart med vedtakets saksbehandler fra side 1. Samme verdirom
 # som de andre bryterne (R12).
 DOKUMENTRUTING = (os.environ.get("DOKUMENTRUTING", "ja").strip().lower()
+                  in ("ja", "1", "true", "on", "yes", "pa", "på"))
+# Telle- og tilsvarsspørsmål om bunken svares av KODEN (R229). Modellen
+# svarte «1 person» på en bunke med to. Samme verdirom (R12).
+BUNKESPORSMAAL = (os.environ.get("BUNKESPORSMAAL", "ja").strip().lower()
                   in ("ja", "1", "true", "on", "yes", "pa", "på"))
 # OCR er ekte GPU-arbeid per side — standardgrense, kan økes per
 # forespørsel med multipart-feltet maks_sider (tak: OCR_TAK_SIDER).
@@ -8093,6 +8097,24 @@ def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                                     "sjekksumvaliderte uttrekket "
                                     "(deterministisk)"),
                 "svar_avkortet": False, "advarsler": advarsler,
+                    # Deterministisk vei — bevisvalg
+                    # kjørte aldri (R118: nøkkelen finnes).
+                    "bevis": None}
+
+    # R229: spørsmål om BUNKEN som samling — hvor mange personer, samme
+    # person to steder, hvilke ytelser, hvor mange rader. Det er
+    # TELLING, og en språkmodell holder ikke regnskap: den svarte «1
+    # person» på en bunke med to, og «Arbeidsavkortning» på et spørsmål
+    # om ytelser. Mønstrene er smale — treffer de ikke, går spørsmålet
+    # videre til modellen som før.
+    if BUNKESPORSMAAL and len((raa_tekst or "").strip()) >= 5:
+        _bunke = bunkesporsmaal.svar(sporsmal, raa_tekst)
+        if _bunke:
+            return {"tom": False, "modell_brukt": False,
+                    "svar": _bunke["svar"],
+                    "tall_verifisert": True,
+                    "tolket_sporsmal": _bunke["tolket"],
+                    "svar_avkortet": False, "advarsler": advarsler,
                     # Deterministisk vei — bevisvalg
                     # kjørte aldri (R118: nøkkelen finnes).
                     "bevis": None}

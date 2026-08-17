@@ -1478,6 +1478,30 @@ def _uten_saertegn(tekst: str) -> str:
     return lav
 
 
+def _maalformer(ytelse: str) -> set:
+    """Ytelsen skrevet på begge målformer.
+
+    NYNORSK ER LIKESTILT, OG LISTA VAR BOKMÅL.
+    Målt på en klage skrevet på nynorsk: dokumentet sier
+    «arbeidsavklaringspengar», lista sier «arbeidsavklaringspenger», og
+    søket fant ingenting. Det er ikke ett ord som mangler — HVER ytelse
+    som ender på «-penger» heter «-pengar» på nynorsk, så et nynorsk
+    NAV-brev mistet alle ytelsene sine på én gang, stille.
+
+    To systematiske forskjeller dekkes: flertallsendelsen «-pengar» og
+    stammen «sjuk-» for «syk-». Ytelser som skiller seg på andre måter
+    må inn i `NORSKE_YTELSER` som egne oppføringer — dette er en regel,
+    ikke en ordbok, og den skal ikke late som den er en ordbok."""
+    ut = {ytelse}
+    for form in list(ut):
+        if form.endswith("penger"):
+            ut.add(form[:-len("penger")] + "pengar")
+    for form in list(ut):
+        if form.startswith("syke"):
+            ut.add("sjuke" + form[len("syke"):])
+    return ut
+
+
 def _ytelsestreff(tekst: str) -> list:
     """(start, slutt, navn) for hver ytelse som står i teksten.
 
@@ -1495,11 +1519,15 @@ def _ytelsestreff(tekst: str) -> list:
     flat = _uten_saertegn(tekst or "")
     raa = []
     for ytelse in NORSKE_YTELSER:
-        navn = _uten_saertegn(ytelse)
-        i = flat.find(navn)
-        while i >= 0:
-            raa.append((i, i + len(navn), ytelse))
-            i = flat.find(navn, i + 1)
+        for form in _maalformer(ytelse):
+            navn = _uten_saertegn(form)
+            i = flat.find(navn)
+            while i >= 0:
+                # Ytelsen registreres med sitt KANONISKE navn uansett
+                # hvilken målform dokumentet er skrevet i — en klient
+                # skal ikke måtte kjenne to strenger for én ytelse.
+                raa.append((i, i + len(navn), ytelse))
+                i = flat.find(navn, i + 1)
     return sorted(t for t in raa
                   if not any(a[0] <= t[0] and t[1] <= a[1]
                              and (a[1] - a[0]) > (t[1] - t[0]) for a in raa))
