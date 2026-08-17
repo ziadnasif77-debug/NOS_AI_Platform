@@ -30,6 +30,42 @@ WHEELS = PAKKE / "wheels"
 KRAV = PAKKE / "krav_lokal.txt"
 
 
+def _verifiser_bunten():
+    """§26: «Offline installasjon skal være reproduserbar og
+    checksum-verifisert.» Verifiseringen skjer FØR noe installeres —
+    etterpå er den en obduksjon.
+
+    Mangler SHA256SUMS, er bunten laget med et eldre verktøy. Da sies
+    det HØYT og installasjonen fortsetter: en gammel bunt skal kunne
+    installeres, men ingen skal TRO at den ble verifisert."""
+    print("\n[0/3] Verifiserer bunten mot SHA256SUMS ...")
+    try:
+        sys.path.insert(0, str(PAKKE.parent))
+        from delt import kontrollsummer
+    except ImportError:
+        print("      delt/kontrollsummer.py ikke funnet — hopper over "
+              "(bunten er IKKE verifisert)")
+        return
+    r = kontrollsummer.verifiser(str(PAKKE))
+    if r.get("grunn"):
+        print(f"      {r['grunn']} — bunten er laget uten kontrollsummer "
+              "og er IKKE verifisert. Installasjonen fortsetter.")
+        return
+    if r["ok"]:
+        print(f"      {r['sjekket']} filer stemmer. Bunten er hel.")
+        return
+    for navn, liste in (("MANGLER", r["mangler"]), ("ENDRET", r["endret"])):
+        if liste:
+            print(f"      {navn}: {len(liste)} filer")
+            for f in liste[:10]:
+                print(f"          {f}")
+    raise SystemExit(
+        "\n!!! BUNTEN ER IKKE HEL. Installasjonen er STOPPET.\n"
+        "    En fil som mangler betyr at kopieringen ikke ble ferdig.\n"
+        "    En fil som er ENDRET er alvorlig — kopier bunten på nytt\n"
+        "    fra kilden, og installer aldri fra en bunt som ikke stemmer.")
+
+
 def main():
     print("=" * 60)
     print("  OFFLINE-INSTALLASJON — NAV lokalt dokument-API")
@@ -39,6 +75,8 @@ def main():
                          "Kjør fra samme sted som offline_pakke/ ligger.")
     if not KRAV.is_file():
         raise SystemExit(f"Fant ikke {KRAV}")
+
+    _verifiser_bunten()
 
     py = sys.executable
     print(f"\n[1/3] Installerer hjul fra {WHEELS} (uten nett) ...")

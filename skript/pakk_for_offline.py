@@ -143,6 +143,21 @@ def _skriv_manifest(antall_easyocr):
     print(f"\n  MANIFEST.txt skrevet ({len(hjul)} hjul).")
 
 
+def _skriv_kontrollsummer():
+    """§23 vil ha `/checksums` og `release-manifest.json` i bunten; §26
+    vil at installasjonen skal være «checksum-verifisert».
+
+    Skrives HER, som siste steg i pakkingen, slik at en bunt aldri kan
+    bli til uten dem. Var det et eget skript man måtte huske å kjøre,
+    ville den første bunten noen laget i en fart vært uten."""
+    sys.path.insert(0, str(ROT))
+    from delt import kontrollsummer
+    m = kontrollsummer.lag(str(PAKKE))
+    print(f"      {m['antall_filer']} filer, "
+          f"{m['sum_bytes'] // 1024 // 1024} MB — SHA256SUMS + "
+          f"release-manifest.json skrevet")
+
+
 def main():
     print("=" * 60)
     print("  PAKKER DET LOKALE DOKUMENT-API-ET FOR OFFLINE-SERVER")
@@ -155,8 +170,10 @@ def main():
     n = _kopier_easyocr()
     print("\n[3/4] Kopierer installasjons- og sjekkeskript ...")
     _kopier_skript()
-    print("\n[4/4] Skriver manifest ...")
+    print("\n[4/5] Skriver manifest ...")
     _skriv_manifest(n)
+    print("\n[5/5] Regner kontrollsummer (leser hver fil helt) ...")
+    _skriv_kontrollsummer()
     storrelse = sum(f.stat().st_size for f in PAKKE.rglob("*") if f.is_file())
     print("\n" + "=" * 60)
     print(f"  FERDIG. offline_pakke/ = {storrelse//1024//1024} MB")
