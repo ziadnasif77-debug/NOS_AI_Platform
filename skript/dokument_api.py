@@ -5269,17 +5269,45 @@ class Handler(BaseHTTPRequestHandler):
                 return self._svar(401, {
                     "ok": False,
                     "feil": "Ugyldig eller manglende X-API-Key"})
+            innsyn_id = sti.split("/")[2]
             with _innsyn_las:
                 _rydd_innsyn()
-                okt = _innsyn_okter.get(sti.split("/")[2])
+                okt = _innsyn_okter.get(innsyn_id)
+                gravstein = _innsyn_gravsteiner.get(innsyn_id)
+            meg = getattr(self, "_klient_id", None)
             # Nøkkelen er GYLDIG — men er den den SAMME? Uten dette
             # kunne enhver autentisert klient lese enhver annens økt, og
             # økta bærer hele dokumentteksten og sidebilder. 404, ikke
             # 403: en fremmed skal ikke få vite at id-en finnes.
-            if okt is not None and okt.get("eier") != getattr(
-                    self, "_klient_id", None):
+            if okt is not None and okt.get("eier") != meg:
                 okt = None
             if okt is None:
+                # R209 (§15.1): var dette DIN økt som gikk ut på tid,
+                # skal du få vite det — «kontrollert session-expired», og
+                # beskjed om at jobb- og resultatdata hentes for seg.
+                # For alle andre er svaret uendret 404, så en fremmed
+                # fortsatt ikke kan bekrefte at id-en har eksistert.
+                if gravstein is not None and gravstein.get("eier") == meg:
+                    return self._svar(410, {
+                        "ok": False,
+                        "status": "session_expired",
+                        "innsyn_id": innsyn_id,
+                        "levetid_sekunder": INNSYN_LEVETID_S,
+                        "feil": (
+                            f"Innsynsøkta er utløpt (levetid "
+                            # Sekunder under ett minutt: «levetid 0
+                            # minutter» er en melding som ikke tåler sin
+                            # egen innstilling.
+                            + (f"{INNSYN_LEVETID_S // 60} minutter"
+                               if INNSYN_LEVETID_S >= 60
+                               else f"{INNSYN_LEVETID_S} sekunder")
+                            + "). En "
+                            "innsynsøkt er en kortlivet DIREKTEVISNING, "
+                            "ikke et lager: hendelsene og sidebildene er "
+                            "slettet. Selve dokumentresultatet hentes for "
+                            "seg — last opp på nytt, eller bruk "
+                            "GET /jobb/<id> hvis lesingen ble startet som "
+                            "en jobb.")})
                 return self._svar(404, {"ok": False, "feil": "Ukjent innsyn_id"})
             try:
                 from urllib.parse import parse_qs, urlparse
@@ -5297,7 +5325,21 @@ class Handler(BaseHTTPRequestHandler):
                 "status": okt["status"],
                 "hendelser": hendelser[fra:], "neste": len(hendelser),
                 "resultat": okt["resultat"] if okt["status"] == "ferdig" else None,
-                "feil": okt.get("feil")})
+                "feil": okt.get("feil"),
+                # R209 (§15.1): korrelasjonsdata. `dokument_id` er en
+                # hash av innholdet — samme nøkkel analysecachen bruker,
+                # så en økt kan spores til det som faktisk ble lest.
+                # `utloper_om_sekunder` gjør levetiden SYNLIG i stedet
+                # for å la klienten oppdage den ved å bomme.
+                "innsyn_id": innsyn_id,
+                "dokument_id": okt.get("dokument_id"),
+                # `.get`, samme forsiktighet som `_rydd_innsyn` alt
+                # bruker: en manglende `start` skal ikke gjøre et poll
+                # om til en 500 — svarveien er det siste stedet som bør
+                # kunne kaste.
+                "utloper_om_sekunder": max(0, int(
+                    INNSYN_LEVETID_S
+                    - (time.time() - (okt.get("start") or time.time()))))})
         if sti in ("/dokumentasjon", "/docs"):
             return self._html(_swagger_side())
         if sti.startswith("/statisk/"):
@@ -5576,7 +5618,15 @@ class Handler(BaseHTTPRequestHandler):
         # dokumentteksten og sidebilder i base64.
         okt = {"status": "pågår", "hendelser": [], "resultat": None,
                "start": time.time(),
-               "eier": getattr(self, "_klient_id", None)}
+               "eier": getattr(self, "_klient_id", None),
+               # R209 (§15.1): «/innsyn metadata skal ha correlation til
+               # jobb/principal». Eieren dekket principal; dette dekker
+               # dokumentet. En HASH, ikke innholdet og ikke filnavnet:
+               # den knytter økta til det som ble lest uten å legge igjen
+               # noe å lekke, og den er den SAMME som analysecachen
+               # nøkler på — så en økt kan spores til et resultat.
+               "dokument_id": hashlib.sha256(innhold).hexdigest()[:16],
+               "filnavn": filnavn}
         with _innsyn_las:
             _innsyn_okter[okt_id] = okt
             _rydd_innsyn()
@@ -7328,6 +7378,26 @@ INNSYN_LEVETID_S = int(os.environ.get("INNSYN_LEVETID_S", "1800"))
 INNSYN_MAKS_OKTER = int(os.environ.get("INNSYN_MAKS_OKTER", "6"))
 
 
+# R209 (§15.1): GRAVSTEINER — id, eier og utløpstidspunkt for økter som
+# er borte. INGEN dokumentdata, ingen sidebilder, ingen tekst.
+#
+# Grunnen er en konflikt mellom to riktige krav. §15.1 vil at en utløpt
+# økt skal gi «en kontrollert session-expired-respons» så klienten vet
+# at den skal hente jobb- og resultatdata for seg. R153 vil at en
+# FREMMED ikke skal få vite at id-en finnes i det hele tatt — derfor
+# 404, ikke 403.
+#
+# Uten gravsteinen er de to umulige samtidig: når økta er slettet, vet
+# vi ikke lenger hvem den tilhørte, og da må alle få samme svar. Med
+# den kan eieren få «utløpt» mens alle andre fortsatt får 404.
+#
+# Gravsteinen lever lenger enn økta, men bærer bare tre felt — den er
+# et kvitteringsstykke, ikke en kopi.
+_innsyn_gravsteiner = OrderedDict()
+INNSYN_GRAVSTEIN_S = int(os.environ.get("INNSYN_GRAVSTEIN_S", "3600"))
+INNSYN_MAKS_GRAVSTEINER = int(os.environ.get("INNSYN_MAKS_GRAVSTEINER", "200"))
+
+
 def _rydd_innsyn():
     """Fjerner utløpte økter. Kalles med `_innsyn_las` holdt.
 
@@ -7336,9 +7406,29 @@ def _rydd_innsyn():
     naa = time.time()
     for okt_id in [i for i, o in _innsyn_okter.items()
                    if naa - (o.get("start") or naa) > INNSYN_LEVETID_S]:
-        _innsyn_okter.pop(okt_id, None)
+        okt = _innsyn_okter.pop(okt_id, None)
+        _gravlegg(okt_id, okt, naa, "utlopt")
     while len(_innsyn_okter) > INNSYN_MAKS_OKTER:
-        _innsyn_okter.pop(next(iter(_innsyn_okter)))
+        eldste = next(iter(_innsyn_okter))
+        _gravlegg(eldste, _innsyn_okter.pop(eldste), naa, "fortrengt")
+    for gid in [i for i, g in _innsyn_gravsteiner.items()
+                if naa - g["utlopt"] > INNSYN_GRAVSTEIN_S]:
+        _innsyn_gravsteiner.pop(gid, None)
+    while len(_innsyn_gravsteiner) > INNSYN_MAKS_GRAVSTEINER:
+        _innsyn_gravsteiner.pop(next(iter(_innsyn_gravsteiner)))
+
+
+def _gravlegg(okt_id, okt, naa, grunn):
+    """Tre felt, og ikke ett til. Havner dokumentdata her, har vi
+    flyttet problemet i stedet for å løse det — §15.1 sier uttrykkelig
+    at sidebilder ikke skal bli liggende."""
+    if not okt_id:
+        return
+    _innsyn_gravsteiner[okt_id] = {
+        "eier": (okt or {}).get("eier"),
+        "utlopt": naa,
+        "grunn": grunn,
+    }
 
 
 def _bilde_til_b64(bilde_np, maks_bredde: int = 900):
