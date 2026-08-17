@@ -620,7 +620,7 @@ er bevist, eller åpent med en eksplisitt grunn.
 | # | Krav | Status | Bevis |
 |---|---|---|---|
 | 1 | 100 samtidige brukere → ingen prosessomfattende kollaps | **grønn** | R210: tjenesten svarte HTTP 200 rett etter stormen |
-| 2 | 500/1000-siders jobber asynkrone og observerbare | **grønn** | R200/R205 (500), R215 (1000) |
+| 2 | 500/1000-siders jobber asynkrone og observerbare | **grønn** | R200/R205 (500), R215 (1000: 40,7 min, alle 1000 markører, null policy-avvik) |
 | 3 | Interaktive beholder reservert kapasitet under batch-burst | **RØD** | R210: interaktiv p95 91 s mot batchens 720 ms |
 | 4 | Worker-krasj → ingen tap av ikke-ACKet arbeid | åpen | forutsetter kø = Phase 2, som §24.1 ikke har åpnet |
 | 5 | Duplicate delivery → ingen dobbel dyr prosessering | **grønn** | `Idempotency-Key`, `test_idempotens_form` |
@@ -640,6 +640,37 @@ er bevist, eller åpent med en eksplisitt grunn.
 | 19 | OCR-motorpolicy låst per Job, registrert i jobbmetadata | **grønn** | R199, verifisert over 500 og 1000 sider |
 | 20 | /innsyn 30-min TTL + sticky routing-policy | **grønn** (TTL) | R209 — sticky routing er en deployment-beslutning på flernode |
 | 21 | `test_portabilitet` grønn etter plattformendringer | **grønn** | kjørt etter hver endring, også etter Locust-installasjonen |
+
+### 1000-sidersmålingen (§26.2)
+
+| | 500 sider | 1000 sider |
+|---|---|---|
+| Tid | 18,5 min | **40,7 min** |
+| Fart | 0,45 sider/s | **0,41 sider/s** |
+| Dekning | 500/500 | **1000/1000** |
+| Sidemarkører | 500/500 | **1000/1000** |
+| `rapidocr`-regioner | 13 450 | 26 900 (nøyaktig 2×) |
+| `norhand+ufcn` | 250 | 500 (nøyaktig 2×) |
+| Strekkoder | 100 | 200 (nøyaktig 2×) |
+| Tegn | 358 641 | 718 392 (2,003×) |
+| Policy-avvik | ingen | **ingen** |
+
+**Alt som SKAL doble seg, dobler seg eksakt.** Bunken er de samme ti
+sidene gjentatt, så to ganger så mange sider skal gi nøyaktig to ganger
+så mange regioner og strekkoder. At de gjør det til siste enhet er en
+sterkere kontroll enn tidstallet: en avkorting, en tapt side eller en
+motor som byttet underveis ville brutt forholdet.
+
+Farten faller 0,45 → 0,41 sider/s (−9 %) fra 500 til 1000 sider. Samme
+mønster som R200 fant før parallelliteten (0,30 → 0,27), men mildere.
+Dimensjonering skal fortsatt gjøres på det LENGSTE tallet.
+
+**Ærlighetsnote om målingen:** riggen rapporterte først «sidemarkører
+500 av 500» på en 1000-siders jobb. Den var laget for 500 og bare
+delvis omskrevet — den sjekket markør 1–500 og meldte full dekning. Alle
+1000 er nå verifisert mot den lagrede jobben. Femte gang i denne
+gjennomgangen at måleverktøyet var det som tok feil, og femte gang det
+ble etterprøvd før det ble en påstand.
 
 ### §30 Definition of Done
 
