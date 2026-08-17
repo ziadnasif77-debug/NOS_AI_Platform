@@ -59,6 +59,14 @@ _SIGNALORD = {
     "telefon": (r"telefon|\+47", 2.0),
     "epost": (r"e-?post|@", 2.0),
     "adresse": (r"\b\d{4}\s+[A-ZÆØÅ]", 2.0),
+    # Samme innholdstype som «adresse», andre ord for den. «I hvilken by
+    # bor mottakeren?» inneholder ikke ordet adresse, og fikk derfor
+    # ingen hjelp av signalet over — mens svaret sto i nettopp et
+    # postnummerfelt. Flerordsnøkler er lov: oppslaget er delstreng.
+    "poststed": (r"\b\d{4}\s+[A-ZÆØÅ]", 2.0),
+    "bosted": (r"\b\d{4}\s+[A-ZÆØÅ]", 2.0),
+    "hvilken by": (r"\b\d{4}\s+[A-ZÆØÅ]", 2.0),
+    "hvilken kommune": (r"\b\d{4}\s+[A-ZÆØÅ]", 2.0),
     "saksnummer": (r"saksnummer|saksnr", 3.0),
     "diagnose": (r"diagnose|icpc", 3.0),
     "klage": (r"klage|klagar", 3.0),
@@ -86,7 +94,27 @@ _FELLES_FORSTAVELSE = 5
 
 
 def _samme_ord(a: str, b: str) -> bool:
-    """Er dette samme ord, bøyning til side?"""
+    """Er dette samme ord, bøyning til side?
+
+    SAMMENSETNINGSMATCH BLE PRØVD OG FORKASTET — MÅLT.
+    Norsk setter hodet sist: «betalingsmottaker» ER en mottaker, og
+    forstavelsesregelen under fanger den ikke. Så «I hvilken by bor
+    mottakeren?» valgte side 10 («Mottakseining: NAV Skanning Hamar»)
+    og svarte «Finnes ikke», mens DRAMMEN sto på side 1 og 3.
+
+    Regelen «det korte ordet er en endelse i det lange» ble lagt inn og
+    målt på korpuset: den reddet ett spørsmål og ødela SJU. Årsaken er
+    at en endelse ikke er et morfem. «inntektsmeldingen» slutter på
+    «ingen», og «ingen ekte personer» står i bunnteksten på hver eneste
+    side — så hver side traff, seleksjonen falt tilbake på «alle sider
+    er like relevante», og sidene som faktisk bar svaret mistet
+    forspranget sitt.
+
+    Å skille «betalings|mottaker» fra «inntektsmeld|ingen» krever et
+    ordforråd vi ikke har. Uten det er regelen et lotteri. Spørsmålet
+    den skulle løse, er i stedet løst med et signalord for poststed —
+    se `_SIGNALORD`. Ikke bygg den opp igjen uten en ordliste og en ny
+    korpusmåling."""
     if a == b:
         return True
     kort, lang = (a, b) if len(a) <= len(b) else (b, a)

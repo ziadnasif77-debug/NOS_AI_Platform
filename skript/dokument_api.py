@@ -115,7 +115,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
 from delt import (bevisvalg, kalibrering, maalinger, maskinprofil,
-                  personbinding, prompter, tilstander, typeforventninger)
+                  personbinding, prompter, tabeller, tilstander,
+                  typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -164,6 +165,13 @@ BEVISVALG = (os.environ.get("BEVISVALG", "ja").strip().lower()
 # smalt vindu fjerner konteksten et riktig svar trengte — de sju som
 # fortsatt feiler, feiler av nettopp den grunnen.
 BEVISVALG_MAKS_SIDER = int(os.environ.get("BEVISVALG_MAKS_SIDER", "5"))
+# Tabellene bygges tilbake fra ordposisjonene før teksten sendes videre
+# (R219). Uten dette er en tabell bare én celle per linje, og modellen
+# må gjette hvilken kolonne en verdi hørte til — den gjettet feil på
+# fem korpusspørsmål på rad, og hentet hver gang et EKTE tall fra feil
+# kolonne. Samme verdirom som de andre bryterne (R12).
+TABELLER = (os.environ.get("TABELLER", "ja").strip().lower()
+            in ("ja", "1", "true", "on", "yes", "pa", "på"))
 # OCR er ekte GPU-arbeid per side — standardgrense, kan økes per
 # forespørsel med multipart-feltet maks_sider (tak: OCR_TAK_SIDER).
 # Kuttes det, sier svaret det ALLTID eksplisitt i 'advarsel'.
@@ -1620,10 +1628,16 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
     total_tekst = 0
     for i, side in enumerate(doc):
         tekst = side.get_text() or ""
-        tekster.append(tekst)
+        # Uttrekket og skannet-terskelen under leser den RENE teksten.
+        # Tabellvedlegget er til for modellen, og skal ikke kunne endre
+        # om et dokument regnes som skannet: har siden ingen ord, blir
+        # det heller ingen tabell, men den koblingen skal stå i koden
+        # og ikke være noe man må resonnere seg fram til.
         total_tekst += len(tekst.strip())
         sider.append({"side_nummer": i, "tegn": len(tekst),
                       "felter": utvid_entiteter(tekst, {})})
+        tekster.append(tabeller.med_tabeller(side, tekst) if TABELLER
+                       else tekst)
     doc.close()
     if len(tekster) > 1:
         full_tekst = "\n".join(f"[Side {i + 1} av {len(tekster)}]\n{t}"
@@ -3018,6 +3032,12 @@ def _jobb_arbeider() -> None:
             sider_tekst = [(s.get_text() or "") for s in doc]
             tekstlag = "\n".join(sider_tekst)
             if len(tekstlag.strip()) >= 20:
+                # Terskelen over er sjekket på ren tekst (se analyser_bytes);
+                # først når siden ER et tekstlag, bygges tabellene tilbake.
+                if TABELLER:
+                    sider_tekst = [tabeller.med_tabeller(s, t)
+                                   for s, t in zip(doc, sider_tekst)]
+                    tekstlag = "\n".join(sider_tekst)
                 doc.close()
                 if len(sider_tekst) > 1:
                     t = "\n".join(f"[Side {i + 1} av {len(sider_tekst)}]\n{s}"

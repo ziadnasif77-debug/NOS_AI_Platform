@@ -202,3 +202,47 @@ def test_fasitene_bruker_kanonisk_datoform():
                 gamle.append("%s: %s = %s"
                              % (os.path.basename(sti), felt, verdi))
     assert not gamle, f"norsk datoform i fasit (R133 gjorde dem ISO): {gamle}"
+
+
+# ------------------------------------------------------------------ #
+#  Fasiten skal måle riktighet, ikke skrivemåte                       #
+# ------------------------------------------------------------------ #
+
+def _sammenlign():
+    import importlib.util
+    sti = os.path.join(ROT, "skript", "kjor_sporsmaalskorpus.py")
+    spec = importlib.util.spec_from_file_location("_korpuskjorer", sti)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_dato_paa_norsk_teller_som_samme_dato():
+    """Modellen svarte «15. september 2026» på et spørsmål med fasit
+    «15.09.2026», og ble talt som FEIL i seks kjøringer på rad. Det er
+    samme dato. Korpuset er det eneste grunnlaget modellbytter dømmes
+    på — en fasit som teller et riktig svar som galt, gjør hver
+    sammenligning etter den mindre verdt."""
+    m = _sammenlign()
+    assert m._inneholder("Neste revurdering er 15. september 2026.",
+                         "15.09.2026")
+    assert m._inneholder("18. april 2026", "18.04.2026")
+    assert m._inneholder("Datert 8. mai 2026", "2026-05-08")
+
+
+def test_feil_dato_slipper_ikke_gjennom():
+    """Slingringen gjelder SKRIVEMÅTEN, ikke datoen. Året kreves med,
+    ellers kunne «15. september» truffet feil år i en bunke som spenner
+    over flere."""
+    m = _sammenlign()
+    assert not m._inneholder("24.06.2026", "18.04.2026")
+    assert not m._inneholder("15. september 2025", "15.09.2026")
+    assert not m._inneholder("12. mai 2026", "15.09.2026")
+    assert not m._inneholder("15. september", "15.09.2026")
+
+
+def test_ikke_datoer_roeres_ikke():
+    m = _sammenlign()
+    assert m._datoformer("oeverst") == []
+    assert m._datoformer("folketrygdloven") == []
+    assert m._datoformer("31.13.2026") == [], "maaned 13 finnes ikke"

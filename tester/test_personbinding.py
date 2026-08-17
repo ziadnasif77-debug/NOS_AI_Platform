@@ -95,12 +95,77 @@ def test_sporsmal_uten_navn_roeres_ikke():
     assert d["gjelder"] is False and d["navn"] is None
 
 
-def test_fritekst_uten_verdier_roeres_ikke():
+def test_sammendrag_roeres_ikke():
     """Et sammendrag «tilhører» ingen enkeltside. En garanti som slo til
-    på fri tekst ville tatt riktige svar med seg."""
+    på sammendrag ville tatt riktige svar med seg.
+
+    Merk hva som HOLDER dette ute nå: setningen står ikke ordrett på
+    noen side. Det er skillet garantien bruker — ikke om svaret er tall
+    eller bokstaver, men om det lar seg spore til et sted."""
     d = pb.doem("Oppsummer dokumentet for Marit Testperson",
                 "Dette er en legeerklaering.", SIDER)
     assert d["gjelder"] is False
+
+
+# ------------------------------------------------------------------ #
+#  Fri tekst er også en verdi — når den står ordrett et sted           #
+# ------------------------------------------------------------------ #
+
+def test_arbeidsgiver_fra_feil_persons_side_fanges():
+    """Verdien er skrevet med bokstaver, ikke tall — og det spiller
+    ingen rolle. «Nordbygg Entreprenoer AS» står på Olas side, ikke på
+    Marits, og en saksbehandler som får den merket med Marits navn, tar
+    like feil som med et fødselsnummer."""
+    sider = {**SIDER, 6: "Inntektsmelding\nArbeidsgiver: Nordbygg "
+                         "Entreprenoer AS\nAnsatt: Ola Nordmann"}
+    d = pb.doem("Hvem er arbeidsgiveren til Marit Testperson?",
+                "Nordbygg Entreprenoer AS", sider)
+    assert d["gjelder"] is True
+    assert d["funnet_paa"] == [6]
+
+
+def test_samme_verdi_paa_personens_egen_side_gaar_gjennom():
+    sider = {**SIDER, 9: "Legeerklaering for Marit Testperson\n"
+                         "Arbeidsgiver: Nordbygg Entreprenoer AS"}
+    d = pb.doem("Hvem er arbeidsgiveren til Marit Testperson?",
+                "Nordbygg Entreprenoer AS", sider)
+    assert d["gjelder"] is False
+
+
+def test_haandskriftfelt_i_biter_blir_funnet():
+    """Utfylte felter kommer tegn for tegn — både i tekstlaget til
+    skjemaer og fra OCR. Uten luft-uavhengig sammenligning ville
+    garantien vært blind for nettopp de feltene som oftest bommer."""
+    sider = {**SIDER, 5: "Diagnose (ICPC-2):\nL\n8\n6 R\ny\ngg\nsyndrom"}
+    d = pb.doem("Hvilken diagnose har Marit Testperson?",
+                "L86 Ryggsyndrom", sider)
+    assert d["funnet_paa"] == [5], "håndskriftfeltet ble ikke gjenkjent"
+    assert d["gjelder"] is True
+
+
+def test_for_kort_svar_doemmes_ikke():
+    """«Ja» og «Nei» kan ikke spores til en side. Å dømme dem ville
+    byttet ut riktige ja/nei-svar med «Ikke oppgitt»."""
+    for svar in ("Ja", "Nei", "Ola"):
+        d = pb.doem("Har Marit Testperson klaget?", svar, SIDER)
+        assert d["gjelder"] is False, f"{svar!r} ble dømt"
+
+
+def test_svar_som_allerede_sier_ikke_oppgitt_roeres_ikke():
+    d = pb.doem("Hva er diagnosen til Marit Testperson?",
+                "Ikke oppgitt i dokumentet", SIDER)
+    assert d["gjelder"] is False
+
+
+def test_verdi_som_ikke_staar_noe_sted_doemmes_ikke():
+    """Modellen svarte «Ryggsmerter» der dokumentet sier «Ryggsyndrom».
+    Da finnes verdien ingen steder, og garantien kan ikke vite hvilken
+    side den kom fra. Den holder seg unna — å gjette her ville vært
+    nøyaktig den feilen den er bygget for å hindre."""
+    d = pb.doem("Hvilken diagnose har Marit Testperson?",
+                "L86 Ryggsmerter med utstraaling", SIDER)
+    assert d["gjelder"] is False
+    assert d["funnet_paa"] == []
 
 
 def test_ett_dokument_kan_ikke_forveksles():

@@ -100,8 +100,47 @@ def _normaliser(tekst: str) -> str:
     return t
 
 
+_MAANEDER = ("januar", "februar", "mars", "april", "mai", "juni", "juli",
+             "august", "september", "oktober", "november", "desember")
+_DATO_PUNKT = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+_DATO_ISO = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
+
+
+def _datoformer(bit: str) -> list:
+    """Samme dato slik norsk faktisk skriver den.
+
+    SAMME BEGRUNNELSE SOM TALLNORMALISERINGEN OVER, ETT STEG VIDERE.
+    Fasiten for «Naar er neste revurdering?» godtok «15.09.2026» og
+    «2026-09-15». Modellen svarte «15. september 2026» — som er den
+    samme datoen, skrevet slik et menneske skriver den — og ble talt
+    som FEIL i seks korpuskjøringer på rad.
+
+    Det er en feil i måleinstrumentet, ikke i systemet: korpuset er det
+    eneste vi dømmer modellbytter på, og en fasit som teller et riktig
+    svar som galt, gjør hver sammenligning etter den litt mindre verdt.
+
+    Året kreves med. «15. september» alene kunne truffet feil år i en
+    bunke som spenner over flere."""
+    t = (bit or "").strip()
+    m = _DATO_PUNKT.match(t)
+    if m:
+        dag, maaned, aar = int(m.group(1)), int(m.group(2)), m.group(3)
+    else:
+        m = _DATO_ISO.match(t)
+        if not m:
+            return []
+        aar, maaned, dag = m.group(1), int(m.group(2)), int(m.group(3))
+    if not 1 <= maaned <= 12:
+        return []
+    navn = _MAANEDER[maaned - 1]
+    return [f"{dag}. {navn} {aar}", f"{dag} {navn} {aar}"]
+
+
 def _inneholder(svar: str, bit: str) -> bool:
-    return _normaliser(bit) in _normaliser(svar)
+    n_svar = _normaliser(svar)
+    if _normaliser(bit) in n_svar:
+        return True
+    return any(_normaliser(form) in n_svar for form in _datoformer(bit))
 
 
 def vurder_svar(sp: dict, svar: str, dokumentsvar: dict) -> tuple:

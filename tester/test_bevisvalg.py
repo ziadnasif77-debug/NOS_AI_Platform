@@ -145,3 +145,42 @@ def test_bevisvalg_er_paa_fordi_maalingen_baerer_det():
     assert api.BEVISVALG_MAKS_SIDER == 5, (
         "fem sider er den MÅLTE verdien (109/133 mot 103/133 med tre) — "
         "endres den, skal korpuset kjøres på nytt")
+
+
+# ------------------------------------------------------------------ #
+#  Sammensetningsmatch: prøvd, målt, forkastet                        #
+# ------------------------------------------------------------------ #
+
+def test_endelse_er_ikke_morfem():
+    """Vakt mot en regel som ble prøvd og kostet sju riktige svar.
+
+    «Norsk setter hodet sist» er riktig som språk: «betalingsmottaker»
+    ER en mottaker. Men regelen «det korte ordet er en endelse i det
+    lange» skiller ikke et morfem fra en tilfeldig bokstavrekke:
+    «inntektsmeldingen» slutter på «ingen», og «ingen ekte personer»
+    står i bunnteksten på hver eneste side i en NAV-bunke.
+
+    Konsekvensen var ikke et enkelt feiltreff. Hver side traff, alle
+    ble «like relevante», og seleksjonen sluttet å velge — sju spørsmål
+    som var riktige, ble feil. Måles på nytt før den bygges opp igjen."""
+    assert not bevisvalg._samme_ord("inntektsmeldingen", "ingen"), (
+        "endelsesmatch er tilbake — den gjorde bunnteksten «ingen ekte "
+        "personer» til treff på hver side (målt: −7 riktige svar)")
+    assert not bevisvalg._samme_ord("saksbehandlingen", "ingen")
+    assert not bevisvalg._samme_ord("legeerklaeringen", "ingen")
+
+
+def test_poststed_teller_som_adressesporsmaal():
+    """«I hvilken by bor mottakeren?» inneholder ikke ordet «adresse»,
+    og fikk derfor ingen hjelp av adressesignalet — mens svaret sto i et
+    postnummerfelt. Uten dette valgte spørsmålet side 10, på ordet
+    «Mottakseining», og svarte «Finnes ikke i dokumentet»."""
+    med_postnummer = "OLA NORDMANN\nStorgata 14 B\n3044 DRAMMEN"
+    uten = "Generell informasjon om ytelser og rettigheter"
+    for spm in ("I hvilken by bor mottakeren?",
+                "Hvilket poststed har mottakeren?",
+                "Hvilken kommune bor parten i?"):
+        nok = bevisvalg._nokkelord(spm)
+        med = bevisvalg.poeng_for_side(med_postnummer, nok, spm)
+        ute = bevisvalg.poeng_for_side(uten, nok, spm)
+        assert med > ute, f"postnummersiden vant ikke for {spm!r}"
