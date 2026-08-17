@@ -3422,7 +3422,40 @@ def _skjemaer() -> dict:
                 "tolket_sporsmal": s(nullable=True,
                                      description="Satt hvis et uklart "
                                                  "spørsmål måtte tolkes om"),
-                "svar_avkortet": b()}},
+                "svar_avkortet": b(),
+                "bevis": {
+                    "type": "object", "nullable": True,
+                    "description": (
+                        "HVILKE SIDER svaret hviler på (R207). §26 krever "
+                        "at et resultat kan korreleres til evidence "
+                        "metadata; dette sto før bare som en norsk "
+                        "setning i «advarsler», og en setning er ikke "
+                        "metadata — en klient måtte parse prosa for å "
+                        "vite hva svaret bygget på. Setningen står "
+                        "fortsatt der for mennesker. «null» betyr at "
+                        "bevisvalg ikke kjørte: dokumentet har én side, "
+                        "eller svaret kom en deterministisk vei uten "
+                        "modellen i det hele tatt"),
+                    "properties": {
+                        "valgte": {"type": "array", "items": {
+                            "type": "integer"},
+                            "description": "Sidetall som ble sendt til "
+                                           "modellen, i stigende rekkefølge"},
+                        "utelatte": {"type": "array", "items": {
+                            "type": "integer"},
+                            "description": "Sidene som ble vurdert som "
+                                           "irrelevante for spørsmålet"},
+                        "poeng": {
+                            "type": "object",
+                            "additionalProperties": {"type": "number"},
+                            "description": "Relevanspoeng per side — så "
+                                           "et valg kan etterprøves, ikke "
+                                           "bare leses"},
+                        "grunn": s(description="Hvorfor utvalget ble som "
+                                               "det ble, i klartekst"),
+                        "antall_sider": {"type": "integer"},
+                        "alle": b(description="true = ingen side ble "
+                                              "utelatt")}}}},
         "SkjemaDel": {
             "type": "object",
             "description": "Svaret på «skjema_mal» — din egen mal utfylt.",
@@ -6423,7 +6456,9 @@ class Handler(BaseHTTPRequestHandler):
                             "uverifiserte_tall": kjerne.get("uverifiserte_tall"),
                             "tallvakt_forsok": kjerne.get("tallvakt_forsok"),
                             "tolket_sporsmal": kjerne["tolket_sporsmal"],
-                            "svar_avkortet": kjerne["svar_avkortet"]}
+                            "svar_avkortet": kjerne["svar_avkortet"],
+                            # R207: evidence metadata, maskinlesbart
+                            "bevis": kjerne.get("bevis")}
                 deler["svar"] = trygt(_svar_del)
 
         if valg["skjema"]:
@@ -7254,6 +7289,7 @@ class Handler(BaseHTTPRequestHandler):
             tallvakt_forsok=tallvakt_forsok,
             tolket_sporsmal=tolket_sporsmal,
             svar_avkortet=svar_avkortet,
+            bevis=kjerne.get("bevis"),          # R207
             advarsel=advarsel,
             fra_cache=fra_cache,
             tid_sekunder=round(time.time() - t0, 1),
@@ -7741,7 +7777,10 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                     "tall_verifisert": True,
                     "tolket_sporsmal": ("strekkodeverdien gjengitt fra "
                                         "dekoderen (deterministisk)"),
-                    "svar_avkortet": False, "advarsler": advarsler}
+                    "svar_avkortet": False, "advarsler": advarsler,
+                    # Deterministisk vei — bevisvalg
+                    # kjørte aldri (R118: nøkkelen finnes).
+                    "bevis": None}
 
     if sideref is not None and len((raa_tekst or "").strip()) >= 5:
         antall_sider, sider = del_i_sider(raa_tekst)
@@ -7753,14 +7792,20 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                     "tall_verifisert": True,
                     "tolket_sporsmal": ("sidetallet sjekket deterministisk "
                                         "mot sidemarkørene"),
-                    "svar_avkortet": False, "advarsler": advarsler}
+                    "svar_avkortet": False, "advarsler": advarsler,
+                    # Deterministisk vei — bevisvalg
+                    # kjørte aldri (R118: nøkkelen finnes).
+                    "bevis": None}
         if er_ren_sidelesing(sporsmal):
             return {"tom": False, "modell_brukt": False,
                     "svar": sider[sideref] or "(siden er tom)",
                     "tall_verifisert": True,
                     "tolket_sporsmal": (f"side {sideref} gjengitt ordrett "
                                         "(deterministisk, uten modell)"),
-                    "svar_avkortet": False, "advarsler": advarsler}
+                    "svar_avkortet": False, "advarsler": advarsler,
+                    # Deterministisk vei — bevisvalg
+                    # kjørte aldri (R118: nøkkelen finnes).
+                    "bevis": None}
         # Spørsmål OM en bestemt side → svaret hentes fra kun den siden
         raa_tekst = f"[Side {sideref} av {antall_sider}]\n{sider[sideref]}"
         advarsler.append(
@@ -7780,7 +7825,10 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                 "tolket_sporsmal": (f"{ident_felt} hentet fra det "
                                     "sjekksumvaliderte uttrekket "
                                     "(deterministisk)"),
-                "svar_avkortet": False, "advarsler": advarsler}
+                "svar_avkortet": False, "advarsler": advarsler,
+                    # Deterministisk vei — bevisvalg
+                    # kjørte aldri (R118: nøkkelen finnes).
+                    "bevis": None}
 
     tekst = raa_tekst
     # R195: bevisvalg. På en BUNKE blander modellen dokumentene — målt:
@@ -7794,6 +7842,14 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
         if _antall > 1:
             bevis = bevisvalg.velg_sider(_sider, sporsmal,
                                          maks_sider=BEVISVALG_MAKS_SIDER)
+            # R207: sidetallet er ALT registrert — men bare som en
+            # norsk setning i `advarsler`. §26 krever at et resultat
+            # kan korreleres til «evidence metadata», og en setning er
+            # ikke metadata: en klient som vil vite hvilke sider svaret
+            # hviler på, må parse prosa. Her legges det samme ved som et
+            # objekt. Setningen blir stående — mennesker leser den,
+            # maskiner leser objektet.
+            bevis["antall_sider"] = _antall
             if bevis["valgte"]:
                 tekst = bevisvalg.bygg_utvalgstekst(
                     _sider, bevis["valgte"], _antall)
@@ -7988,7 +8044,10 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
             "uverifiserte_tall": list(mangler),
             "tallvakt_forsok": tallvakt_forsok,
             "tolket_sporsmal": tolket_sporsmal,
-            "svar_avkortet": svar_avkortet, "advarsler": advarsler}
+            "svar_avkortet": svar_avkortet, "advarsler": advarsler,
+            # R118: nøkkelen finnes ALLTID. `null` betyr «bevisvalg kjørte
+            # ikke» (ett dokument, eller bryteren av) — ikke «vi glemte».
+            "bevis": bevis}
 
 
 # ==================================================================== #
@@ -8421,6 +8480,13 @@ def _spor_svar(**felt) -> dict:
         "tallvakt_forsok": None,
         "tolket_sporsmal": None,
         "svar_avkortet": None,
+        # R207: HVILKE SIDER svaret hviler på. Samme mønster som
+        # `uverifiserte_tall` over: opplysningen fantes alt, men bare
+        # som en norsk setning i `advarsel` — og §26 krever at et
+        # resultat kan korreleres til evidence metadata. En setning er
+        # ikke metadata. `null` = bevisvalg kjørte ikke (ett dokument,
+        # eller en deterministisk vei uten modellen).
+        "bevis": None,
         "advarsel": None,
         "fra_cache": False,
         "tid_sekunder": None,
@@ -8874,7 +8940,11 @@ class SvarOperasjon(Operasjon):
                 "tallvakt_forsok": kjerne.get("tallvakt_forsok"),
                 "tolket_sporsmal": kjerne["tolket_sporsmal"],
                 "svar_avkortet": kjerne["svar_avkortet"],
-                "advarsler": kjerne["advarsler"]}
+                "advarsler": kjerne["advarsler"],
+                # R207: samme evidence metadata som den flate veien —
+                # to veier som svarer ulikt paa «hva bygget svaret paa»
+                # er verre enn ingen av dem.
+                "bevis": kjerne.get("bevis")}
 
 
 class SkjemaOperasjon(Operasjon):
@@ -9121,7 +9191,12 @@ _OPERASJONSSKJELETT = {
 # til konvolutten — flyttet inn i `data` er `resultater[i].data` én
 # pålitelig sti for alle typer.
 _SVAR_DATAFELT = ("sporsmal", "svar", "tall_verifisert", "tolket_sporsmal",
-                  "svar_avkortet", "advarsler")
+                  "svar_avkortet", "advarsler",
+                  # R207: evidence metadata. Uten denne linja svarer den
+                  # flate veien og operasjonsveien ULIKT på «hva bygget
+                  # svaret på» — og to veier som er uenige om det, er
+                  # verre enn om ingen av dem svarte.
+                  "bevis")
 
 
 def normaliser_operasjonsresultat(res) -> dict:

@@ -40,6 +40,11 @@ FORVENTEDE_NOKLER = {
     # PROSA i `advarsel` — en klient som ville telle hvor ofte vakten
     # slår til, måtte tolke en setning (R132).
     "uverifiserte_tall", "tallvakt_forsok",
+    # R207: HVILKE SIDER svaret hviler paa. Nøyaktig samme mønster som
+    # linjene over: opplysningen fantes alt, men bare som en setning i
+    # `advarsel` — og §26 krever at et resultat kan korreleres til
+    # evidence metadata. En setning er ikke metadata.
+    "bevis",
     "tolket_sporsmal", "svar_avkortet", "advarsel", "fra_cache",
     "tid_sekunder", "kilde", "versjon",
 }
