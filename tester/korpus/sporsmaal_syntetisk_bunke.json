@@ -38,7 +38,12 @@
       ],
       "fasit": "4417820",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        1,
+        2,
+        10
+      ]
     },
     {
       "id": "vedtakstype",
@@ -48,7 +53,12 @@
       ],
       "fasit": "Vedtak om sykepenger",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        2,
+        3
+      ]
     },
     {
       "id": "innvilget",
@@ -63,7 +73,11 @@
       ],
       "fasit": "Innvilget",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        9
+      ]
     },
     {
       "id": "vedtaksdato",
@@ -74,7 +88,10 @@
       ],
       "fasit": "12.05.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "rett_fra",
@@ -86,7 +103,12 @@
       ],
       "fasit": "02.04.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        1,
+        3,
+        6
+      ]
     },
     {
       "id": "periode_til",
@@ -97,7 +119,10 @@
       ],
       "fasit": "30.09.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "sykepengegrunnlag",
@@ -107,7 +132,11 @@
       ],
       "fasit": "kr 512 400 per år",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        1,
+        2
+      ]
     },
     {
       "id": "utbetalingsgrad",
@@ -117,7 +146,14 @@
       ],
       "fasit": "100 prosent",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": [
+        1,
+        2,
+        3,
+        5,
+        6
+      ]
     },
     {
       "id": "forste_utbetaling",
@@ -128,7 +164,10 @@
       ],
       "fasit": "25.05.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "lovhjemmel_vedtak",
@@ -138,7 +177,8 @@
       ],
       "fasit": "Kapittel 8",
       "svares_av": "modell",
-      "type": "hjemmel"
+      "type": "hjemmel",
+      "fasit_sider": null
     },
     {
       "id": "dagsats",
@@ -148,7 +188,10 @@
       ],
       "fasit": "1 970",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "sum_dager",
@@ -158,7 +201,10 @@
       ],
       "fasit": "129",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "brutto_april",
@@ -168,7 +214,10 @@
       ],
       "fasit": "41 370",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "netto_juni",
@@ -178,7 +227,10 @@
       ],
       "fasit": "30 338",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "fakturabelop",
@@ -188,7 +240,10 @@
       ],
       "fasit": "kr 4 812,00",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "forfallsdato",
@@ -199,7 +254,10 @@
       ],
       "fasit": "24.06.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "fakturanummer",
@@ -209,7 +267,10 @@
       ],
       "fasit": "90114882",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "fakturadato",
@@ -221,7 +282,10 @@
       ],
       "fasit": "03.06.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "hvorfor_tilbakebetaling",
@@ -233,7 +297,10 @@
       ],
       "fasit": "Det er utbetalt for mye sykepenger",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "tilbakebetaling_periode",
@@ -244,7 +311,10 @@
       ],
       "fasit": "02.04.2026 til 30.04.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "hjemmel_tilbakekreving",
@@ -255,7 +325,10 @@
       ],
       "fasit": "§ 22-15",
       "svares_av": "modell",
-      "type": "hjemmel"
+      "type": "hjemmel",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "betalingsmottaker",
@@ -265,7 +338,10 @@
       ],
       "fasit": "NAV Innkreving",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "skjemanummer",
@@ -276,7 +352,11 @@
       ],
       "fasit": "NAV 08-07.04",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        4,
+        7
+      ]
     },
     {
       "id": "epost",
@@ -286,7 +366,10 @@
       ],
       "fasit": "ola.testperson@eksempel.no",
       "svares_av": "kode",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        4
+      ]
     },
     {
       "id": "telefon",
@@ -297,7 +380,8 @@
       ],
       "fasit": "41288903 (skrevet «+47 412 88 903» i dokumentet)",
       "svares_av": "kode",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": null
     },
     {
       "id": "kontonummer",
@@ -305,7 +389,8 @@
       "felt": "struktur.identifikatorer.kontonummer.0",
       "fasit": "kontonummeret på fakturaen (mod11-validert av koden)",
       "svares_av": "kode",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": null
     },
     {
       "id": "kid",
@@ -315,7 +400,10 @@
       ],
       "fasit": "1002345678911",
       "svares_av": "kode",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "fodselsnummer_begge",
@@ -325,7 +413,8 @@
       "fasit": "BEGGE personenes fødselsnumre — bunken gjelder to personer, og koden lister alle treff",
       "svares_av": "kode",
       "type": "identifikator",
-      "merknad": "Den viktigste kontrollen i hele korpuset: en modell ville valgt ETT nummer. Svarer denne med bare ett, er den deterministiske rutingen brutt."
+      "merknad": "Den viktigste kontrollen i hele korpuset: en modell ville valgt ETT nummer. Svarer denne med bare ett, er den deterministiske rutingen brutt.",
+      "fasit_sider": null
     },
     {
       "id": "strekkode_side3",
@@ -335,7 +424,10 @@
       ],
       "fasit": "1002345678911",
       "svares_av": "kode",
-      "type": "strekkode"
+      "type": "strekkode",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "strekkode_side10",
@@ -345,7 +437,10 @@
       ],
       "fasit": "NAV4417820-2026-06",
       "svares_av": "kode",
-      "type": "strekkode"
+      "type": "strekkode",
+      "fasit_sider": [
+        10
+      ]
     },
     {
       "id": "antall_sider",
@@ -355,7 +450,8 @@
       ],
       "fasit": "10",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "les_side_7",
@@ -365,7 +461,10 @@
       ],
       "fasit": "Sidens tekst ordrett",
       "svares_av": "kode",
-      "type": "side"
+      "type": "side",
+      "fasit_sider": [
+        7
+      ]
     },
     {
       "id": "side_finnes_ikke",
@@ -376,7 +475,8 @@
       "fasit": "Dokumentet har 10 sider — side 14 finnes ikke.",
       "svares_av": "kode",
       "type": "side",
-      "merknad": "«Vet ikke» er et gyldig svar; å dikte en side er det ikke."
+      "merknad": "«Vet ikke» er et gyldig svar; å dikte en side er det ikke.",
+      "fasit_sider": null
     },
     {
       "id": "klage_sprak",
@@ -386,7 +486,10 @@
       ],
       "fasit": "Nynorsk",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_ytelse",
@@ -400,7 +503,10 @@
       "fasit": "Arbeidsavklaringspenger",
       "svares_av": "modell",
       "type": "forstaaelse",
-      "merknad": "Klagen gjelder AAP, ikke sykepengene resten av bunken handler om (R183: det dokumentet GJELDER, ikke det det NEVNER)."
+      "merknad": "Klagen gjelder AAP, ikke sykepengene resten av bunken handler om (R183: det dokumentet GJELDER, ikke det det NEVNER).",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_avsender",
@@ -410,7 +516,10 @@
       ],
       "fasit": "Marit Testperson",
       "svares_av": "modell",
-      "type": "navn"
+      "type": "navn",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "sakstilvising",
@@ -420,7 +529,10 @@
       ],
       "fasit": "5590114",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_paaklaget_vedtak",
@@ -432,7 +544,10 @@
       ],
       "fasit": "08.05.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_begrunnelse",
@@ -444,7 +559,10 @@
       ],
       "fasit": "Klageren mener vedtaket bygger på feil faktum — hun sluttet i stillingen 28.02.2026",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "returslipp_enhet",
@@ -454,7 +572,10 @@
       ],
       "fasit": "NAV Skanning Hamar",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        10
+      ]
     },
     {
       "id": "postnummer_avsender",
@@ -468,7 +589,10 @@
       ],
       "fasit": "0607 OSLO",
       "svares_av": "modell",
-      "type": "adresse"
+      "type": "adresse",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "diagnose",
@@ -479,7 +603,8 @@
       "fasit": "L86 Ryggsyndrom med utstråling",
       "svares_av": "modell",
       "type": "forstaaelse",
-      "kjent_svakhet": "Kursivskriften på side 5 er fragmentert i tekstlaget (én bokstav per posisjon). Spørsmålet er MED VILJE med: det måler om en ny modell tåler fragmentert tekst bedre eller dårligere."
+      "kjent_svakhet": "Kursivskriften på side 5 er fragmentert i tekstlaget (én bokstav per posisjon). Spørsmålet er MED VILJE med: det måler om en ny modell tåler fragmentert tekst bedre eller dårligere.",
+      "fasit_sider": null
     },
     {
       "id": "ikke_i_dokumentet",
@@ -499,7 +624,8 @@
       "fasit": "Opplysningen finnes ikke i dokumentet",
       "svares_av": "modell",
       "type": "negativ",
-      "merknad": "Måler det viktigste av alt: at modellen sier «vet ikke» i stedet for å dikte. En modell som svarer med en blodtype her, skal ALDRI promoteres."
+      "merknad": "Måler det viktigste av alt: at modellen sier «vet ikke» i stedet for å dikte. En modell som svarer med en blodtype her, skal ALDRI promoteres.",
+      "fasit_sider": []
     },
     {
       "id": "ikke_oppdiktet_belop",
@@ -513,7 +639,8 @@
       ],
       "fasit": "Rentebeløp er ikke oppgitt — dokumentet sier bare at renter påløper ved for sen betaling",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "hvem_gjelder_bunken",
@@ -524,7 +651,13 @@
       ],
       "fasit": "Ola Nordmann Nor-Etternavn (side 1–8 og 10); Marit Testperson står som klager på side 9",
       "svares_av": "modell",
-      "type": "navn"
+      "type": "navn",
+      "fasit_sider": [
+        1,
+        3,
+        4,
+        6
+      ]
     },
     {
       "id": "oppsummering",
@@ -534,7 +667,12 @@
       ],
       "fasit": "Sykepengevedtak med beregning, tilbakebetalingskrav, egenerklæring, legeerklæring, inntektsmelding, klage og returslipp",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        2,
+        3
+      ]
     },
     {
       "id": "avsender_etat",
@@ -545,7 +683,8 @@
       ],
       "fasit": "ARBEIDS- OG VELFERDSETATEN",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": null
     },
     {
       "id": "avsender_postboks",
@@ -555,7 +694,10 @@
       ],
       "fasit": "Postboks 6600 Etterstad",
       "svares_av": "modell",
-      "type": "adresse"
+      "type": "adresse",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "avsender_telefon",
@@ -565,7 +707,10 @@
       ],
       "fasit": "55 55 33 33",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "vaar_referanse",
@@ -575,7 +720,10 @@
       ],
       "fasit": "2026/00-4417",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "mottaker_navn",
@@ -586,7 +734,13 @@
       ],
       "fasit": "OLA NORDMANN NOR-ETTERNAVN",
       "svares_av": "modell",
-      "type": "navn"
+      "type": "navn",
+      "fasit_sider": [
+        1,
+        3,
+        4,
+        6
+      ]
     },
     {
       "id": "mottaker_gate",
@@ -596,7 +750,11 @@
       ],
       "fasit": "Storgata 14 B",
       "svares_av": "modell",
-      "type": "adresse"
+      "type": "adresse",
+      "fasit_sider": [
+        1,
+        3
+      ]
     },
     {
       "id": "mottaker_poststed",
@@ -606,7 +764,11 @@
       ],
       "fasit": "3044 DRAMMEN",
       "svares_av": "modell",
-      "type": "adresse"
+      "type": "adresse",
+      "fasit_sider": [
+        1,
+        3
+      ]
     },
     {
       "id": "neste_revurdering",
@@ -617,7 +779,10 @@
       ],
       "fasit": "15.09.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "sykmelding_frist",
@@ -627,7 +792,8 @@
       ],
       "fasit": "innen 14 dager",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "meldekort_intervall",
@@ -637,7 +803,8 @@
       ],
       "fasit": "hver 14. dag",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "klagefrist",
@@ -648,7 +815,10 @@
       ],
       "fasit": "seks uker",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "klage_hjemmel",
@@ -658,7 +828,8 @@
       ],
       "fasit": "forvaltningsloven paragraf 29",
       "svares_av": "modell",
-      "type": "hjemmel"
+      "type": "hjemmel",
+      "fasit_sider": null
     },
     {
       "id": "klage_mottaker",
@@ -668,7 +839,11 @@
       ],
       "fasit": "NAV Klageinstans",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        9
+      ]
     },
     {
       "id": "saksbehandler",
@@ -678,7 +853,10 @@
       ],
       "fasit": "Kari Saksbehandler",
       "svares_av": "modell",
-      "type": "navn"
+      "type": "navn",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "saksbehandler_tittel",
@@ -689,7 +867,10 @@
       ],
       "fasit": "seniorraadgiver",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "nav_enhet",
@@ -699,7 +880,10 @@
       ],
       "fasit": "NAV Arbeid og ytelser Drammen",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "utbetalingsdag",
@@ -709,7 +893,8 @@
       ],
       "fasit": "den 25. i hver maaned",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "dager_april",
@@ -719,7 +904,8 @@
       ],
       "fasit": "21",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "dager_juli",
@@ -729,7 +915,8 @@
       ],
       "fasit": "23",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "brutto_juli",
@@ -739,7 +926,10 @@
       ],
       "fasit": "45 310",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "skattetrekk_mai",
@@ -749,7 +939,10 @@
       ],
       "fasit": "11 820",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "netto_september",
@@ -759,7 +952,10 @@
       ],
       "fasit": "30 338",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "sum_brutto",
@@ -769,7 +965,10 @@
       ],
       "fasit": "254 130",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "antall_maaneder",
@@ -779,7 +978,8 @@
       ],
       "fasit": "6 (april til september)",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "forste_maaned",
@@ -789,7 +989,10 @@
       ],
       "fasit": "April 2026",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        2
+      ]
     },
     {
       "id": "faktura_hjemmel_lov",
@@ -800,7 +1003,12 @@
       ],
       "fasit": "folketrygdloven",
       "svares_av": "modell",
-      "type": "hjemmel"
+      "type": "hjemmel",
+      "fasit_sider": [
+        1,
+        3,
+        9
+      ]
     },
     {
       "id": "renteregel",
@@ -811,7 +1019,10 @@
       ],
       "fasit": "Forsinkelsesrenter paaloeper",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "renteloven",
@@ -821,7 +1032,10 @@
       ],
       "fasit": "forsinkelsesrenteloven",
       "svares_av": "modell",
-      "type": "hjemmel"
+      "type": "hjemmel",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "nedbetaling",
@@ -832,7 +1046,13 @@
       ],
       "fasit": "Ja, ved aa kontakte NAV Innkreving",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        2,
+        3,
+        10
+      ]
     },
     {
       "id": "innkreving_telefon",
@@ -842,7 +1062,10 @@
       ],
       "fasit": "21 05 11 00",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        3
+      ]
     },
     {
       "id": "faktura_periode_start",
@@ -853,7 +1076,12 @@
       ],
       "fasit": "02.04.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        1,
+        3,
+        6
+      ]
     },
     {
       "id": "egenerklaering_instruks",
@@ -863,7 +1091,10 @@
       ],
       "fasit": "Bruk blokkbokstaver",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        4
+      ]
     },
     {
       "id": "egenerklaering_hvem",
@@ -875,7 +1106,10 @@
       ],
       "fasit": "Den som soeker",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        4
+      ]
     },
     {
       "id": "frilansbelop",
@@ -886,7 +1120,8 @@
       "fasit": "kr 8 400 i mai",
       "svares_av": "modell",
       "type": "belop",
-      "kjent_svakhet": "Teksten er fragmentert i tekstlaget (en bokstav per posisjon). Med vilje beholdt som maalepunkt for om en ny modell taaler fragmentert tekst."
+      "kjent_svakhet": "Teksten er fragmentert i tekstlaget (en bokstav per posisjon). Med vilje beholdt som maalepunkt for om en ny modell taaler fragmentert tekst.",
+      "fasit_sider": null
     },
     {
       "id": "egenerklaering_sted",
@@ -897,7 +1132,11 @@
       "fasit": "Drammen",
       "svares_av": "modell",
       "type": "forstaaelse",
-      "kjent_svakhet": "Fragmentert tekstlag, samme som frilansbelop."
+      "kjent_svakhet": "Fragmentert tekstlag, samme som frilansbelop.",
+      "fasit_sider": [
+        1,
+        3
+      ]
     },
     {
       "id": "arbeidsgiver_navn",
@@ -907,7 +1146,10 @@
       ],
       "fasit": "Nordbygg Entreprenoer AS",
       "svares_av": "modell",
-      "type": "navn"
+      "type": "navn",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "arbeidsgiver_orgnr",
@@ -917,7 +1159,10 @@
       ],
       "fasit": "889000007",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "arbeidsgiver_adresse",
@@ -927,7 +1172,10 @@
       ],
       "fasit": "Industriveien 7, 3050 MJOENDALEN",
       "svares_av": "modell",
-      "type": "adresse"
+      "type": "adresse",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "arbeidsgiver_kontakt",
@@ -937,7 +1185,8 @@
       ],
       "fasit": "Per Lonningsansvarlig",
       "svares_av": "modell",
-      "type": "navn"
+      "type": "navn",
+      "fasit_sider": null
     },
     {
       "id": "arbeidsgiver_tlf",
@@ -947,7 +1196,10 @@
       ],
       "fasit": "32 87 44 10",
       "svares_av": "modell",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "stillingsprosent",
@@ -957,7 +1209,14 @@
       ],
       "fasit": "100",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": [
+        1,
+        2,
+        3,
+        5,
+        6
+      ]
     },
     {
       "id": "ansatt_fra",
@@ -968,7 +1227,10 @@
       ],
       "fasit": "01.08.2019",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "inntekt_januar",
@@ -978,7 +1240,10 @@
       ],
       "fasit": "42 700",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "overtid_mars",
@@ -988,7 +1253,10 @@
       ],
       "fasit": "5 400",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "sum_inntekt",
@@ -998,7 +1266,10 @@
       ],
       "fasit": "142 200",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "maanedsinntekt",
@@ -1008,7 +1279,10 @@
       ],
       "fasit": "kr 47 400",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "aarsinntekt",
@@ -1018,7 +1292,10 @@
       ],
       "fasit": "kr 568 800",
       "svares_av": "modell",
-      "type": "belop"
+      "type": "belop",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "forste_fravaersdag",
@@ -1029,7 +1306,12 @@
       ],
       "fasit": "02.04.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        1,
+        3,
+        6
+      ]
     },
     {
       "id": "arbeidsgiverperiode_slutt",
@@ -1040,7 +1322,10 @@
       ],
       "fasit": "17.04.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "refusjon_fra",
@@ -1051,7 +1336,10 @@
       ],
       "fasit": "18.04.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "altinn_dato",
@@ -1062,7 +1350,10 @@
       ],
       "fasit": "28.04.2026 kl. 09:14",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "altinn_kanal",
@@ -1072,7 +1363,10 @@
       ],
       "fasit": "Altinn",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "klage_adresse",
@@ -1082,7 +1376,10 @@
       ],
       "fasit": "Bergsvegen 22, 3070 SANDE I VESTFOLD",
       "svares_av": "modell",
-      "type": "adresse"
+      "type": "adresse",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_poststed",
@@ -1092,7 +1389,10 @@
       ],
       "fasit": "3070 SANDE I VESTFOLD",
       "svares_av": "modell",
-      "type": "adresse"
+      "type": "adresse",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_sluttdato",
@@ -1103,7 +1403,10 @@
       ],
       "fasit": "28.02.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_navs_antakelse",
@@ -1114,7 +1417,10 @@
       ],
       "fasit": "01.03.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_hjemmel_ftrl",
@@ -1124,7 +1430,10 @@
       ],
       "fasit": "folketrygdlova paragraf 11-5",
       "svares_av": "modell",
-      "type": "hjemmel"
+      "type": "hjemmel",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_hjemmel_fvl",
@@ -1134,7 +1443,8 @@
       ],
       "fasit": "forvaltningslova paragraf 17",
       "svares_av": "modell",
-      "type": "hjemmel"
+      "type": "hjemmel",
+      "fasit_sider": null
     },
     {
       "id": "klage_legeerklaering_dato",
@@ -1145,7 +1455,11 @@
       ],
       "fasit": "20.05.2026",
       "svares_av": "modell",
-      "type": "dato"
+      "type": "dato",
+      "fasit_sider": [
+        5,
+        9
+      ]
     },
     {
       "id": "klage_krav",
@@ -1158,7 +1472,10 @@
       ],
       "fasit": "At vedtaket oppheves og saka handsamast paa nytt",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "klage_subsidiaert",
@@ -1170,7 +1487,11 @@
       ],
       "fasit": "At ytinga vert innvilga fraa 01.03.2026",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        9
+      ]
     },
     {
       "id": "klage_vedlegg",
@@ -1180,7 +1501,10 @@
       ],
       "fasit": "Sluttattest",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "returslipp_dokumenttype",
@@ -1191,7 +1515,11 @@
       ],
       "fasit": "Egenerklaering og legeerklaering",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        4,
+        10
+      ]
     },
     {
       "id": "returslipp_sidetall",
@@ -1201,7 +1529,8 @@
       ],
       "fasit": "10",
       "svares_av": "modell",
-      "type": "tall"
+      "type": "tall",
+      "fasit_sider": null
     },
     {
       "id": "returslipp_mottatt",
@@ -1213,7 +1542,8 @@
       "fasit": "18.06.2026",
       "svares_av": "modell",
       "type": "dato",
-      "kjent_svakhet": "Haandskrevet felt, fragmentert i tekstlaget."
+      "kjent_svakhet": "Haandskrevet felt, fragmentert i tekstlaget.",
+      "fasit_sider": null
     },
     {
       "id": "returslipp_kontrollor",
@@ -1224,7 +1554,10 @@
       "fasit": "T. Berg",
       "svares_av": "modell",
       "type": "navn",
-      "kjent_svakhet": "Haandskrevet felt, fragmentert i tekstlaget."
+      "kjent_svakhet": "Haandskrevet felt, fragmentert i tekstlaget.",
+      "fasit_sider": [
+        9
+      ]
     },
     {
       "id": "returslipp_instruks",
@@ -1236,7 +1569,10 @@
       ],
       "fasit": "Oeverst",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        10
+      ]
     },
     {
       "id": "to_personer",
@@ -1246,7 +1582,8 @@
       ],
       "fasit": "To: Ola Nordmann og Marit Testperson",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": null
     },
     {
       "id": "to_ytelser",
@@ -1259,7 +1596,12 @@
       ],
       "fasit": "Sykepenger og arbeidsavklaringspenger",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        2,
+        3
+      ]
     },
     {
       "id": "hvem_klager",
@@ -1272,7 +1614,10 @@
       ],
       "fasit": "Nei. Vedtaket gjelder Ola, klagen er fra Marit",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        4
+      ]
     },
     {
       "id": "faktura_gjelder",
@@ -1282,7 +1627,12 @@
       ],
       "fasit": "Sykepenger",
       "svares_av": "modell",
-      "type": "forstaaelse"
+      "type": "forstaaelse",
+      "fasit_sider": [
+        1,
+        2,
+        3
+      ]
     },
     {
       "id": "hvem_betaler",
@@ -1293,7 +1643,13 @@
       ],
       "fasit": "Ola Nordmann Nor-Etternavn",
       "svares_av": "modell",
-      "type": "navn"
+      "type": "navn",
+      "fasit_sider": [
+        1,
+        3,
+        4,
+        6
+      ]
     },
     {
       "id": "ikke_epost_marit",
@@ -1309,7 +1665,8 @@
       ],
       "fasit": "Ikke oppgitt. Bare Ola har e-post i bunken",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_kontonummer_marit",
@@ -1325,7 +1682,8 @@
       ],
       "fasit": "Ikke oppgitt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_diagnose_marit",
@@ -1341,7 +1699,8 @@
       ],
       "fasit": "Ikke oppgitt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_arbeidsgiver_marit",
@@ -1357,7 +1716,8 @@
       ],
       "fasit": "Ikke oppgitt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_saksbehandler_klage",
@@ -1373,7 +1733,8 @@
       ],
       "fasit": "Ikke oppgitt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_utfall_klage",
@@ -1391,7 +1752,8 @@
       ],
       "fasit": "Ikke oppgitt. Klagen er nettopp sendt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_neste_utbetaling_marit",
@@ -1407,7 +1769,8 @@
       ],
       "fasit": "Ikke oppgitt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_gebyr",
@@ -1424,7 +1787,8 @@
       ],
       "fasit": "Ingen gebyr er oppgitt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_pensjonsgrunnlag",
@@ -1440,7 +1804,8 @@
       ],
       "fasit": "Ikke oppgitt",
       "svares_av": "modell",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "ikke_side_11",
@@ -1452,7 +1817,8 @@
       ],
       "fasit": "Dokumentet har 10 sider",
       "svares_av": "kode",
-      "type": "negativ"
+      "type": "negativ",
+      "fasit_sider": []
     },
     {
       "id": "orgnr_kode",
@@ -1462,7 +1828,10 @@
       ],
       "fasit": "889000007",
       "svares_av": "kode",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "les_side_1",
@@ -1472,7 +1841,10 @@
       ],
       "fasit": "Sidens tekst ordrett",
       "svares_av": "kode",
-      "type": "side"
+      "type": "side",
+      "fasit_sider": [
+        1
+      ]
     },
     {
       "id": "les_side_6",
@@ -1482,7 +1854,10 @@
       ],
       "fasit": "Sidens tekst ordrett",
       "svares_av": "kode",
-      "type": "side"
+      "type": "side",
+      "fasit_sider": [
+        6
+      ]
     },
     {
       "id": "les_side_10",
@@ -1492,7 +1867,10 @@
       ],
       "fasit": "Sidens tekst ordrett",
       "svares_av": "kode",
-      "type": "side"
+      "type": "side",
+      "fasit_sider": [
+        10
+      ]
     },
     {
       "id": "epost_kode2",
@@ -1502,7 +1880,11 @@
       ],
       "fasit": "ola.testperson@eksempel.no",
       "svares_av": "kode",
-      "type": "identifikator"
+      "type": "identifikator",
+      "fasit_sider": [
+        4
+      ]
     }
-  ]
+  ],
+  "fasit_sider_utledet_av": "skript/utled_fasit_sider.py — sidene der maa_inneholde/ett_av står ordrett. [] = det finnes ingen side (negative spørsmål). null = lot seg ikke utlede, og spørsmålet holdes utenfor precision/recall. Et treff betyr «strengen står her», ikke «beviset er her»: står samme tall i to dokumenter, får begge sider — mildere mot presisjon enn en menneskelig fasit."
 }

@@ -500,6 +500,50 @@ spørsmålene er måltavlen: en kandidatløsning som fikser dem uten å
 
 ---
 
+## 5b. Evidence Selection KPI-er (§13.1) — den andre halvdelen av Phase 1
+
+§24 gir Phase 1 to akseptansekrav: «Målt gevinst fra lokal parallellitet
+**og evidence selection**». Den første er målt (1,70×, R205). Dette er
+den andre.
+
+§13.1 navngir sju KPI-er og en baseline: **`first-N-context`**. Baselinen
+får NØYAKTIG samme sidebudsjett som bevisvalg (5 sider av 10), så
+sammenligningen måler hvilke sider som velges — ikke hvem som fikk sende
+mest tekst.
+
+112 av 133 spørsmål har utledbar fasit. De 21 andre holdes utenfor:
+svaret står ikke ordrett på noen side (utregnede summer, spørsmål om
+dokumentets struktur), og å telle dem som «ingen side» ville straffet
+seleksjonen for å velge sider den skulle valgt.
+
+| KPI | first-5 | bevisvalg | endring |
+|---|---|---|---|
+| `candidate_precision` | 17,1 % | **38,9 %** | +126,8 % |
+| `candidate_recall` | 63,3 % | **90,6 %** | +43,1 % |
+| `evidence_recall` | 53,6 % | **85,7 %** | +60,0 % |
+| `context_tokens` | 1 100 | **839** | −23,7 % |
+| `answer_accuracy` | — | **94/118 (79,7 %)** | — |
+| `LLM_latency` | — | 1,19 s median / 2,12 s p95 | — |
+| `GPU_seconds_per_answer` | — | 1,116 | — |
+
+**Bedre på alle fire sammenlignbare, og med 24 % MINDRE kontekst.**
+§13.1 ber om at kvalitet veies mot kontekstkostnad; her går de samme vei.
+
+`evidence_recall` er den som betyr mest. §13.1 kaller den
+«sikkerhetsmargin før LLM», og baselinen lot modellen jobbe **uten
+beviset i nesten halvparten av spørsmålene** (53,6 %). Et galt svar er
+da ikke modellens feil — den fikk aldri se det den ble spurt om.
+
+**Konsistenssjekk:** 94 riktige av 118 modellbesvarte + 15 av 15
+kodebesvarte = 109 av 133 — nøyaktig korpusets registrerte baseline. De
+to målingene er uavhengige og lander på samme tall.
+
+En vakttest koder §13.1s forfremmelsesregel: bevisvalg er PÅ i
+produksjon, så påstanden «målbart bedre enn baselinen» må holde ved hver
+kjøring — ellers skal den av.
+
+---
+
 ## 6. Top Risks
 
 | Risiko | Konsekvens | Tiltak |
