@@ -70,3 +70,7 @@ offline_pakke/
 .cache/
 .prefect/
 .pyruntime/
+
+# Locust for lasttesting (§21). 73 MB med kompilerte utvidelser —
+# installeres med: .pyruntime\python.exe -m pip install --target last/pakker locust
+last/pakker/
