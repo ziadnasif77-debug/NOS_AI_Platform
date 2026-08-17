@@ -2044,6 +2044,41 @@ def _borealis_generer_intern(prompt: str, maks_tokens: int = 256) -> tuple:
         llm = _borealis["llama"]
         prompt = _tilpass_kontekst(llm, prompt, maks_tokens)
         with _borealis_las, _gpu_las:
+            # R206: NULLSTILL KONTEKSTEN FØR HVERT KALL.
+            #
+            # `Llama` er ett objekt som lever hele serverens levetid, og
+            # llama.cpp beholder KV-cachen mellom kall. Deler den nye
+            # prompten en forstavelse med den FORRIGE, gjenbrukes de
+            # cachede tokenene — og gjenbruksveien gir litt andre
+            # flyttallssummer enn en fersk evaluering. Ved temperature=0
+            # er det nok til å vippe ett token, og derfra skiller
+            # svarene lag.
+            #
+            # Målt, samme dokument og samme spørsmål, tre ganger:
+            #   etter et skannet dokument   319 tegn
+            #   etter samme spørsmål        424 tegn
+            #   etter et annet spørsmål     398 tegn
+            #
+            # Altså: SVARET AVHANG AV HVA SERVEREN GJORDE FØR DET. Det
+            # er R6-brudd i den formen §26 forbyr uttrykkelig — «samme
+            # dokument ... byte-for-byte identisk resultat-JSON» — og
+            # det er verre enn et ustabilt tall: to saksbehandlere med
+            # samme dokument fikk ulikt svar, og ingen av dem kunne se
+            # hvorfor.
+            #
+            # Nullstillingen ligger INNENFOR låsen med vilje: utenfor
+            # kunne et annet kall rekke å fylle cachen igjen mellom
+            # `reset()` og genereringen, og da er vi like langt.
+            #
+            # Prisen er at prompten må evalueres på nytt hver gang, i
+            # stedet for å gjenbruke en delvis cache. Det er riktig
+            # bytte her: reproduserbarhet er et krav, prefiks-gjenbruk
+            # er en optimalisering.
+            try:
+                llm.reset()
+            except Exception:                               # noqa: BLE001
+                pass    # eldre llama-cpp-python uten reset() — da står
+                        # vi igjen med gammel oppførsel, ikke en krasj
             ut = llm.create_chat_completion(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=maks_tokens, temperature=0.0)
