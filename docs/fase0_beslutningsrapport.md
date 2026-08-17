@@ -8,11 +8,38 @@
 
 ---
 
+## Status i ett blikk (2026-08-17)
+
+| | |
+|---|---|
+| §26 Acceptance Criteria | **19 grønne · 0 røde · 2 åpne** (organisatorisk + Phase 2) |
+| §30 Definition of Done | **5 grønne · 1 delvis** (sticky routing krever flernode) |
+| Phase 0 | levert — denne rapporten |
+| Phase 1 | levert — begge akseptanseutgangene i §24 målt (§10) |
+| Phase 2 | porten formelt åpen, og bevisst ikke gått gjennom (§10) |
+| Tester | 2 009 grønne |
+| Regler | R1→R218 i [regler_lokal_api.md](regler_lokal_api.md) |
+
+**Målt gjennomstrømning i dag:** 0,45 sider/s (500 sider på 18,5 min,
+1000 sider på 40,7 min) — mot 0,27 da rapporten ble påbegynt.
+
+**Det ene tallet som mangler er ikke vårt:** skannet andel og
+sider/dokument på ekte NAV-data. Det avgjør om peak krever 15 maskiner
+eller 1, og betyr mer enn alt annet i denne rapporten til sammen.
+
+---
+
 ## 0. Hva denne rapporten er — og ikke er
 
 Konseptutredningen krever at Phase 1 ikke starter før hvert ledd er
 målt, og at ingen ny infrastruktur vurderes uten en målt bottleneck,
 en baseline og en benchmark som kan avkrefte hypotesen (§20.0).
+
+**Rapporten dekker nå både Phase 0 og Phase 1.** Den ble skrevet som et
+beslutningsgrunnlag for om Phase 1 kunne starte; Phase 1 er siden
+gjennomført, og §24s to akseptanseutganger er målt og ført inn her
+(§10). Tallene er oppdatert deretter — der en tidligere konklusjon er
+endret av en måling, står begge, med målingen som avgjorde.
 
 Tallene under er **ekte målinger**, ikke anslag. Men de er målt på en
 utviklermaskin med ett 8 GB-kort. **De dimensjonerer ikke en NAV-server.**
@@ -47,13 +74,19 @@ cachetreff måles separat fordi det er en ekte egenskap, ikke juks.
 
 **Avledet:**
 
-| Størrelse | Målt |
-|---|---|
-| OCR | **3,42 s/side = 0,29 sider/s** (40 sider målt) |
-| Tekstlag | ~7,1 sider/s (10 sider på 1,40 s) |
-| Modellkall | **0,41 s per kall** |
-| Cache | 25× raskere enn kald lesing |
-| Samtidighet | 4 parallelle → 1,50 svar/s, ingen 503 |
+| Størrelse | Målt her (Phase 0) | I dag |
+|---|---|---|
+| OCR | 3,42 s/side = 0,29 sider/s (40 sider) | **2,22 s/side = 0,45 sider/s** (R203/R204, verifisert på 500 og 1000 sider) |
+| Tekstlag | ~7,1 sider/s (10 sider på 1,40 s) | uendret |
+| Modellkall | 0,41 s per kall | **~4,5 s** — prisen for R6 (`llm.reset()`, R206) |
+| Cache | 25× raskere enn kald lesing | uendret |
+| Samtidighet | 4 parallelle → 1,50 svar/s, ingen 503 | 100 brukere: median 6 ms, ingen kollaps (R210/R218) |
+
+Den midterste kolonnen er Phase 0-profilen slik den ble målt, og den
+står som den er. Høyre kolonne er hva de samme størrelsene er etter
+Phase 1. **Modellkallet gikk den gale veien med vilje:** 0,41 → 4,5 s
+er prisen for at samme dokument gir samme svar (R206), og det var et
+krav, ikke en optimalisering.
 
 Merk P95 på `struktur` (5,56 s): én utligger i første runde, resten
 under 2,2 s. Med n=12 er P95 følsom for én måling — tallet er tatt med
@@ -418,15 +451,29 @@ Med utredningens egen formel
 
 | OCR-vei | s/side | Arbeidere ved peak | Maskintimer/dag (snitt) |
 |---|---|---|---|
-| CPU-fallback (standard i dag) | 3,42 | **23** | 119,7 |
+| CPU-fallback, sekvensiell (utgangspunktet) | 3,76 | **25** | 130,6 |
 | GPU, trangt (`GPU_LAG=28`) | 5,31 median | **36** | 184,4 |
-| **GPU med rom (`GPU_LAG=22`)** | **2,76** | **19** | 95,8 |
+| GPU med rom (`GPU_LAG=22`) | 2,76 | **19** | 95,8 |
+| **Deterministisk tak + parallell lesing (i dag)** | **2,22** | **15** | **77,1** |
 
-**Dette er hele historien om 8 GB-kortet: 23 arbeidere blir til 19.**
-Ikke 4. Det finnes ingen innstilling på dette kortet som løser
-kapasitetsproblemet — kortet er rett og slett for lite til å kjøre
-begge modellene godt samtidig. Og prisen for de 19 er at modellen blir
-3,6× tregere (0,41 → 1,46 s/kall), som rammer den interaktive bruken.
+Den siste raden er den som gjelder, og den er målt to ganger: 500 sider
+på 18,5 min (R205) og 1000 sider på 40,7 min (R215).
+
+**To ting endret seg siden første utkast av denne rapporten.** Den
+gamle konklusjonen — «23 arbeidere blir til 19, og det finnes ingen
+innstilling som løser det» — handlet om å trimme GPU-en, og den står
+seg: det gjorde det ikke. Gevinsten kom et annet sted fra, av to
+endringer som ikke rørte kortet i det hele tatt:
+
+| | sider/s | arbeidere |
+|---|---|---|
+| utgangspunkt (R200) | 0,27 | 25 |
+| deterministisk tak alene (R204) | 0,30 | 23 |
+| **+ parallell sidelesing (R203)** | **0,45** | **15** |
+
+**Ti maskiner færre, uten å bytte maskinvare.** Prisen for de 19 i
+GPU-raden — en 3,6× tregere språkmodell — slipper vi helt: denne veien
+lar OCR ligge på CPU og kortet være Borealis' alene.
 
 ### Følsomhet — de to tallene ingen har målt
 
@@ -559,9 +606,17 @@ kjøring — ellers skal den av.
 
 ## 7. Recommended Next Step
 
-**Ikke Phase 2.** Utredningen tillater den først når lokal fan-out etter
-optimalisering ikke holder (§24.1), og vi har ikke engang prøvd den
-billigste optimaliseringen ennå.
+**Ikke Phase 2 — men nå av en annen grunn enn i første utkast.**
+
+Da dette ble skrevet første gang, var argumentet «vi har ikke engang
+prøvd den billigste optimaliseringen». Nå er den prøvd. **Phase 1 er
+gjennomført med begge akseptansekravene i §24 målt:** lokal fan-out
+(1,70×, R205) og Evidence Selection (§13.1s sju KPI-er, R208).
+
+Argumentet mot Phase 2 er derfor sterkere, ikke svakere: den lokale
+løsningen er optimalisert, og gapet den ikke lukker er ~11×. Det gapet
+lukkes ikke av en kø — det lukkes av flere maskiner, og hvor mange
+avhenger fortsatt av ett tall ingen har målt.
 
 Rekkefølge, billigst først:
 
@@ -578,7 +633,10 @@ Rekkefølge, billigst først:
    KV-cache: **minst 12 GB, helst 16.** `python -m delt.maskinprofil`
    sier hva et gitt kort vil gi før det kjøpes.
 4. **Kjør riggen på målserveren** og skriv denne rapporten om.
-5. **Så, og bare så,** vurder Phase 1 (lokal page fan-out).
+5. ~~Så, og bare så, vurder Phase 1 (lokal page fan-out).~~
+   **Gjennomført.** Lokal fan-out gir 1,70× (R203/R205), Evidence
+   Selection er målt mot `first-N-context` på alle sju KPI-ene (R208),
+   og §24s akseptanseutgang for Phase 1 er dermed levert.
 
 Det viktigste denne rapporten endret: første utkast anbefalte å trimme
 maskinen vi har. Målingen viste at det ikke virker. **Å oppdage det
@@ -592,6 +650,7 @@ antakelse koster måneder.**
 | ADR | Beslutning | Status |
 |---|---|---|
 | [0006](beslutninger/ADR-0006-plattformlag-utsatt.md) | Kø/database/multi-node utsatt til Phase 0 er målt | Gjeldende — denne rapporten er grunnlaget |
+| [0007](beslutninger/ADR-0007-reservert-kapasitet-for-interaktive.md) | Interaktive får en reservert kapasitetsandel | Gjeldende — skrevet før arbeidet (§20.1), gjennomført og målt (R218) |
 | Ny, foreslått | Kvantiseringsnivå for Borealis (Q8 vs Q4) | **Lukket uten forsøk** — Q4 ville landet på ~2650 MB ledig, midt i det farlige båndet (§2b) |
 | Ny, foreslått | Heve `OCR_MINSTE_LEDIG_GPU_MB` fra 2600 til ~3500 | Åpen — n=3 på én maskin er for tynt til å endre en sikkerhetsterskel (R148-disiplin) |
 | Ny, foreslått | OCR-motorvalg når VRAM er knapp | Åpen — dagens fallback er trygg, men kostbar |
@@ -605,7 +664,55 @@ antakelse koster måneder.**
 | Ett kort brukes; kort 1+ står ubrukt | Flerkort krever arbeid ingen har målt behov for | To kort tilgjengelig OG målt bottleneck |
 | Terskelen 0,85 er umålt | Kalibreringsmekanismen finnes, men er av | ECE beregnbar (R149) |
 | Valideringssettet for norhand finnes ikke | Kvalitetsporten er dermed inert (R148) | Før neste modellbytte for håndskrift |
-| Bunkeforveksling i modellsvar | Evidence Selection ikke bygget | Fire korpus-spørsmål; se §5 |
+| ~~Bunkeforveksling i modellsvar~~ → **feltmengden er flat for en bunke med flere personer** | Evidence Selection ER bygget og målt (R208), og et svar som gjelder feil person holdes tilbake (R213). Men rotproblemet står: en bunke med to personer gir ÉN flat feltmengde — ett fødselsnummer, én e-post | Dokumentdeling, som venter på 3–4 ekte dokumenter |
+| Interaktiv p95 er høy i absolutt forstand (17–35 s ved 20–100 brukere) | Fordelingen er rettet (ADR-0007/R218): batch-last gir ingen målbar forverring. Det som står igjen er maskinens størrelse, ikke rettferdigheten | Kort med ≥12 GB, eller den målte belastningsbaselinen |
+
+---
+
+## 10. Exit-gatene: Phase 1 er passert, Phase 2 er ikke
+
+### Porten inn til Phase 1 (§24.1) — passert
+
+Utredningen krever måling av sju ledd. Alle er målt, og tallene under er
+oppdatert etter parallelliteten:
+
+| Ledd | Målt |
+|---|---|
+| Upload/Parsing | inngår i 1,40 s |
+| OCR | **2,22 s/side** (var 3,42 før R203/R204) |
+| NAV Deterministic Engine | inngår i 1,40 s |
+| Evidence Selection | **sju KPI-er mot `first-N-context`** (R208) |
+| Borealis | 0,41 s/kall — 4,5 s med `llm.reset()` for R6 (R206) |
+| Validation/Aggregation | inngår i 1,40 s |
+| Samlet P95/P99 | per scenario over, og under last (R210/R218) |
+
+### Utgangen av Phase 1 (§24) — levert
+
+§24 gir Phase 1 to akseptanseutganger, og begge foreligger:
+
+| Krav | Resultat |
+|---|---|
+| «Målt gevinst fra lokal parallellitet» | **1,70×** — 500 sider på 18,5 min mot 31,4 (R205), verifisert på 1000 sider (R215) |
+| «… og evidence selection» | precision 17,1 → 38,9 %, recall 63,3 → 90,6 %, evidence_recall 53,6 → 85,7 %, kontekst −23,7 % (R208) |
+
+### Porten inn til Phase 2 (§24.1) — formelt åpen, reelt ikke tatt
+
+Regelen er at distribuert kø vurderes «bare dersom lokal løsning ETTER
+optimalisering ikke når dokumenterte mål». Den lokale løsningen er nå
+optimalisert, og den når ikke målet: 0,45 sider/s mot 5,2 i peak.
+
+**Porten er dermed formelt åpen — og skal likevel ikke gås gjennom.**
+Grunnen står i §20.1: «5,2 OCR pages/sec er kun planleggingsverdi …
+den målte workload-baselinen er autoritativ når den foreligger.»
+
+Gapet er 11,6× under antakelsen. Ved 10 % skannet andel er det 2,3×, og
+ved 20 sider/dokument er det borte. **Én måling på ekte NAV-data skiller
+mellom en klynge og én maskin**, og den målingen er billigere enn den
+første uka av Phase 2.
+
+Det er verdt å merke seg hva som skjedde med gapet uten at noen kjøpte
+noe: det var 19× i første utkast av denne rapporten. Optimaliseringen
+tok det til 11,6×. Ingen av stegene var en kø.
 
 ---
 
@@ -710,22 +817,3 @@ ikke ved å huske hva som var gjort:
 3. **§26.2 sa «500/1000».** Bare 500 var kjørt (R215).
 
 ---
-
-## 10. Exit-gate: kan Phase 1 starte?
-
-Utredningen krever måling av sju ledd før Phase 1 (§24.1):
-
-| Ledd | Målt? |
-|---|---|
-| Upload/Parsing | ✅ inngår i 1,40 s |
-| OCR | ✅ 3,42 s/side |
-| NAV Deterministic Engine | ✅ inngår i 1,40 s |
-| Evidence Selection | ✅ baseline 42/46 |
-| Borealis | ✅ 0,41 s/kall |
-| Validation/Aggregation | ✅ inngår i 1,40 s |
-| Samlet P95/P99 | ✅ per scenario over |
-
-**Formelt: ja.** Reelt: tallene er fra feil maskin, og de to viktigste
-inngangsverdiene er fortsatt antakelser. Anbefalingen i §7 er derfor å
-lukke de to hullene før Phase 1 startes — ikke fordi porten er stengt,
-men fordi svaret kan bli at Phase 1 heller ikke trengs.
