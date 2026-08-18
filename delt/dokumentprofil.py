@@ -558,12 +558,41 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
     for nr, sidetekst in sider:
         dato = dato_per_side.get(nr)
         kunngjort = dokumenttype_i_tittel(sidetekst)
-        ny_type = bool(kunngjort) and bool(grupper) \
-            and kunngjort != grupper[-1]["kunngjort"]
-        ny = (not grupper
-              or ny_type
-              or (dato and grupper[-1]["dato"] and dato != grupper[-1]["dato"])
-              or (dato and not grupper[-1]["dato"]))
+        gruppetype = grupper[-1]["kunngjort"] if grupper else None
+        # Gruppa har INGEN kunngjort type aa motsi, og denne siden
+        # foelger rett etter den utitulerte: da er den forrige et
+        # forblad eller en sammendragsside.
+        kan_adoptere = bool(grupper) and not gruppetype
+        if kan_adoptere:
+            kan_adoptere = len(grupper[-1]["sider"]) <= 1
+        adopterer = False
+        if not grupper:
+            ny = True
+        elif kunngjort and gruppetype and kunngjort != gruppetype:
+            ny = True               # en ANNEN type: nytt dokument
+        elif kunngjort and not gruppetype:
+            # Gruppa adopterer baade typen og DATOEN herfra — men bare
+            # hvis tittelen kommer RETT ETTER den utitulerte siden.
+            #
+            # Maalt paa brukerens EKTE kontoutskrift: side 1 er
+            # sammendragssiden uten tittel, sidene 2-8 sier
+            # «Kontoutskrift for …». Side 1 baerer dessuten en
+            # TRANSAKSJONSDATO (07.04) som ble lest som dokumentdato,
+            # mens utskriften er datert 30.04. Uten at datoen foelger
+            # med adopsjonen, delte datoregelen den samme utskriften i
+            # to paa neste side. Arket sier selv «Side 1 av 8».
+            #
+            # Kommer tittelen SENERE, er den starten paa noe nytt: uten
+            # den grensen ble vedtak + vedlegg + faktura ETT dokument,
+            # kalt «faktura» etter den tredje sidas tittel.
+            ny = not kan_adoptere
+            adopterer = kan_adoptere
+        else:
+            # Samme type som gruppa, eller ingen tittel. Da bestemmer
+            # datoen — og den SKAL kunne dele: to vedtak fra 1994 og
+            # 2026 kunngjoer begge «vedtak», men er to dokumenter med
+            # hver sin lovhjemmel.
+            ny = bool(dato) and dato != grupper[-1]["dato"]
         if ny:
             grupper.append({"sider": [nr] if nr else [],
                             "dato": dato, "tekst": sidetekst,
@@ -577,8 +606,10 @@ def del_i_dokumenter(tekst: str, datoer, filens_type=None) -> list:
             if nr:
                 grupper[-1]["sider"].append(nr)
             grupper[-1]["tekst"] += "\n" + sidetekst
-            if kunngjort and not grupper[-1]["kunngjort"]:
+            if adopterer:
                 grupper[-1]["kunngjort"] = kunngjort
+                if dato:
+                    grupper[-1]["dato"] = dato
 
     ut = []
     for g in grupper:

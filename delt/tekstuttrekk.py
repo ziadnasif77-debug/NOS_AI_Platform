@@ -2310,6 +2310,12 @@ _DOKUMENTTYPER = [
     # dokumenttypen den nevnte. Et følgeark som arver etiketten til
     # dokumentene det følger, gjør bunkedelingen verre, ikke bedre.
     ("returslipp", r"returslipp|retur[- ]?slipp|dokumentkontroll"),
+    # Kontoutskriften kom fra brukerens EKTE dokumenter. Den manglet i
+    # lista, og fordi et av arkene nevner «AvtaleGiro», traff moensteret
+    # for «kontrakt» — en aatte siders kontoutskrift ble klassifisert som
+    # en avtale. Kontoutskrifter er vanlige i NAV-saker: de dokumenterer
+    # inntekt, utbetalinger og tilbakebetalinger.
+    ("kontoutskrift", r"kontoutskrift|kontoutdrag|kontoutskr"),
     ("meldekort", r"meldekort"),
     ("pensjonsbrev", r"pensjonsbrev"),
     ("attest", r"\battest"),
@@ -2336,6 +2342,7 @@ DOKUMENTTYPE_TERM = {
     "klage": "Klage",
     "egenerklaring": "Egenerklæring",
     "returslipp": "Returslipp",
+    "kontoutskrift": "Kontoutskrift",
     "meldekort": "Meldekort",
     "pensjonsbrev": "Pensjonsbrev",
     "attest": "Attest",

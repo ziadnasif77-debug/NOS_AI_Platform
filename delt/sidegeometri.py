@@ -303,6 +303,20 @@ def sidetekst(ord_liste) -> str:
     plass = {}
     for tab_nr, (med, kolonner) in enumerate(blokker):
         tab = _bygg([linjer[i] for i in med], kolonner)
+        if not tab["overskrifter"]:
+            # KAN VI IKKE NAVNGI KOLONNENE, SKAL VI IKKE RØRE TEKSTEN.
+            # Målt på en ekte kontoutskrift: alle tretten tabellene der
+            # er uten overskrift, fordi beløpene er HØYREJUSTERT — deres
+            # venstrekant flytter seg med tallets bredde, mens
+            # overskriften står fast, så de to radene deler ingen
+            # kolonnestart. Resultatet var rader som «Varekjøp | 107,00
+            # | 07.04.26»: skillene sier at beløpet er en egen celle,
+            # men ikke om det er «Ut av konto» eller «Inn på konto» —
+            # nettopp spørsmålet modulen finnes for.
+            #
+            # Da er det ærligere å la teksten stå. R220 målte hva en
+            # kontekstendring uten gevinst koster: fire riktige svar.
+            continue
         # `_bygg` tar overskriftsraden ut av `rader`; her trengs den
         # tilbake på linja si, ellers forsvinner den fra teksten.
         rader = ([tab["overskrifter"]] if tab["overskrifter"] else []) \
@@ -352,6 +366,17 @@ def _radlinje(tab: dict, rad: list, er_overskrift: bool) -> str:
     return " | ".join(deler)
 
 
+def _navngivbar_tabell(ord_liste) -> bool:
+    """Finnes det en tabell vi kan sette NAVN på kolonnene i?
+
+    En tabell uten overskrift gir ingenting å vinne — se `sidetekst`."""
+    linjer = _linjer(ord_liste)
+    for med, kolonner in _blokker(linjer):
+        if _bygg([linjer[i] for i in med], kolonner)["overskrifter"]:
+            return True
+    return False
+
+
 def _har_biter(ord_liste) -> bool:
     """Finnes det tegnbiter på siden som hører til samme ord?"""
     for _y, rad in _rader(ord_liste):
@@ -377,7 +402,7 @@ def bygg_om(side, tekst: str) -> str:
     if not ord_:
         return tekst
     try:
-        if not _blokker(_linjer(ord_)) and not _har_biter(ord_):
+        if not _navngivbar_tabell(ord_) and not _har_biter(ord_):
             return tekst
         ny = sidetekst(ord_)
     except Exception:                                           # noqa: BLE001
