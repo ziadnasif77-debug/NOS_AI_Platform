@@ -4,6 +4,7 @@
     python skript/roter_nokkel.py              # roterer API_NOKKEL
     python skript/roter_nokkel.py uipath       # roterer én navngitt nøkkel
     python skript/roter_nokkel.py --vis-navn   # hvilke nøkler finnes?
+    python skript/roter_nokkel.py --ny uipath  # LAG en ny navngitt nøkkel
 
 HVORFOR VERDIEN ALDRI SKRIVES UT
 En nøkkel som har vært synlig ÉN gang er brent — i en terminal som
@@ -113,6 +114,33 @@ def _bytt_i_nokler(verdi: str, mal: str, ny: str) -> str:
     return ",".join(biter)
 
 
+def _skriv_env_atomisk(linjer) -> str:
+    """Sikkerhetskopi + atomisk skriving. Returnerer kopiens navn.
+
+    Kopien FOERST, og med rettigheter bare for eieren — ellers har vi
+    nettopp lagt den gamle noekkelen i en verdensleselig fil. Skrivingen
+    er atomisk (tmp + os.replace): doer maskinen midt i, staar den gamle
+    fila uroert. En halvskrevet .env laaser deg ute av din egen server."""
+    kopi = f"{ENV_STI}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
+    shutil.copy2(ENV_STI, kopi)
+    try:
+        os.chmod(kopi, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    midl = ENV_STI + ".ny"
+    with io.open(midl, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(linjer) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(midl, ENV_STI)
+    try:
+        os.chmod(ENV_STI, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    return os.path.basename(kopi)
+
+
+
 def roter(mal: str) -> dict:
     linjer = les_env(ENV_STI)
     if not linjer:
@@ -138,35 +166,63 @@ def roter(mal: str) -> dict:
     if not truffet:
         return {"ok": False, "feil": f"fant ikke linja som setter «{mal}»"}
 
-    # Sikkerhetskopi FØRST — og med rettigheter bare for eieren, ellers
-    # har vi nettopp lagt den gamle nøkkelen i en verdensleselig fil.
-    kopi = f"{ENV_STI}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
-    shutil.copy2(ENV_STI, kopi)
-    try:
-        os.chmod(kopi, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
-
-    # Atomisk: en halvskrevet .env låser deg ute av din egen server.
-    midl = ENV_STI + ".ny"
-    with io.open(midl, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(ut) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(midl, ENV_STI)
-    try:
-        os.chmod(ENV_STI, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
+    kopi = _skriv_env_atomisk(ut)
 
     return {"ok": True, "navn": mal,
             "gammelt_avtrykk": kjente[mal],
             "nytt_avtrykk": fingeravtrykk(ny_verdi),
-            "sikkerhetskopi": os.path.basename(kopi)}
+            "sikkerhetskopi": kopi}
+
+
+def opprett(navn: str) -> dict:
+    """Lager en NY navngitt nøkkel i API_NOKLER — verdien vises ikke.
+
+    Roteringen kunne bare bytte en nøkkel som ALT fantes, og feilet med
+    «finnes ikke i .env». Men det første man trenger når en ny maskin
+    skal kobles til, er nettopp en nøkkel som ikke finnes ennå — og da
+    sto man igjen med å redigere .env for hånd og finne på en verdi
+    selv. En håndskrevet nøkkel er kortere og mindre tilfeldig enn
+    `secrets.token_urlsafe`, og den er synlig mens den skrives.
+
+    Navnet er klientens ID i tilgangsloggen, så det skal si hvem det er:
+    «uipath-fakturamottak», ikke «nokkel2»."""
+    if not navn or navn == "API_NOKKEL" or ":" in navn or "," in navn:
+        return {"ok": False,
+                "feil": ("navnet må være et klientnavn uten kolon eller "
+                         "komma, og kan ikke være API_NOKKEL")}
+    linjer = les_env(ENV_STI)
+    if not linjer:
+        return {"ok": False, "feil": f"fant ingen .env i {ROT}"}
+    kjente = nokkelnavn(linjer)
+    if navn in kjente:
+        return {"ok": False,
+                "feil": f"«{navn}» finnes alt — roter den i stedet",
+                "kjente": sorted(kjente)}
+
+    ny_verdi = secrets.token_urlsafe(NOKKEL_BYTES)
+    ut, truffet = [], False
+    for linje in linjer:
+        par = _verdi_paa_linja(linje)
+        if par and par[0] == "API_NOKLER":
+            eksisterende = par[1].strip()
+            samlet = (f"{eksisterende},{navn}:{ny_verdi}" if eksisterende
+                      else f"{navn}:{ny_verdi}")
+            ut.append(f"API_NOKLER={samlet}")
+            truffet = True
+        else:
+            ut.append(linje)
+    if not truffet:
+        ut.append(f"API_NOKLER={navn}:{ny_verdi}")
+
+    kopi = _skriv_env_atomisk(ut)
+    return {"ok": True, "navn": navn,
+            "nytt_avtrykk": fingeravtrykk(ny_verdi),
+            "sikkerhetskopi": kopi}
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if a != "--vis-navn"]
+    args = [a for a in sys.argv[1:]
+            if a not in ("--vis-navn", "--ny")]
     if "--vis-navn" in sys.argv[1:]:
         kjente = nokkelnavn(les_env(ENV_STI))
         if not kjente:
@@ -175,6 +231,29 @@ def main() -> int:
         print("Nøkler i .env (avtrykk, ikke verdi):")
         for navn, avtrykk in sorted(kjente.items()):
             print(f"  {navn:22} {avtrykk}")
+        return 0
+
+    if "--ny" in sys.argv[1:]:
+        navn = next((a for a in args if a != "--ny"), None)
+        if not navn:
+            print("FEIL: --ny krever et klientnavn, f.eks. --ny uipath",
+                  file=sys.stderr)
+            return 1
+        svar = opprett(navn)
+        if not svar["ok"]:
+            print(f"FEIL: {svar['feil']}", file=sys.stderr)
+            if svar.get("kjente"):
+                print(f"  kjente nøkler: {', '.join(svar['kjente'])}",
+                      file=sys.stderr)
+            return 1
+        print(f"«{svar['navn']}» opprettet.")
+        print(f"  avtrykk: {svar['nytt_avtrykk']}")
+        print()
+        print("VERDIEN VISES IKKE — en nøkkel som har vært synlig én gang,")
+        print("er brent. Den står i .env. Neste steg:")
+        print("  1. start serveren på nytt (.env leses ved oppstart)")
+        print("  2. les verdien fra .env og legg den i klienten")
+        print(f"  3. bekreft i tilgangsloggen at klient_id blir «{navn}»")
         return 0
 
     mal = args[0] if args else "API_NOKKEL"
