@@ -1138,13 +1138,23 @@ def doem_forhandssjekk(sider: list) -> tuple:
                    "POST /dokument.")
 
 
-def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
+def ocr_pdf_bytes(data: bytes, maks_sider: int = None,
+                  bare_sider: set = None) -> dict:
     """Renderer PDF-sider til bilder (200 dpi) og OCR-er dem med
     regionbasert modellruting (delt/region_ocr): EasyOCR leser alt,
     usikre regioner leses i tillegg av norhand (norsk håndskrift),
     beste motor vinner per region, alt flettes i leserekkefølge.
     Synkron variant med sidegrense — store dokumenter hører hjemme i
-    POST /jobb. Rapporterer alltid sider_lest/sider_totalt ærlig."""
+    POST /jobb. Rapporterer alltid sider_lest/sider_totalt ærlig.
+
+    `bare_sider` (0-baserte indekser) leser KUN de sidene og lar resten
+    stå som tomme plasser — for blandede dokumenter der tekstlaget
+    dekker noen sider og skann resten. Grensen maks_sider teller da
+    OCR-LESTE sider, ikke sideposisjoner: side 45 uten tekstlag skal
+    ikke være utenfor rekkevidde bare fordi den står bakerst. Sider som
+    var valgt, men falt utenfor grensen, rapporteres i
+    `sider_valgt_ulest` (1-basert) — et kutt som ikke sies fra om, er
+    nettopp fella resten av API-et vokter mot."""
     import fitz
     _t0_ocr = time.time()
     import numpy as np
@@ -1184,9 +1194,26 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
     sider_regioner = []
     # Sider hoppet over av tomside-vakten (1-basert) — rapporteres ærlig
     tomme_sider = []
+    # Antall sider som faktisk gikk gjennom OCR-kverna (rendret og
+    # vurdert). I bare_sider-modus er dette IKKE sideindeksen: valgte
+    # sider kan ligge spredt utover hele dokumentet.
+    leste = 0
+    sider_valgt_ulest = []
     for i, side in enumerate(doc):
-        if i >= maks_sider:
-            break
+        if bare_sider is None:
+            if i >= maks_sider:
+                break
+        else:
+            if i not in bare_sider:
+                # Tekstlagsside: tom plass, så listen forblir
+                # side-justert for flettingen hos kalleren
+                tekster.append("")
+                continue
+            if leste >= maks_sider:
+                sider_valgt_ulest.append(i + 1)
+                tekster.append("")
+                continue
+        leste += 1
         pix = side.get_pixmap(matrix=ocr_skala(doc, side))
         bilde = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
         if pix.n == 4:      # RGBA → RGB
@@ -1274,8 +1301,18 @@ def ocr_pdf_bytes(data: bytes, maks_sider: int = None) -> dict:
             # kapasitetsplanleggingen hviler på — uten det kan ingen
             # svare på hvor mange arbeidere en gitt last trenger.
             "sekunder": round(time.time() - _t0_ocr, 3),
-            "sider_lest": min(sider_totalt, maks_sider),
+            # `leste` er identisk med gamle min(totalt, maks) uten
+            # bare_sider — og det ærlige tallet med: tomside-vakten
+            # teller som lest (siden ble rendret og vurdert), et hopp
+            # over grensen gjør det ikke.
+            "sider_lest": leste,
             "sider_totalt": sider_totalt,
+            # Valgt for OCR, men over maks_sider-grensen (1-basert).
+            # Tom liste når ingenting ble kuttet.
+            "sider_valgt_ulest": sider_valgt_ulest,
+            # Side-justert tekstliste for fletting hos kalleren
+            # (bare_sider-modus). Internt: aldri ut i et JSON-svar.
+            "_tekster_per_side": tekster,
             # Understrek = internt felt, aldri med i et JSON-svar (samme
             # konvensjon som jobb["_data"]). Dette er numpy-arrayer.
             "_sidebilder": rendrede,
@@ -1642,6 +1679,10 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
     sider = []
     tekster = []
     total_tekst = 0
+    # Renset tegnantall PER SIDE — grunnlaget for blandet-vurderingen
+    # under. Kan ikke leses ut av `tekster` i etterkant: sidegeometrien
+    # bygger om teksten og endrer lengden.
+    sidetegn = []
     for i, side in enumerate(doc):
         tekst = side.get_text() or ""
         # Uttrekket og skannet-terskelen under leser den RENE teksten.
@@ -1650,6 +1691,7 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
         # det heller ingen tabell, men den koblingen skal stå i koden
         # og ikke være noe man må resonnere seg fram til.
         total_tekst += len(tekst.strip())
+        sidetegn.append(len(tekst.strip()))
         sider.append({"side_nummer": i, "tegn": len(tekst),
                       "felter": utvid_entiteter(tekst, {})})
         tekster.append(sidegeometri.bygg_om(side, tekst) if SIDEGEOMETRI
@@ -1673,21 +1715,43 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
     # sidebildene OCR allerede har rendret. Før dette rendret de to
     # stegene hver sin kopi av de samme sidene (målt 0,19 s per A4-side
     # i ren dobbeltjobb).
+    #
+    # Terskelen gjelder PER SIDE, ikke bare for dokumentet samlet (R237).
+    # Den samlede terskelen alene gjorde at en BLANDET bunke — målt: 19
+    # tekstsider og 31 skannede i samme saksmappe — aldri fikk OCR i det
+    # hele tatt: tekstlaget «beviste» at dokumentet var digitalt, de 31
+    # sidene ble rapportert som blanke_sider, og 62 % av dokumentet var
+    # stille ulest. Nå OCR-es akkurat sidene uten tekstlag og flettes
+    # inn i sideorden; helt uleste dokumenter tar samme vei som før.
     ocr_res = None
+    blandet_ocr = False
+    sider_uten_tekstlag = [i for i, n in enumerate(sidetegn) if n < 20]
     if total_tekst < 20:
         try:
             ocr_res = ocr_pdf_bytes(data, ocr_maks_sider)
         except Exception as exc:
             return {"ok": False, "feil": f"OCR feilet: {exc}"}
+    elif sider_uten_tekstlag:
+        try:
+            ocr_res = ocr_pdf_bytes(data, ocr_maks_sider,
+                                    bare_sider=set(sider_uten_tekstlag))
+        except Exception as exc:
+            return {"ok": False, "feil": f"OCR feilet: {exc}"}
+        blandet_ocr = True
 
     strekkode_rapport = {}
+    # Blandet modus gjenbruker IKKE sidebildene (R55): de dekker bare
+    # delmengden uten tekstlag, og strekkodelesingen ville tilskrevet
+    # funn feil sidetall. Da rendrer den selv, som for tekstdokumenter.
     strekkoder = les_strekkoder_bytes(
-        data, sider=ocr_res["_sidebilder"] if ocr_res else None,
+        data,
+        sider=(ocr_res["_sidebilder"]
+               if ocr_res is not None and not blandet_ocr else None),
         rapport=strekkode_rapport
     ) if les_strekkoder else []
     # Ble ikke alle sidene skannet, skal det SIES. Går OCR-veien, er
     # sidetallet fra rendrede sider — det ekte totalen er dokumentets.
-    if ocr_res is not None and strekkode_rapport:
+    if ocr_res is not None and not blandet_ocr and strekkode_rapport:
         strekkode_rapport["sider_totalt"] = ocr_res.get(
             "sider_totalt", strekkode_rapport.get("sider_totalt", 0))
         strekkode_rapport["avkortet"] = (
@@ -1715,6 +1779,112 @@ def analyser_bytes(filnavn: str, data: bytes, ocr_maks_sider: int = None,
                                    float(ocr_res["sekunder"]))
         except Exception:                                       # noqa: BLE001
             pass
+
+    # Blandet dokument (R237): tekstlaget beholdes som fasit der det
+    # finnes, og OCR-teksten flettes inn KUN på sidene uten tekstlag —
+    # i sideorden, slik at [Side i av n]-markørene (og dermed
+    # blanke_sider i dokumentprofilen) forteller sannheten. Egen gren i
+    # stedet for OCR-grenen under: den bytter ut HELE teksten og ville
+    # kastet tekstlaget — den beste kilden vi har — for 19 av 50 sider.
+    if blandet_ocr and ocr_res is not None:
+        per_side = ocr_res.get("_tekster_per_side") or []
+        for i in sider_uten_tekstlag:
+            t = per_side[i] if i < len(per_side) else ""
+            if t.strip():
+                tekster[i] = t
+                sider[i] = {"side_nummer": i, "tegn": len(t),
+                            "felter": utvid_entiteter(t, {})}
+        if len(tekster) > 1:
+            full_tekst = "\n".join(f"[Side {i + 1} av {len(tekster)}]\n{t}"
+                                   for i, t in enumerate(tekster)).strip()
+        else:
+            full_tekst = "\n".join(tekster).strip()
+        # Aggregatet regnes på nytt: de flettede sidene kan bære felter
+        # (fnr under etikett, saksnummer) som tekstlaget aldri så.
+        felter = {}
+        for s in sider:
+            for k, v in s["felter"].items():
+                if k not in felter and v not in (None, ""):
+                    felter[k] = v
+
+        advarsel_deler = []
+        if ocr_res.get("sider_valgt_ulest"):
+            ulest = ", ".join(str(s)
+                              for s in ocr_res["sider_valgt_ulest"])
+            advarsel_deler.append(
+                f"OCR leste {ocr_res['sider_lest']} av "
+                f"{len(sider_uten_tekstlag)} sider uten tekstlag "
+                f"(synkron grense — øk med felt maks_sider inntil "
+                f"{OCR_TAK_SIDER}, eller bruk POST /jobb for hele "
+                f"dokumentet; ulest: side {ulest})")
+        if ocr_res.get("tomme_sider"):
+            hvilke = ", ".join(str(s) for s in ocr_res["tomme_sider"])
+            advarsel_deler.append(
+                f"side {hvilke}: (nesten) tom — OCR hoppet over for å "
+                "ikke lese støy som tekst")
+        kvalitet = (ocr_res.get("forbehandling") or {}).get("kvalitet") or {}
+        if kvalitet.get("advarsler"):
+            advarsel_deler.append(
+                "bildekvalitet: " + "; ".join(kvalitet["advarsler"]))
+        if strekkode_advarsel:
+            advarsel_deler.append(strekkode_advarsel)
+        hs_avk = ocr_res.get("handskrift_avkortet")
+        if hs_avk:
+            advarsel_deler.append(
+                f"håndskrift: {hs_avk['ulest']} regioner på "
+                f"{hs_avk['sider']} side(r) ble IKKE lest av "
+                f"håndskriftmodellen ({', '.join(hs_avk['grunner'])}) — "
+                "de står igjen med den svakere trykk-lesingen")
+
+        datoer_detaljert = (klassifiser_datoer(full_tekst)
+                            + _pdf_metadata_datoer(pdf_meta))
+        for dd in datoer_detaljert:
+            if any(dd["raatekst"] in h for h in ocr_res["handskrift"]):
+                dd["skrevet_for_hand"] = True
+                dd["begrunnelse"] += "; står i en håndskrevet region"
+        sett_dato_roller(datoer_detaljert)
+        # ocr_brukt=True: bunken inneholder skannede sider, så PDF-ens
+        # egen opprettelsesdato er (minst) delvis en skannedato
+        dokumentdato = finn_dokumentdato(datoer_detaljert, ocr_brukt=True)
+        sendt = _kanskje_send_til_gjennomgang(filnavn, data, ocr_res, felter)
+        return {
+            "ok": True,
+            "filnavn": filnavn,
+            "antall_sider": len(sider),
+            "trenger_ocr": False,
+            "ocr_brukt": True,
+            "kilde": "tekstlag+regionocr",
+            # Internt (understrek-konvensjonen): grunnlaget for
+            # koordinater per funn — kun de OCR-leste sidene har bokser,
+            # tekstlagssider har per definisjon ingen.
+            "_sider_regioner": ocr_res.get("_sider_regioner") or [],
+            "felter": felter,
+            "datoer": finn_alle_datoer(full_tekst),
+            "datoer_detaljert": datoer_detaljert,
+            "dokumentdato": dokumentdato,
+            "strekkoder": strekkoder,
+            "per_side": sider,
+            "tekst": full_tekst,
+            "antall_tegn": len(full_tekst),
+            "ocr_motorer": ocr_res["motorer"],
+            "handskrift": ocr_res["handskrift"],
+            "ocr_sider_lest": ocr_res["sider_lest"],
+            "ocr_sider_totalt": ocr_res["sider_totalt"],
+            # Blandet-modusens egen brøk: hvor mange sider MANGLET
+            # tekstlag. «lest 31 av 50» ville antydet at 19 ble kuttet —
+            # de ble lest bedre enn OCR noen gang kunne.
+            "ocr_sider_uten_tekstlag": len(sider_uten_tekstlag),
+            "ocr_konfidens": ocr_res.get("konfidens"),
+            "bildekvalitet": ocr_res.get("forbehandling"),
+            "sendt_til_gjennomgang": sendt,
+            # R187: intern (understrek) — mellombåndets tilbakehold, til
+            # tilgangsloggen. Aldri ut i svar.
+            "_gjennomgang_vurdering": ocr_res.get("_gjennomgang_vurdering"),
+            "advarsel": (" — ".join(advarsel_deler)
+                         if advarsel_deler else None),
+        }
+
+    if ocr_res is not None:
         ocr_tekst = ocr_res["tekst"]
         ocr_advarsel = None
         if ocr_res.get("tomme_sider"):
