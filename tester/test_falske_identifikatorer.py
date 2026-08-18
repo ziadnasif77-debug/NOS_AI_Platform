@@ -120,3 +120,51 @@ def test_helt_dokument_gir_bare_de_ekte():
     assert finn_alle_organisasjonsnummer(tekst) == [GYLDIG_ORGNR]
     # kontonummer deler kandidatstrømmen med fnr — ingen skal dukke opp
     assert finn_alle_kontonummer(tekst) == []
+
+
+# ---------- datoporten (R238) ----------
+# Mod11 alene slipper gjennom ~1 av 121 tilfeldige sifferrekker. Målt på
+# en ekte blandet saksmappe produserte den romslige skanneren (R145) to
+# «fødselsnummer» av nabotall — begge mod11-gyldige, begge med umulig
+# fødselsdato. Datoporten i er_gyldig_fnr er vakten som manglet.
+
+def test_mod11_gyldig_men_umulig_dato_avvises():
+    """De to faktiske fabrikasjonene fra den blandede saksmappa. Begge
+    består mod11 — og ingen av dem KAN være et ekte nummer: måned 14
+    finnes ikke, og dag 97 finnes ikke engang som D-nummer (57).
+    Bygget med + så tallet aldri står sammenhengende i kildekoden
+    (test_portabilitet håndhever det) — umulig dato eller ei."""
+    assert not er_gyldig_fnr("2814" + "6077120")     # måned 14
+    assert not er_gyldig_fnr("9721" + "5946839")     # dag 97
+
+
+def test_d_h_og_syntetiske_varianter_godtas_fortsatt():
+    """Datoporten skal kjenne variantene: dag +40 er D-nummer, måned
+    +40 er H-nummer, måned +80 er syntetiske testnumre (Tenor).
+    Kontrollsifrene regnes med testmodulens EGEN mod11 — ikke kodens."""
+    from syntetiske_nummer import _fnr_fra
+
+    def forste_gyldige(seksarsifre):
+        for individ in range(100, 1000):
+            fnr = _fnr_fra(f"{seksarsifre}{individ:03d}")
+            if fnr:
+                return fnr
+        raise AssertionError(f"fant ingen gyldig kandidat for {seksarsifre}")
+
+    assert er_gyldig_fnr(forste_gyldige("410190"))     # D-nummer (dag 41)
+    assert er_gyldig_fnr(forste_gyldige("015190"))     # H-nummer (måned 51)
+    assert er_gyldig_fnr(forste_gyldige("018190"))     # syntetisk (måned 81)
+
+
+@pytest.mark.parametrize("tekst", [
+    # to beløpslinjer i en tabellkolonne — limes til tallet med måned 14
+    "Post 4211\n281 460\n77 120\nPost 4212",
+    # orgnummer + nabotall over tre linjer — limes til tallet med dag 97
+    "Ref 972\n159 468\n39 dager",
+])
+def test_flerlinjers_naboverdier_blir_aldri_fodselsnummer(tekst):
+    """R145 leser med vilje over linjeskift (et ekte fnr KAN stå delt
+    over to linjer i OCR-tekst) — så lesingen skal bestå. Porten som
+    stopper limingen er datoen, og disse to grupperingene er nettopp
+    dem den romslige lesingen limte sammen i den ekte bunken."""
+    assert finn_alle_fodselsnummer(tekst) == []

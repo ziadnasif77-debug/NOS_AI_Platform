@@ -60,14 +60,30 @@ def _mod11_kontroll(sifre: str, vekter: list) -> int:
 
 
 def er_gyldig_fnr(fnr: str) -> bool:
-    """Norsk fødselsnummer: 11 sifre med to mod11-kontrollsifre."""
+    """Norsk fødselsnummer: 11 sifre med to mod11-kontrollsifre OG en
+    mulig fødselsdato (R238).
+
+    Mod11 alene slipper gjennom ~1 av 121 tilfeldige sifferrekker, og
+    skanneren leser med vilje ROMSLIG (R145: skilletegn og linjeskift
+    inne i tallet). Målt på en ekte blandet saksmappe limte den to
+    beløpslinjer i en tabell («281 460» / «77 120») til ett mod11-gyldig
+    tall — rapportert som fødselsnummer med måned 14 — og NAVs eget
+    orgnummer pluss et nabotall til ett med dag 97. Datoen er porten som
+    manglet: et ekte fødselsnummer BÆRER en fødselsdato, et sammenlimt
+    tall gjør det nesten aldri. `fodselsdato_av_fnr` håndhever dag/måned
+    med variantene (dag +40 = D-nummer, måned +40 = H-nummer, +80 =
+    syntetisk/Tenor) og ekte kalenderdato. Bevisst utenfor: FH-nummer
+    (helsevesenets 8/9-prefiks uten datostruktur) — å godta dem ville
+    gjenåpne hullet for ~1 av 5 limte kandidater."""
     if not fnr or not fnr.isdigit() or len(fnr) != 11:
         return False
     k1 = _mod11_kontroll(fnr, _FNR_VEKTER1)
     k2 = _mod11_kontroll(fnr, _FNR_VEKTER2)
     if k1 == 10 or k2 == 10:
         return False
-    return k1 == int(fnr[9]) and k2 == int(fnr[10])
+    if k1 != int(fnr[9]) or k2 != int(fnr[10]):
+        return False
+    return fodselsdato_av_fnr(fnr) is not None
 
 
 def er_gyldig_kontonummer(konto: str) -> bool:
