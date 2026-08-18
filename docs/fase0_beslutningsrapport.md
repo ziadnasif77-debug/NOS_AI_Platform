@@ -260,6 +260,14 @@ standard:
 | OCR-tekst, GPU | 1 av 10 — «Homburg v. d. Höhe.» gikk fra **tre identiske linjer til én** |
 | Spørsmålskorpus | **109 av 133 (82 %)** — nøyaktig som før, «samme svar hver gang» |
 
+> **Korpuset er senere hevet til 129 av 133 (97 %)** gjennom R219–R233:
+> tabellene bygget tilbake fra ordposisjoner, bunken delt i dokumenter,
+> tegnbiter i utfylte felter satt sammen, telle- og tilsvarsspørsmål
+> flyttet til kode, og en feltvakt som holder tilbake verdier som hører
+> til et annet felt. Determinismen er uendret: «samme svar hver gang».
+> Fire spørsmål står igjen, alle diagnostisert som leseforståelse hos
+> en 4B-modell — se «Fire som står igjen» nederst.
+
 Den ene GPU-endringen er verdt å lese to ganger: de to regionene
 tidsbudsjettet rakk EKSTRA, produserte duplikater. Taket fjernet dem.
 
@@ -598,6 +606,38 @@ kjøring — ellers skal den av.
 | Kjøpe maskinvare på antatt last | For dyrt eller for lite | Mål skannet andel og sider/dokument FØRST |
 | Skalere arbeidere i stedet for å frigjøre VRAM | 23 maskiner der 4 holder | Prøv kvantisering/GPU-lag før innkjøp |
 | Bunkeforveksling i modellsvar | Feil svar som ser riktig ut | Evidence Selection; menneskelig kontroll består |
+### Fire som står igjen (korpus 129 av 133)
+
+Alle fire er diagnostisert, og ingen av dem er en kodefeil. Modellen har
+riktig side i konteksten hver gang, og henter feil opplysning fra den.
+
+| Spørsmål | Svarer | Skulle svart | Diagnose |
+|---|---|---|---|
+| `refusjon_fra` | 02.04.2026 | 18.04.2026 | tar «Foerste fravaersdag» i stedet for «Refusjonskrav fra» — begge er datoer på samme side |
+| `klage_subsidiaert` | hovedkravet | det subsidiære | begge krav står under samme overskrift, to linjer fra hverandre |
+| `ikke_saksbehandler_klage` | «NAV Klageinstans» | «ikke oppgitt» | navngir MOTTAKEREN av klagen som saksbehandler |
+| `ikke_diagnose_marit` | «ryggsmerte … venstre ben» | «ikke oppgitt» | delvis oppdiktet — dokumentet sier «Ryggsyndrom», og «venstre ben» står ingen steder |
+
+**Fem mekanismer ble målt mot denne klyngen. To vant og ble beholdt
+(R229 bunkespørsmål, R232 feltvakt). Tre tapte og ble kastet:**
+
+| Forsøk | Utfall |
+|---|---|
+| Prompt-linje «svar på nøyaktig det som spørres» (R225) | +1 / −4, og en av de fire var kontrollen mot oppdiktede beløp |
+| Feltoppslag med nøkkelord fra spørsmålet (R231) | fanget 15 spørsmål, ni av dem riktige i dag — «Hvor mye hadde parten i frilansinntekt?» ga nøkkelordet «hadde» |
+| Entydig merket felt uten nøkkelorduttrekk | 2 treff, 9 bom — «bruttobeløpet for april» ville fått «Grunnbeloep (G) per 01.05.2026» |
+
+**Maskinvaren er taket.** Modellen er `borealis-4b-instruct-preview-Q8_0`
+på et RTX 3070 med 8 GB, og kortet har 1,3 GB ledig under drift. Det
+finnes ingen større modell i `modeller/` — kandidaten der er en avkortet
+Q4-fil på 6,5 MB, både ufullstendig og svakere enn Q8-en som kjører.
+
+**Det som ville flyttet disse fire:** et kort med mer VRAM og en større
+modell, eller et felt-vokabular for NAV-begreper (gebyr, renter,
+egenandel, grunnlag) validert mot ekte dokumenter. Et slikt vokabular
+kan ikke bygges mot syntetiske dokumenter uten å bli formet av dem — se
+R231 for hva som skjer når man prøver.
+
 | Tallvakt gir falsk trygghet | Irrelevant tall passerer som svar | Dokumentert i korpuset; ikke fjern menneskelig kontroll |
 | Umålte terskler (0,85) | Feilruting ingen oppdager | `KALIBRERING_ANDEL` > 0 i noen uker (R149) |
 | Målingene tas for å gjelde NAV-serveren | Feil dimensjonering | Denne rapportens §0; riggen kjøres på målmaskinen |
