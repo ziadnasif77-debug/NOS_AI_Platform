@@ -114,9 +114,9 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
                                SLADD_TYPER, UTTREKK_REGEL_VERSJON)
 # All prompttekst bor i regler/prompter.md — ett sted å lese, ett sted
 # å endre. Se delt/prompter.py for hvorfor.
-from delt import (bevisvalg, bunkesporsmaal, dokumentruting, kalibrering,
-                  maalinger, maskinprofil, personbinding, prompter,
-                  sidegeometri, tilstander, typeforventninger)
+from delt import (bevisvalg, bunkesporsmaal, dokumentruting, feltvakt,
+                  kalibrering, maalinger, maskinprofil, personbinding,
+                  prompter, sidegeometri, tilstander, typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -184,6 +184,10 @@ DOKUMENTRUTING = (os.environ.get("DOKUMENTRUTING", "ja").strip().lower()
 # svarte «1 person» på en bunke med to. Samme verdirom (R12).
 BUNKESPORSMAAL = (os.environ.get("BUNKESPORSMAAL", "ja").strip().lower()
                   in ("ja", "1", "true", "on", "yes", "pa", "på"))
+# Verdien i svaret maa hoere til feltet spoersmaalet ba om (R232).
+# «Hvor stort gebyr?» ble besvart med fakturabeloepet. Samme verdirom (R12).
+FELTVAKT = (os.environ.get("FELTVAKT", "ja").strip().lower()
+            in ("ja", "1", "true", "on", "yes", "pa", "på"))
 # OCR er ekte GPU-arbeid per side — standardgrense, kan økes per
 # forespørsel med multipart-feltet maks_sider (tak: OCR_TAK_SIDER).
 # Kuttes det, sier svaret det ALLTID eksplisitt i 'advarsel'.
@@ -7995,11 +7999,11 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
         raa_tekst, sporsmal, ocr_brukt, handskrift, strekkoder,
         strekkoder_lest)
     if not PERSONBINDING or not raa_tekst or kjerne.get("tom"):
-        return kjerne
+        return _feltvakt_paa(kjerne, sporsmal, raa_tekst)
     _antall, _sider = del_i_sider(raa_tekst)
     dom = personbinding.doem(sporsmal, kjerne.get("svar") or "", _sider)
     if not dom["gjelder"]:
-        return kjerne
+        return _feltvakt_paa(kjerne, sporsmal, raa_tekst)
     kjerne = dict(kjerne)
     kjerne.setdefault("advarsler", []).append(
         f"Spoersmaalet gjelder «{dom['navn']}», som staar paa side "
@@ -8012,6 +8016,38 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     kjerne["personbinding"] = {
         "holdt_tilbake": True, "navn": dom["navn"],
         "personsider": dom["personsider"], "verdi_sider": dom["funnet_paa"]}
+    return kjerne
+
+
+# Svaret naar feltvakten holder en verdi tilbake. Samme form som
+# PERSONBINDING_SVAR: et ærlig «vet ikke», ikke en unnskyldning.
+FELTVAKT_SVAR = "Ikke oppgitt i dokumentet."
+
+
+def _feltvakt_paa(kjerne: dict, sporsmal: str, raa_tekst: str) -> dict:
+    """R232: hoerer verdien i svaret til feltet spoersmaalet ba om?
+
+    Ligger sammen med personbindingen og av samme grunn (R213): kjernen
+    har elleve returpunkter, og en sjekk plassert ved det siste ser
+    aldri svarene som gaar ut tidlig. Begge vaktene stiller det samme
+    spoersmaalet — «gjelder denne verdien det som ble spurt om?» — den
+    ene om PERSON, den andre om FELT."""
+    if not FELTVAKT or not raa_tekst or kjerne.get("tom"):
+        return kjerne
+    dom = feltvakt.doem(sporsmal, kjerne.get("svar") or "", raa_tekst)
+    if not dom["gjelder"]:
+        return kjerne
+    kjerne = dict(kjerne)
+    kjerne.setdefault("advarsler", []).append(
+        "Spoersmaalet ber om «" + "», «".join(dom["fravaerende"])
+        + "», som ikke staar noe sted i dokumentet, og verdien "
+        + ", ".join(dom["verdier"])
+        + " staar under en annen etikett. Svaret er derfor holdt "
+        "tilbake (R232).")
+    kjerne["svar"] = FELTVAKT_SVAR
+    kjerne["feltvakt"] = {"holdt_tilbake": True,
+                          "verdier": dom["verdier"],
+                          "mangler_i_dokumentet": dom["fravaerende"]}
     return kjerne
 
 
