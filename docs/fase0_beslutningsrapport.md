@@ -704,7 +704,7 @@ antakelse koster måneder.**
 | Ett kort brukes; kort 1+ står ubrukt | Flerkort krever arbeid ingen har målt behov for | To kort tilgjengelig OG målt bottleneck |
 | Terskelen 0,85 er umålt | Kalibreringsmekanismen finnes, men er av | ECE beregnbar (R149) |
 | Valideringssettet for norhand finnes ikke | Kvalitetsporten er dermed inert (R148) | Før neste modellbytte for håndskrift |
-| ~~Bunkeforveksling i modellsvar~~ → **feltmengden er flat for en bunke med flere personer** | Evidence Selection ER bygget og målt (R208), og et svar som gjelder feil person holdes tilbake (R213). Men rotproblemet står: en bunke med to personer gir ÉN flat feltmengde — ett fødselsnummer, én e-post | Dokumentdeling, som venter på 3–4 ekte dokumenter |
+| ~~Bunkeforveksling i modellsvar~~ → ~~**feltmengden er flat for en bunke med flere personer**~~ → **LUKKET** | Bunken deles na i dokumenter paa tittel OG dato (R226), spoersmaal som nevner ett dokument rutes dit, og telling av personer gaar paa foedselsnummer med kontrollsiffer (R229). Validert mot brukerens EKTE aatte siders kontoutskrift (R234), som avdekket tre feil den syntetiske bunken ikke kunne vist | Lukket 18.08.2026 — gjenstaar: hoeyrejusterte tabellkolonner, se R234 |
 | Interaktiv p95 er høy i absolutt forstand (17–35 s ved 20–100 brukere) | Fordelingen er rettet (ADR-0007/R218): batch-last gir ingen målbar forverring. Det som står igjen er maskinens størrelse, ikke rettferdigheten | Kort med ≥12 GB, eller den målte belastningsbaselinen |
 
 ---
