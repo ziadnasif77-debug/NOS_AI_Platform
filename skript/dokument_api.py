@@ -1906,6 +1906,39 @@ PERSONBINDING_SVAR = (
 MINSTE_MODELL_MB = int(os.environ.get("MINSTE_MODELL_MB", "100"))
 
 
+
+def ruting_404(sti: str) -> dict:
+    """404-kroppen for en ukjent sti — den sier HVA som kom inn.
+
+    Maalt to ganger fra en UiPath-robot: noekkelen ble godtatt,
+    forespoerselen avvist paa 0 ms, og svaret listet opp de gyldige
+    stiene uten aa si at det var STIEN som var feil. Serverens egen
+    tilgangslogg var eneste sted sannheten sto: «"sti": "/"».
+
+    Den vanligste aarsaken er at basis-URL-en settes i en variabel og
+    endepunkt-feltet staar tomt. Da hjelper en liste over gyldige stier
+    ingenting; det som hjelper er aa faa vite at serveren mottok «/».
+
+    Egen funksjon fordi den skal kunne proeves uten aa starte serveren.
+    """
+    if sti in ("", "/"):
+        hint = ("URL-en mangler endepunktet og peker paa tjenerens rot. "
+                "Legg stien til, f.eks. .../spor")
+    else:
+        hint = (f"Stien «{sti}» finnes ikke. Stiene er smaa bokstaver: "
+                "/spor, ikke /Spor")
+    return {
+        "ok": False,
+        # Uendret ordlyd: en klient som bare leste «feil», ser det
+        # samme som foer. De to nye noeklene er additive.
+        "feil": ("Bruk POST /dokument, /dokument/operasjoner, /spor, "
+                 "/innsyn, /jobb, /forhandssjekk, /sladd eller /ekko "
+                 "(se /hjelp)"),
+        "mottatt_sti": sti or "/",
+        "hint": hint,
+    }
+
+
 def _finn_gguf() -> str:
     """Modellbytte skal være «legg filen i mappen og restart»: bruk
     BOREALIS_GGUF-miljøvariabelen hvis satt, ellers den nyeste
@@ -6886,7 +6919,7 @@ class Handler(BaseHTTPRequestHandler):
         if sti not in ("/spor", "/jobb", "/innsyn", "/dokument",
                        "/dokument/operasjoner", "/ekko",
                        "/forhandssjekk", "/sladd"):
-            return self._svar(404, {"ok": False, "feil": "Bruk POST /dokument, /dokument/operasjoner, /spor, /innsyn, /jobb, /forhandssjekk, /sladd eller /ekko (se /hjelp)"})
+            return self._svar(404, ruting_404(sti))
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
         # tråd allerede hele opplastingen (og den normaliserte PDF-en) i
