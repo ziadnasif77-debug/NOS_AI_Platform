@@ -117,7 +117,8 @@ from delt.tekstuttrekk import (er_gyldig_fnr, er_gyldig_orgnr, finn_adresser,
 # å endre. Se delt/prompter.py for hvorfor.
 from delt import (bevisvalg, bunkesporsmaal, dokumentruting, feltvakt,
                   kalibrering, maalinger, maskinprofil, personbinding,
-                  prompter, sidegeometri, tilstander, typeforventninger)
+                  prompter, sakslager, sidegeometri, tilstander,
+                  typeforventninger)
 from delt.dokumentprofil import bygg_profil
 from delt.klienter import (AAPEN, ELDRE,
                            MINSTE_LENGDE as MINSTE_NOKKELLENGDE,
@@ -3199,8 +3200,14 @@ def _jobb_last_fra_disk() -> None:
     underveis da serveren stoppet, merkes ærlig som feilet.
 
     Rydder FØRST: gamle jobber skal ikke lastes tilbake i minnet bare
-    for å bli slettet senere."""
+    for å bli slettet senere. Saksmappene ryddes i samme slengen —
+    de leses fra disk ved behov og lastes aldri inn i minnet, men
+    oppbevaringsfristen gjelder dem like fullt (R245)."""
     rydd_jobber()
+    try:
+        sakslager.rydd()
+    except Exception:                                       # noqa: BLE001
+        pass
     try:
         navn_liste = os.listdir(JOBB_STI)
     except FileNotFoundError:
@@ -3539,6 +3546,13 @@ def _jobb_arbeider() -> None:
             # til neste omstart.
             try:
                 rydd_jobber()
+            except Exception:
+                pass
+            # Saksmappene har samme oppbevaringsfrist og ryddes samme
+            # sted, så systemet har ÉN regel for persondata på disk og
+            # ikke to som kan gli fra hverandre (R245).
+            try:
+                sakslager.rydd()
             except Exception:
                 pass
 
@@ -4358,6 +4372,24 @@ def _skjemaer() -> dict:
                            "Helt deterministisk.",
             "properties": {
                 "ok": b(),
+                "sak_id": s(description="Mappa du bygger. Send den med i "
+                                        "neste POST /sak, så legges de nye "
+                                        "dokumentene til her i stedet for i "
+                                        "en ny mappe."),
+                "opprettet": s(),
+                "endret": s(),
+                "versjon_mappe": {"type": "integer",
+                                  "description": "Teller opp hver gang noe "
+                                                 "faktisk ble lagt til"},
+                "lagt_til": {"type": "integer", "nullable": True,
+                             "description": "Hvor mange dokumenter dette "
+                                            "kallet la til (bare på POST)"},
+                "duplikater_hoppet_over": {
+                    "type": "integer", "nullable": True,
+                    "description": "Dokumenter som alt lå i mappa. En robot "
+                                   "som prøver igjen etter et nettverksbrudd "
+                                   "sender de samme filene; de telles, men "
+                                   "dobles ikke."},
                 "antall_dokumenter": {"type": "integer"},
                 "antall_saker": {"type": "integer"},
                 "saker": {"type": "array", "items": ref("Sak")},
@@ -5100,12 +5132,46 @@ def _openapi() -> dict:
                             "type": "string",
                             "description": "Id-er fra ferdige POST /jobb-kall, "
                                            "skilt med komma, semikolon eller "
-                                           "linjeskift"}}}}}},
+                                           "linjeskift"},
+                        "sak_id": {
+                            "type": "string",
+                            "description": "Legg dokumentene til i en mappe som "
+                                           "alt finnes, i stedet for å lage en "
+                                           "ny. Utelates den, opprettes en ny "
+                                           "mappe og id-en står i svaret."}}}}}},
                 "responses": {
                     "200": {"description": "Sakene, med tidslinje og motsigelser",
                             "content": {"application/json": {"schema": {
                                 "$ref": "#/components/schemas/SakSvar"}}}},
-                    "400": {"description": "Ingen dokumenter, eller for mange filer",
+                    "400": {"description": "Ingen dokumenter, for mange filer, "
+                                           "eller ugyldig sak_id",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}},
+                    "404": {"description": "Ukjent sak_id",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
+            "/sak/{sak_id}": {"get": {
+                "summary": "Hent saksmappa slik den står nå",
+                "description":
+                    "Samme svar som POST /sak gir, regnet på nytt av de "
+                    "lagrede dokumentpostene.\n\n"
+                    "**Grupperingen lagres ikke** — den REGNES ved hver "
+                    "lesing. Lagret gruppering ville frosset reglene slik de "
+                    "var den dagen, og en senere retting ville ikke nådd de "
+                    "mappene som trengte den mest: de gamle.\n\n"
+                    "Dokumentteksten lagres heller ikke. Mappa bærer bare "
+                    "postene grupperingen trenger — teksten ligger i "
+                    "jobblageret for de som brukte POST /jobb.\n\n"
+                    "Mappa ryddes etter samme oppbevaringsfrist som jobber "
+                    "(`JOBB_OPPBEVARING_DAGER`, standard 30 dager).",
+                "parameters": [{"name": "sak_id", "in": "path",
+                                "required": True,
+                                "schema": {"type": "string"}}],
+                "responses": {
+                    "200": {"description": "Saksmappa",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/SakSvar"}}}},
+                    "404": {"description": "Ukjent sak_id — eller en annens mappe",
                             "content": {"application/json": {"schema": {
                                 "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/sladd": {"post": {
@@ -5894,6 +5960,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._svar(200, _openapi())
         if sti == "/metrics":
             return self._metrics()
+        if sti.startswith("/sak/"):
+            # SAMME nøkkelkrav som GET /jobb/<id>: mappa bærer
+            # fødselsnummer og saksnummer fra ekte dokumenter, og en id på
+            # tolv tegn havner i tilgangslogg, proxy og nettleserhistorikk.
+            if not self._autorisert():
+                return self._svar(401, {
+                    "ok": False,
+                    "feil": "Ugyldig eller manglende X-API-Key"})
+            return self._hent_sak(sti.split("/")[2])
         if sti.startswith("/innsyn/"):
             # Direktevisnings-poll: hendelser fra og med ?fra=N + resultat.
             # SAMME nøkkelkrav som GET /jobb/<id>: svaret inneholder hele
@@ -6014,8 +6089,15 @@ class Handler(BaseHTTPRequestHandler):
                                   "tidslinje og motsigelser. Gruppert på "
                                   "saksnummer/journalnummer — det som beviser samme "
                                   "SAK; fødselsnummer beviser samme PERSON og "
-                                  "grupperer aldri. Helt deterministisk — ingen "
-                                  "språkmodell er involvert"),
+                                  "grupperer aldri. Svaret gir en 'sak_id' som "
+                                  "OVERLEVER kallet: send den med neste gang, så "
+                                  "legges de nye dokumentene til i samme mappe. "
+                                  "Helt deterministisk — ingen språkmodell er "
+                                  "involvert"),
+                    "GET /sak/<id>": ("saksmappa slik den står nå — samme svar som "
+                                      "POST /sak gir, regnet på nytt av de lagrede "
+                                      "dokumentpostene. Mappa ryddes etter samme "
+                                      "oppbevaringsfrist som jobber"),
                     "POST /forhandssjekk": ("felt 'fil' → lesbarhet og sidetall UTEN å "
                                             "kjøre full OCR — svarer om dokumentet er verdt "
                                             "å sende"),
@@ -6491,7 +6573,32 @@ class Handler(BaseHTTPRequestHandler):
                 dok["jobb_id"] = jid
                 dokumenter.append(dok)
 
-        if not dokumenter:
+        # --- mappa: ny eller en som alt finnes (R245) ------------------- #
+        onsket_id = (tekstfelter.get("sak_id") or "").strip()
+        if onsket_id:
+            if not sakslager.gyldig_id(onsket_id):
+                return self._svar(400, {
+                    "ok": False,
+                    "feil": (f"Ugyldig sak_id {onsket_id!r}. En sak_id er "
+                             f"heksesiffer, slik POST /sak returnerer den."),
+                    "felter_feil": [{"pointer": "/sak_id",
+                                     "message": "heksesiffer forventet"}]})
+            mappe = sakslager.hent(onsket_id)
+            # Å legge dokumenter i en ANNENS saksmappe er verre enn å lese
+            # den: det endrer en sak noen andre bygger. Utenfra er svaret
+            # det samme som for en mappe som ikke finnes (R153).
+            if mappe is not None and not self._eier_mappa(mappe):
+                mappe = None
+            if mappe is None:
+                return self._svar(404, {
+                    "ok": False,
+                    "feil": f"Ukjent sak_id: {onsket_id}",
+                    "felter_feil": [{"pointer": "/sak_id",
+                                     "message": "finnes ikke"}]})
+        else:
+            mappe = sakslager.ny_mappe(getattr(self, "_klient_id", None))
+
+        if not dokumenter and not onsket_id:
             return self._svar(400, {
                 "ok": False,
                 "feil": ("Ingen dokumenter å bygge en sak av. Send én "
@@ -6501,6 +6608,33 @@ class Handler(BaseHTTPRequestHandler):
                 "felter_feil": [{"pointer": "/fil",
                                  "message": "minst ett dokument kreves"}]})
 
+        lagt = sakslager.legg_til(mappe, dokumenter)
+        sakslager.lagre(mappe)
+        return self._svar(200, self._sakssvar(mappe, uleste=uleste, **lagt))
+
+    def _eier_mappa(self, mappe: dict) -> bool:
+        """Er det DENNE klienten som bygger saksmappa? (R153)
+
+        Nøkkelen er gyldig — men er den den SAMME? Mappa bærer
+        fødselsnummer og saksnummer fra ekte dokumenter, og en id på
+        tolv tegn havner i tilgangslogg og proxy. Mapper uten eier
+        regnes som alles, av samme grunn som jobber uten eier gjør det."""
+        eier = mappe.get("_eier")
+        if eier is None:
+            return True
+        return eier == getattr(self, "_klient_id", None)
+
+    def _sakssvar(self, mappe: dict, uleste=None, lagt_til=None,
+                  duplikater=None) -> dict:
+        """Mappa slik den ser ut NÅ — gruppert, tidsordnet og sjekket.
+
+        Grupperingen REGNES her, den lagres ikke. Lagret gruppering ville
+        frosset reglene slik de var den dagen, og en senere retting ville
+        ikke nådd de mappene som trengte den mest — de gamle."""
+        from delt import motsigelser as _motsigelser
+        from delt import sak as _sak
+
+        dokumenter = mappe.get("dokumenter") or []
         saker = _sak.grupper_i_saker(dokumenter)
         ut = []
         for enkeltsak in saker:
@@ -6514,25 +6648,51 @@ class Handler(BaseHTTPRequestHandler):
                 "tidslinje": _sak.tidslinje(enkeltsak),
                 "motsigelser": _motsigelser.finn_motsigelser(enkeltsak),
             })
-        return self._svar(200, {
+        svar = {
             "ok": True,
+            "sak_id": mappe.get("sak_id"),
+            "opprettet": mappe.get("opprettet"),
+            "endret": mappe.get("endret"),
+            "versjon_mappe": mappe.get("versjon"),
             "antall_dokumenter": len(dokumenter),
             "antall_saker": len(ut),
             "saker": ut,
             "relasjoner": _sak.personrelasjoner(saker),
-            # Hva som IKKE kom med, og hvorfor. En sak bygget av ni av ti
-            # dokumenter er en annen sak enn en bygget av ti, og
-            # forskjellen skal ikke måtte gjettes (R24).
-            "uleste": uleste,
             "forklaring": (
                 "Dokumentene er gruppert på saksnummer og journalnummer — "
                 "det som beviser samme SAK. Fødselsnummer beviser samme "
                 "PERSON og grupperer aldri; slike sammenfall står i "
-                "«relasjoner». Alt her er deterministisk: ingen "
-                "språkmodell er involvert."),
+                "«relasjoner». «sak_id» er mappa du bygger, ikke en bevist "
+                "sak: inneholder den to saksnumre, svarer «saker» med to. "
+                "Alt er deterministisk — ingen språkmodell er involvert."),
             "versjon": {"api": API_VERSJON,
                         "uttrekk_regler": UTTREKK_REGEL_VERSJON},
-        })
+        }
+        if lagt_til is not None:
+            svar["lagt_til"] = lagt_til
+            # Duplikater hoppes over, men telles: en robot som prøver igjen
+            # etter et nettverksbrudd sender de samme filene på nytt, og
+            # tidslinjen skal ikke få dem to ganger. Å droppe dem i
+            # stillhet ville vært like galt — klienten sendte ti og fikk
+            # syv, og forskjellen skal ikke måtte gjettes (R24).
+            svar["duplikater_hoppet_over"] = duplikater
+        if uleste is not None:
+            svar["uleste"] = uleste
+        return svar
+
+    def _hent_sak(self, sak_id: str):
+        """GET /sak/<id> — mappa slik den står nå."""
+        if not sakslager.gyldig_id(sak_id):
+            return self._svar(400, {
+                "ok": False,
+                "feil": f"Ugyldig sak_id {sak_id!r}. En sak_id er heksesiffer."})
+        mappe = sakslager.hent(sak_id)
+        if mappe is not None and not self._eier_mappa(mappe):
+            mappe = None            # en annens mappe finnes ikke (R153)
+        if mappe is None:
+            return self._svar(404, {"ok": False,
+                                    "feil": f"Ukjent sak_id: {sak_id}"})
+        return self._svar(200, self._sakssvar(mappe))
 
     def _forhandssjekk(self, filnavn, slag, innhold, tekstfelter):
         """POST /forhandssjekk — billig kvalitetsdom FØR GPU-en brukes.
@@ -9819,7 +9979,7 @@ _KJENTE_FELT_SPOR = {"sporsmal", "jobb_id", "korriger", "maks_sider",
                      "strekkoder"}
 _KJENTE_FELT_JOBB = {"maks_sider", "sporsmal"}
 _KJENTE_FELT_INNSYN = {"maks_sider"}
-_KJENTE_FELT_SAK = {"jobb_id"}
+_KJENTE_FELT_SAK = {"jobb_id", "sak_id"}
 
 # Hvilket feltsett hver POST-rute kjenner. Fire ruter hadde vakten fra
 # før; tre hadde den ikke, og målt var det NETTOPP der den manglet mest:

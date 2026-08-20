@@ -84,12 +84,20 @@ ANNEN = ("Vedtak om dagpenger", "Saksnummer: 9990001",
          "Vedtaksdato: 03.03.2026")
 
 
-def _svar(filer=(), felter=()):
-    h, fanget = _handler()
+def _svar(filer=(), felter=(), handler=None):
+    h, fanget = handler or _handler()
     body, ct = _kropp(filer, felter)
     tekstfelter = api._parse_multipart(body, ct)[2]
     h._sak(body, ct, tekstfelter)
     return fanget
+
+
+@pytest.fixture(autouse=True)
+def eget_lager(tmp_path, monkeypatch):
+    """Hver test får sin egen lagermappe — aldri den ekte data/saker."""
+    from delt import sakslager
+    monkeypatch.setattr(sakslager, "SAK_STI", str(tmp_path / "saker"))
+    return sakslager
 
 
 # ------------------------------------------------------------------ #
@@ -220,8 +228,109 @@ def test_samme_mappe_gir_samme_svar():
 # ------------------------------------------------------------------ #
 
 def test_ruten_er_kjent_og_har_et_feltsett():
+    """Feltsettet er kontrakten: et felt som ikke står her, blir avvist
+    som ukjent i stedet for å forsvinne i stillhet."""
     assert "/sak" in api._FELTSETT_PER_RUTE
-    assert api._FELTSETT_PER_RUTE["/sak"] == {"jobb_id"}
+    assert api._FELTSETT_PER_RUTE["/sak"] == {"jobb_id", "sak_id"}
+
+
+# ------------------------------------------------------------------ #
+#  R245: mappa overlever forespørselen                                #
+# ------------------------------------------------------------------ #
+
+def test_svaret_gir_en_sak_id_aa_bygge_videre_paa():
+    svar = _svar([("1.pdf", _pdf(SOKNAD))])["kropp"]
+    from delt import sakslager
+    assert sakslager.gyldig_id(svar["sak_id"])
+    assert svar["lagt_til"] == 1
+    assert svar["duplikater_hoppet_over"] == 0
+
+
+def test_dokumenter_kan_legges_til_i_flere_kall():
+    """Selve poenget med R245: arkivet bygges over tid, ikke i ett kall."""
+    forste = _svar([("1.pdf", _pdf(SOKNAD))])["kropp"]
+    andre = _svar([("2.pdf", _pdf(VEDTAK))],
+                  [("sak_id", forste["sak_id"])])["kropp"]
+
+    assert andre["sak_id"] == forste["sak_id"]
+    assert andre["antall_dokumenter"] == 2
+    assert andre["antall_saker"] == 1
+    assert [h["filnavn"] for h in andre["saker"][0]["tidslinje"]["hendelser"]] \
+        == ["1.pdf", "2.pdf"]
+
+
+def test_samme_fil_sendt_paa_nytt_dobler_ikke_saken():
+    """En robot som prøver igjen etter et nettverksbrudd sender de samme
+    filene. Uten duplikatvakten ville tidslinjen fått dem to ganger."""
+    forste = _svar([("1.pdf", _pdf(SOKNAD))])["kropp"]
+    igjen = _svar([("1.pdf", _pdf(SOKNAD))],
+                  [("sak_id", forste["sak_id"])])["kropp"]
+
+    assert igjen["antall_dokumenter"] == 1
+    assert igjen["lagt_til"] == 0
+    assert igjen["duplikater_hoppet_over"] == 1
+
+
+def test_mappa_kan_hentes_tilbake_med_get():
+    forste = _svar([("1.pdf", _pdf(SOKNAD)), ("2.pdf", _pdf(VEDTAK))])["kropp"]
+    h, fanget = _handler()
+    h._hent_sak(forste["sak_id"])
+    assert fanget["kode"] == 200
+    assert fanget["kropp"]["antall_dokumenter"] == 2
+    assert fanget["kropp"]["sak_id"] == forste["sak_id"]
+
+
+def test_ukjent_sak_id_gir_404_ved_henting():
+    h, fanget = _handler()
+    h._hent_sak("abc123abc123")
+    assert fanget["kode"] == 404
+
+
+def test_ukjent_sak_id_gir_404_ved_paafylling():
+    fanget = _svar([("1.pdf", _pdf(SOKNAD))], [("sak_id", "abc123abc123")])
+    assert fanget["kode"] == 404
+
+
+def test_ugyldig_sak_id_avvises_for_den_naar_filsystemet():
+    """«../../noe» er ikke en id, det er en sti."""
+    fanget = _svar([("1.pdf", _pdf(SOKNAD))], [("sak_id", "../../noe")])
+    assert fanget["kode"] == 400
+    assert "heksesiffer" in fanget["kropp"]["feil"]
+
+
+def test_en_annens_mappe_finnes_ikke():
+    """R153: å legge dokumenter i en annens saksmappe er verre enn å
+    lese den — det endrer en sak noen andre bygger."""
+    h1, _ = _handler()
+    h1._klient_id = "robot-1"
+    h1._eier_jobben = lambda jobb: True
+    forste = _svar([("1.pdf", _pdf(SOKNAD))], handler=(h1, {}))
+    # _svar returnerte fanget-dicten fra h1; hent id-en derfra
+    h1b, fanget1 = _handler()
+    h1b._klient_id = "robot-1"
+    sak_id = _svar([("1.pdf", _pdf(SOKNAD))],
+                   handler=(h1b, fanget1))["kropp"]["sak_id"]
+
+    h2, fanget2 = _handler()
+    h2._klient_id = "robot-2"
+    h2._hent_sak(sak_id)
+    assert fanget2["kode"] == 404, "en annen klient fikk lese mappa"
+
+
+def test_grupperingen_regnes_ved_hver_lesing():
+    """Lagret gruppering ville frosset reglene slik de var den dagen."""
+    forste = _svar([("1.pdf", _pdf(SOKNAD))])["kropp"]
+    from delt import sakslager
+    lagret = sakslager.hent(forste["sak_id"])
+    assert "saker" not in lagret and "tidslinje" not in lagret
+
+
+def test_paafylling_uten_nye_filer_er_lov_og_gir_mappa_tilbake():
+    """En klient som bare vil se mappa si skal ikke måtte sende en fil."""
+    forste = _svar([("1.pdf", _pdf(SOKNAD))])["kropp"]
+    igjen = _svar([], [("sak_id", forste["sak_id"])])
+    assert igjen["kode"] == 200
+    assert igjen["kropp"]["antall_dokumenter"] == 1
 
 
 def test_jobb_ider_taaler_komma_mellomrom_og_linjeskift():
