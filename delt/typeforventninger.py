@@ -76,6 +76,40 @@ FORVENTNINGER = {
     "egenerklaring": ("fodselsnummer", "dato"),
     "meldekort": ("fodselsnummer", "periode"),
     "pensjonsbrev": ("fodselsnummer", "dato"),
+    # ---------------------------------------------------------------- #
+    #  R247: saksbehandlingens dokumenter — MÅLT, ikke antatt           #
+    # ---------------------------------------------------------------- #
+    # De elleve typene fra R241 sto uten forventninger fordi vi ikke
+    # hadde målt hva de inneholder. Nå er de målt:
+    # `skript/kjor_typeforventninger.py` kjører uttrekket over
+    # `tester/korpus/typevarianter.json` — tre varianter per type, der
+    # den ene («knapp») er skrevet nettopp for å falsifisere antakelsene
+    # våre. Bare felter påvist i ALLE variantene av typen teller.
+    #
+    # Resultatet er beskjedent, og det er poenget: bare `dato` overlever.
+    # Saksnummer falt på 2 av 3, fødselsnummer på 1 av 3, ytelse og beløp
+    # enda lavere — et journalnotat kan være helt ekte uten noen av dem.
+    # Hadde vi gjettet, ville nettopp de feltene stått her, og hvert
+    # magert notat i arkivet fått en falsk «mangler».
+    #
+    # `tittel` traff 3 av 3 overalt, men er utelatt: detektoren er målt
+    # `False` BARE på helt tom tekst, som tomside-vakten alt fanger. Et
+    # felt som ikke kan slå ut på noe ekte, er ingen forventning.
+    #
+    # Hvorfor `dato` likevel er verdt å kreve: et udatert dokument kan
+    # ikke plasseres i sakens tidslinje (R244), og da faller det ut av
+    # nettopp den oversikten saksmappa finnes for.
+    "klagevedtak": ("dato",),
+    "journalnotat": ("dato",),
+    "telefonnotat": ("dato",),
+    "oppfolgingsnotat": ("dato",),
+    "internvurdering": ("dato",),
+    "dokumentasjonskrav": ("dato",),
+    "purring": ("dato",),
+    "veiledningsbrev": ("dato",),
+    "arbeidsgiveropplysninger": ("dato",),
+    "legeopplysninger": ("dato",),
+    "referat": ("dato",),
 }
 
 # «typen = ingen» i regelfila: typen skal uttrykkelig IKKE ha

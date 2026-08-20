@@ -193,11 +193,44 @@ def test_regelfila_kjenner_de_nye_typene():
     assert not mangler, f"ikke nevnt i regelfila: {mangler}"
 
 
-def test_nye_typer_har_ingen_forventninger_enda():
-    """Med vilje: vi har ikke MÅLT hva et journalnotat alltid inneholder,
-    og en uforankret forventning roper «mangler» på friske dokumenter
-    (samme grunn som KID ikke står på faktura)."""
+def test_nye_typer_forventer_det_som_faktisk_ble_maalt():
+    """R247: typene sto uten forventninger til de var MÅLT.
+
+    Målingen (`skript/kjor_typeforventninger.py` over
+    `tester/korpus/typevarianter.json`) ga ett felt: `dato`. Saksnummer
+    falt på 2 av 3 varianter, fødselsnummer på 1 av 3 — et journalnotat
+    kan være helt ekte uten dem. Hadde vi gjettet, ville nettopp de
+    feltene stått her, og hvert magert notat fått en falsk «mangler»."""
     from delt.typeforventninger import forventninger_for
     for kode in NYE:
-        assert forventninger_for(kode) is None, (
-            f"«{kode}» har fått forventninger uten at de er målt")
+        assert forventninger_for(kode) == ("dato",), (
+            f"«{kode}» har andre forventninger enn de målte")
+
+
+def test_ingen_av_de_nye_typene_forventer_tittel():
+    """`tittel` traff 3 av 3 overalt, men detektoren er målt `False`
+    BARE på helt tom tekst — som tomside-vakten alt fanger. Et felt som
+    ikke kan slå ut på noe ekte, er ingen forventning; det blåser bare
+    opp «funnet». Ingen av de sytten eldre typene forventer det heller."""
+    from delt.typeforventninger import FORVENTNINGER
+    med_tittel = sorted(k for k, v in FORVENTNINGER.items()
+                        if "tittel" in (v or ()))
+    assert med_tittel == [], f"forventer tittel: {med_tittel}"
+
+
+def test_maalingen_dekker_alle_de_nye_typene():
+    """Et felt i tabellen uten en variant i korpuset er en påstand uten
+    måling — nettopp det R247 finnes for å hindre."""
+    import json
+    import os
+    sti = os.path.join("tester", "korpus", "typevarianter.json")
+    with open(sti, encoding="utf-8") as fil:
+        korpus = json.load(fil)
+    maalte = {d["type"] for d in korpus["dokumenter"]}
+    assert set(NYE) <= maalte, f"umålte typer: {sorted(set(NYE) - maalte)}"
+    for kode in NYE:
+        varianter = [d["variant"] for d in korpus["dokumenter"]
+                     if d["type"] == kode]
+        assert "knapp" in varianter, (
+            f"«{kode}» mangler den magre varianten — uten den måler vi "
+            "bare våre egne antakelser")

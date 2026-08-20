@@ -1,0 +1,165 @@
+{
+  "_om": [
+    "Varianter av saksbehandlingens dokumenttyper (R241), til MÅLING av",
+    "hvilke felter som faktisk lar seg påvise per type (R247).",
+    "",
+    "Hver type har tre varianter med vilje:",
+    "  full   — et rikt dokument med alt som pleier å stå der",
+    "  vanlig — slik typen oftest ser ut",
+    "  knapp  — et magert, men helt ekte dokument av samme type",
+    "",
+    "«knapp» er det viktigste. Uten den måler vi bare hva VI antok at",
+    "typen inneholder, og et felt som mangler der, er ikke tilnærmet",
+    "sikkert for typen — uansett hvor selvsagt det virker i de to andre.",
+    "",
+    "{FNR} og {FNR2} settes inn på kjøretid av",
+    "tester/syntetiske_nummer.py. Ingen ellevesifrede tall i fila:",
+    "et slikt tall ser ekte ut for den som leser repoet.",
+    "",
+    "Personvern: alt er oppdiktet. Ingen ekte dokumenter, her som ellers."
+  ],
+  "dokumenter": [
+    {
+      "type": "klagevedtak", "variant": "full",
+      "tekst": "Klagevedtak\nNAV Klageinstans Øst\nSaksnummer: 4417820\nVedtaksdato: 12.06.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nVi har behandlet klagen din av 15.02.2026 på vedtak om sykepenger.\nKlagen tas til følge. Vedtaket av 01.02.2026 omgjøres.\nDu får etterbetalt 24 500,00 kroner.\nMed vennlig hilsen\nNAV Klageinstans"
+    },
+    {
+      "type": "klagevedtak", "variant": "vanlig",
+      "tekst": "Klagevedtak\nNAV Klageinstans\nSaksnummer: 5500123\nVedtaksdato: 03.04.2026\nSaken gjelder: Kari Hansen\nFødselsnummer: {FNR}\nKlagen på vedtak om dagpenger tas ikke til følge.\nVedtaket opprettholdes."
+    },
+    {
+      "type": "klagevedtak", "variant": "knapp",
+      "tekst": "Vedtak i klagesak\nDatert: 09.09.2026\nKlagen tas ikke til følge."
+    },
+
+    {
+      "type": "journalnotat", "variant": "full",
+      "tekst": "Journalnotat\nSaksnummer: 4417820\nDato: 18.03.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nBruker har levert manglende dokumentasjon i skranken.\nSaken kan behandles videre. Ytelse: sykepenger.\nSaksbehandler: Per Ås"
+    },
+    {
+      "type": "journalnotat", "variant": "vanlig",
+      "tekst": "Journalnotat\nSaksnummer: 7788990\nDato: 02.05.2026\nMottatt legeerklæring per post. Lagt i saken.\nSaksbehandler: Ingrid Berg"
+    },
+    {
+      "type": "journalnotat", "variant": "knapp",
+      "tekst": "Journalnotat\n11.11.2026\nVenter fortsatt på svar fra arbeidsgiver."
+    },
+
+    {
+      "type": "telefonnotat", "variant": "full",
+      "tekst": "Telefonsamtalenotat\nSaksnummer: 4417820\nDato: 12.03.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nBruker ringte og spurte om status i saken om sykepenger.\nOpplyst at vi mangler inntektsopplysninger fra arbeidsgiver.\nTelefon: 22 33 44 55\nSaksbehandler: Per Ås"
+    },
+    {
+      "type": "telefonnotat", "variant": "vanlig",
+      "tekst": "Telefonnotat\nDato: 21.04.2026\nSaksnummer: 3344556\nSamtale med bruker om manglende meldekort for uke 12 og 13.\nBruker skal levere innen fristen."
+    },
+    {
+      "type": "telefonnotat", "variant": "knapp",
+      "tekst": "Notat fra telefonsamtale\n05.06.2026\nBruker ringte. Ingen ny informasjon."
+    },
+
+    {
+      "type": "oppfolgingsnotat", "variant": "full",
+      "tekst": "Oppfølgingsnotat\nSaksnummer: 4417820\nDato: 15.04.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nOppfølgingssamtale gjennomført på NAV-kontoret.\nBruker er sykmeldt i perioden 05.01.2026 - 30.06.2026.\nAvtalt ny samtale 15.05.2026."
+    },
+    {
+      "type": "oppfolgingsnotat", "variant": "vanlig",
+      "tekst": "Oppfølgingsnotat\nDato: 08.08.2026\nSaksnummer: 2211334\nOppfølgingssamtale gjennomført. Bruker er i arbeidsrettet tiltak.\nVurderes for arbeidsavklaringspenger."
+    },
+    {
+      "type": "oppfolgingsnotat", "variant": "knapp",
+      "tekst": "Oppfølgingssamtale\n30.09.2026\nGjennomført. Ingen endring."
+    },
+
+    {
+      "type": "internvurdering", "variant": "full",
+      "tekst": "Intern vurdering\nSaksnummer: 4417820\nDato: 20.01.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nFaglig vurdering av vilkårene for sykepenger etter folketrygdloven § 8-4.\nArbeidsuførheten er dokumentert ved legeerklæring av 08.01.2026.\nVilkårene anses oppfylt. Dagsats: 1 240,00 kroner."
+    },
+    {
+      "type": "internvurdering", "variant": "vanlig",
+      "tekst": "Saksvurdering\nDato: 14.07.2026\nSaksnummer: 6677889\nVurdering av om vilkårene for dagpenger er oppfylt.\nMedlemskap og opptjening er kontrollert."
+    },
+    {
+      "type": "internvurdering", "variant": "knapp",
+      "tekst": "Intern vurdering\n02.02.2026\nVilkårene anses ikke oppfylt."
+    },
+
+    {
+      "type": "dokumentasjonskrav", "variant": "full",
+      "tekst": "Dokumentasjonskrav\nNAV Arbeid og ytelser\nSaksnummer: 4417820\nDato: 25.01.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nVi trenger flere opplysninger før vi kan behandle søknaden din om sykepenger.\nDu må sende oss inntektsopplysninger fra arbeidsgiver.\nFrist: 15.02.2026\nMed vennlig hilsen\nNAV Arbeid og ytelser"
+    },
+    {
+      "type": "dokumentasjonskrav", "variant": "vanlig",
+      "tekst": "Dokumentasjonskrav\nSaksnummer: 9900112\nDato: 06.03.2026\nKrav om dokumentasjon: vi mangler kontoutskrift for perioden 01.01.2026 - 28.02.2026.\nFrist: 20.03.2026"
+    },
+    {
+      "type": "dokumentasjonskrav", "variant": "knapp",
+      "tekst": "Krav om dokumentasjon\n17.05.2026\nVi mangler dokumentasjon i saken din. Send den snarest."
+    },
+
+    {
+      "type": "purring", "variant": "full",
+      "tekst": "Purring\nNAV Arbeid og ytelser\nSaksnummer: 4417820\nDato: 01.03.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nVi har ikke mottatt dokumentasjonen vi ba om i brev av 25.01.2026.\nNy frist: 15.03.2026\nFår vi ikke svar, avgjør vi saken med de opplysningene vi har.\nMed vennlig hilsen"
+    },
+    {
+      "type": "purring", "variant": "vanlig",
+      "tekst": "Purring\nSaksnummer: 4455667\nDato: 12.06.2026\nPåminnelse om manglende meldekort. Ny frist: 20.06.2026"
+    },
+    {
+      "type": "purring", "variant": "knapp",
+      "tekst": "Purring\n08.10.2026\nVi har fortsatt ikke hørt fra deg."
+    },
+
+    {
+      "type": "veiledningsbrev", "variant": "full",
+      "tekst": "Veiledningsbrev\nNAV Kontaktsenter\nSaksnummer: 4417820\nDato: 10.02.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nHer er informasjon om rettighetene dine som sykmeldt.\nDu finner mer på nav.no, eller ring 55 55 33 33.\nE-post: kontakt@nav.no\nMed vennlig hilsen\nNAV Kontaktsenter"
+    },
+    {
+      "type": "veiledningsbrev", "variant": "vanlig",
+      "tekst": "Veiledningsbrev\nDato: 22.05.2026\nInformasjon om hvordan du søker om dagpenger og hvilke frister som gjelder.\nMed vennlig hilsen\nNAV"
+    },
+    {
+      "type": "veiledningsbrev", "variant": "knapp",
+      "tekst": "Orienteringsbrev\n03.03.2026\nVi orienterer om at saken din er overført til et annet kontor."
+    },
+
+    {
+      "type": "arbeidsgiveropplysninger", "variant": "full",
+      "tekst": "Arbeidsgiveropplysninger\nOpplysninger fra arbeidsgiver\nOrganisasjonsnummer: 974 761 076\nArbeidsgiver: Nordmann Bygg AS\nSaksnummer: 4417820\nDato: 30.01.2026\nArbeidstaker: Ola Nordmann\nFødselsnummer: {FNR}\nStilling: tømrer, 100 %\nMånedslønn: 42 000,00 kroner\nSykmeldt fra 05.01.2026."
+    },
+    {
+      "type": "arbeidsgiveropplysninger", "variant": "vanlig",
+      "tekst": "Arbeidsgiveropplysninger\nOrganisasjonsnummer: 923 609 016\nDato: 11.04.2026\nArbeidstaker: Kari Hansen\nFødselsnummer: {FNR2}\nAnsettelsesforholdet opphørte 31.03.2026."
+    },
+    {
+      "type": "arbeidsgiveropplysninger", "variant": "knapp",
+      "tekst": "Opplysninger fra arbeidsgiver\n19.07.2026\nVedkommende er ikke lenger ansatt hos oss."
+    },
+
+    {
+      "type": "legeopplysninger", "variant": "full",
+      "tekst": "Legeopplysninger\nOpplysninger fra behandlende lege\nDato: 08.01.2026\nSaksnummer: 4417820\nPasient: Ola Nordmann\nFødselsnummer: {FNR}\nPasienten er arbeidsufør i perioden 05.01.2026 - 30.06.2026.\nFunksjonsnivået er vesentlig nedsatt.\nBehandlende lege: Kari Legen"
+    },
+    {
+      "type": "legeopplysninger", "variant": "vanlig",
+      "tekst": "Legeopplysninger\nDato: 27.03.2026\nPasient: Kari Hansen\nFødselsnummer: {FNR2}\nOpplysninger fra lege om behandlingsforløp. Kontroll om tre måneder."
+    },
+    {
+      "type": "legeopplysninger", "variant": "knapp",
+      "tekst": "Legeuttalelse\n14.08.2026\nPasienten er fortsatt under behandling."
+    },
+
+    {
+      "type": "referat", "variant": "full",
+      "tekst": "Referat\nMøtereferat fra dialogmøte\nSaksnummer: 4417820\nDato: 20.05.2026\nSaken gjelder: Ola Nordmann\nFødselsnummer: {FNR}\nTil stede: bruker, arbeidsgiver og NAV-veileder.\nTema: tilrettelegging og gradert sykmelding i perioden 01.06.2026 - 31.08.2026.\nNeste møte: 20.08.2026"
+    },
+    {
+      "type": "referat", "variant": "vanlig",
+      "tekst": "Referat\nDato: 09.02.2026\nSaksnummer: 1122334\nMøtereferat fra samtale om arbeidsrettet tiltak.\nTil stede: bruker og veileder."
+    },
+    {
+      "type": "referat", "variant": "knapp",
+      "tekst": "Møtereferat\n25.11.2026\nMøtet ble avlyst. Nytt møte avtales senere."
+    }
+  ]
+}
