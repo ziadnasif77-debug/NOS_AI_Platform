@@ -231,7 +231,8 @@ def test_ruten_er_kjent_og_har_et_feltsett():
     """Feltsettet er kontrakten: et felt som ikke står her, blir avvist
     som ukjent i stedet for å forsvinne i stillhet."""
     assert "/sak" in api._FELTSETT_PER_RUTE
-    assert api._FELTSETT_PER_RUTE["/sak"] == {"jobb_id", "sak_id", "opphav"}
+    assert api._FELTSETT_PER_RUTE["/sak"] == {"jobb_id", "sak_id", "opphav",
+                                              "sporsmal"}
 
 
 # ------------------------------------------------------------------ #

@@ -2347,6 +2347,11 @@ def _last_borealis_bakgrunn():
 
 # Ankerpar som avgrenser den KLIPPBARE dokumentdelen i promptene våre
 _PROMPT_ANKRE = [("\nDokument:\n", "\n\nSpørsmål:"),
+                 # R250: saksspørsmålet har FLERE dokumenter, og de er
+                 # den klippbare delen. Uten dette ankeret ville
+                 # `_tilpass_kontekst` falt til «klipp bakfra», og en
+                 # sak med tre dokumenter ville mistet spørsmålet sitt.
+                 ("\nDokumenter:\n", "\n\nSpørsmål:"),
                  ("\nDokument:\n", "\n\nJSON-mal:"),
                  ("OCR-tekst:\n", "\n\nKorrigert tekst:")]
 
@@ -6540,8 +6545,13 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def _saksdokument(self, filnavn, slag, innhold, kilde):
-        """Ett dokument lest og oversatt til den formen `delt.sak`
-        grupperer på.
+        """(post, tekst, feil) — ett dokument lest og oversatt til den
+        formen `delt.sak` grupperer på.
+
+        Teksten returneres VED SIDEN AV posten, ikke inni den. Lå den i
+        posten, ville den fulgt med til disk (R245 lagrer posten som den
+        er), og saksmappa ville fått en kopi av den tyngste persondataen
+        systemet har. Her lever den bare så lenge forespørselen gjør.
 
         Leser gjennom `_les_dokument` — samme vei som /dokument — så et
         dokument i en sak aldri kan bli lest annerledes enn det samme
@@ -6550,8 +6560,9 @@ class Handler(BaseHTTPRequestHandler):
         ktx, _advarsler, feil = self._les_dokument(
             filnavn, slag, innhold, None, les_strekkoder=False)
         if feil is not None:
-            return None, feil[1].get("feil") if isinstance(feil, tuple) \
-                else "kunne ikke leses"
+            return None, None, (feil[1].get("feil")
+                                if isinstance(feil, tuple)
+                                else "kunne ikke leses")
         profil = ktx.profil
         dokument = profil.get("dokument") or {}
         sak_del = profil.get("sak") or {}
@@ -6590,7 +6601,7 @@ class Handler(BaseHTTPRequestHandler):
             # Brukes til gruppering og motsigelser, men speiles IKKE ut
             # per dokument i svaret — se `_uten_fnr`.
             "fnr": (profil.get("part") or {}).get("fnr"),
-        }, None
+        }, ktx.tekst, None
 
     @staticmethod
     def _uten_fnr(dok: dict) -> dict:
@@ -6628,7 +6639,9 @@ class Handler(BaseHTTPRequestHandler):
                 "felter_feil": [{"pointer": "/opphav",
                                  "message": "Bruk " + "/".join(NIVAAER)}]})
 
-        dokumenter, uleste = [], []
+        # Teksten samles her, IKKE i mappa: den lagres aldri (R245), men
+        # et spørsmål i samme kall må kunne besvares fra den.
+        dokumenter, uleste, tekster = [], [], {}
 
         # --- filene ---------------------------------------------------- #
         filer = []
@@ -6663,11 +6676,13 @@ class Handler(BaseHTTPRequestHandler):
             if slag is None:
                 uleste.append({"kilde": filnavn, "feil": innhold})
                 continue
-            dok, feil = self._saksdokument(filnavn, slag, innhold, "fil")
+            dok, tekst, feil = self._saksdokument(filnavn, slag, innhold,
+                                                  "fil")
             if dok is None:
                 uleste.append({"kilde": filnavn, "feil": feil})
             else:
                 dokumenter.append(dok)
+                tekster[filnavn] = tekst
 
         # --- jobbene --------------------------------------------------- #
         # Et stort skann hører hjemme i POST /jobb. Teksten er da alt
@@ -6687,13 +6702,14 @@ class Handler(BaseHTTPRequestHandler):
                     "feil": f"Jobben er {jobb.get('status')} — bare "
                             f"ferdige jobber kan inngå i en sak"})
                 continue
-            dok, feil = self._saksdokument(
+            dok, tekst, feil = self._saksdokument(
                 jobb.get("filnavn") or jid, "tekst", jobb.get("tekst") or "",
                 "jobb")
             if dok is None:
                 uleste.append({"kilde": jid, "feil": feil})
             else:
                 dok["jobb_id"] = jid
+                tekster[dok["filnavn"]] = tekst
                 dokumenter.append(dok)
 
         # --- mappa: ny eller en som alt finnes (R245) ------------------- #
@@ -6733,8 +6749,93 @@ class Handler(BaseHTTPRequestHandler):
 
         lagt = sakslager.legg_til(mappe, dokumenter)
         sakslager.lagre(mappe)
-        return self._svar(200, self._sakssvar(
-            mappe, uleste=uleste, opphavsnivaa=opphavsnivaa, **lagt))
+        svar = self._sakssvar(mappe, uleste=uleste,
+                              opphavsnivaa=opphavsnivaa, **lagt)
+        sporsmal = (tekstfelter.get("sporsmal") or "").strip()
+        if sporsmal:
+            # Teksten lagres ALDRI i mappa (R245), så et spørsmål kan
+            # bare besvares fra dokumentene som har tekst i DETTE kallet.
+            # `tekster` er samlet mens filene ble lest.
+            svar["svar"] = self._besvar_sakssporsmal(
+                sporsmal, svar, tekster)
+        return self._svar(200, svar)
+
+    def _besvar_sakssporsmal(self, sporsmal: str, svar: dict,
+                               tekster: dict) -> dict:
+        """Ett spørsmål om SAKEN, over flere dokumenter (R250).
+
+        Koden får første ord: gjelder spørsmålet noe som allerede er
+        BEVIST — hvem saken gjelder, hva som ble bestemt til slutt, hva
+        som manglet — svares det derfra, uten å spørre modellen. Resten
+        går til modellen, men bare over dokumenter koden har valgt ut,
+        og bare de som faktisk har tekst tilgjengelig her og nå."""
+        from delt import sakssporsmaal
+
+        saker = svar.get("saker") or []
+        # Spørsmålet gjelder saken. Er mappa blandet, sier vi det i
+        # stedet for å velge én av dem — å svare fra «den første» ville
+        # vært samme gjetning rutingen ellers nekter (R195).
+        if len(saker) != 1:
+            return {
+                "sporsmal": sporsmal, "svar": None, "metode": "ingen",
+                "begrunnelse": (
+                    f"Mappa inneholder {len(saker)} saker. Et spørsmål om "
+                    "«saken» kan ikke besvares før det er klart hvilken — "
+                    "send dokumentene for én sak, eller bruk sak_id per "
+                    "sak."),
+                "kilder": [], "uten_tekst": []}
+
+        sak = saker[0]
+        kodesvar = sakssporsmaal._kodesvar(sporsmal, sak.get("sammendrag"))
+        if kodesvar:
+            tekst, kilder = kodesvar
+            return {"sporsmal": sporsmal, "svar": tekst, "metode": "regler",
+                    "begrunnelse": ("Besvart av koden fra felt som alt er "
+                                    "bevist — ingen språkmodell involvert."),
+                    "kilder": [k for k in kilder if k], "uten_tekst": []}
+
+        # Modellveien: bare dokumenter vi FAKTISK har teksten til.
+        med_tekst, uten_tekst = [], []
+        for dok in sak.get("dokumenter") or []:
+            navn = dok.get("filnavn")
+            if tekster.get(navn):
+                med_tekst.append({**dok, "tekst": tekster[navn]})
+            else:
+                uten_tekst.append(navn)
+        if not med_tekst:
+            return {
+                "sporsmal": sporsmal, "svar": None, "metode": "ingen",
+                "begrunnelse": (
+                    "Ingen av dokumentene har tekst tilgjengelig i dette "
+                    "kallet. Saksmappa lagrer med vilje ikke "
+                    "dokumentteksten — send filene sammen med spørsmålet, "
+                    "eller bygg saken av jobb_id-er."),
+                "kilder": [], "uten_tekst": sorted(n for n in uten_tekst if n)}
+
+        utvalg = sakssporsmaal.velg_dokumenter(med_tekst, sporsmal)
+        prompt = prompter.hent(
+            "spor.sakssporsmal",
+            dokumenter=sakssporsmaal.bygg_utdrag(utvalg["valgte"]),
+            sporsmal=sporsmal)
+        try:
+            tekst, avkortet = _borealis_generer(prompt, MAKS_SVAR_TOKENS)
+        except Exception as exc:                            # noqa: BLE001
+            return {"sporsmal": sporsmal, "svar": None, "metode": "ingen",
+                    "begrunnelse": f"Modellen svarte ikke: {exc}",
+                    "kilder": [], "uten_tekst": sorted(uten_tekst)}
+        return {
+            "sporsmal": sporsmal,
+            "svar": (tekst or "").strip() or None,
+            "metode": "modell",
+            "avkortet": bool(avkortet),
+            "begrunnelse": (
+                f"Besvart av modellen over {len(utvalg['valgte'])} av "
+                f"{len(med_tekst)} dokumenter, valgt av koden. Et svar "
+                "uten kilder er en påstand."),
+            "kilder": sorted(d.get("filnavn") for d in utvalg["valgte"]),
+            "utelatte": utvalg["utelatte"],
+            "uten_tekst": sorted(n for n in uten_tekst if n),
+        }
 
     def _eier_mappa(self, mappe: dict) -> bool:
         """Er det DENNE klienten som bygger saksmappa? (R153)
@@ -10131,7 +10232,7 @@ _KJENTE_FELT_SPOR = {"sporsmal", "jobb_id", "korriger", "maks_sider",
                      "strekkoder"}
 _KJENTE_FELT_JOBB = {"maks_sider", "sporsmal"}
 _KJENTE_FELT_INNSYN = {"maks_sider"}
-_KJENTE_FELT_SAK = {"jobb_id", "sak_id", "opphav"}
+_KJENTE_FELT_SAK = {"jobb_id", "sak_id", "opphav", "sporsmal"}
 
 # Hvilket feltsett hver POST-rute kjenner. Fire ruter hadde vakten fra
 # før; tre hadde den ikke, og målt var det NETTOPP der den manglet mest:

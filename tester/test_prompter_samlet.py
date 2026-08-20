@@ -33,6 +33,7 @@ KALLSTEDER = [
     ("spor.ocr_merknad", {}),
     ("spor.egne_regler_innledning", {}),
     ("spor.uten_dokument", {"sporsmal": "SPM"}),
+    ("spor.sakssporsmal", {"dokumenter": "DOK", "sporsmal": "SPM"}),
     ("spor.normaliser_sporsmal", {"sporsmal": "SPM"}),
     ("korriger.forste_pass", {"usikre_blokk": "", "ocr_tekst": "OCR"}),
     ("korriger.usikre_overskrift", {}),

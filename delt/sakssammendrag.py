@@ -185,7 +185,14 @@ def bygg_sammendrag(sak: dict, motsigelser: dict = None) -> dict:
     `saksopphav`-kartet merker dem `regel`."""
     dokumenter = [d for d in ((sak or {}).get("dokumenter") or [])
                   if isinstance(d, dict)]
-    forlop = [{"dato": dato, "hendelse": (
+    # `type` er med i tillegg til `hendelse`: termen er for et menneske,
+    # koden for en maskin. Uten koden må en klient matche på tekst — og
+    # «Klagevedtak» INNEHOLDER «Klage», så et delstrengsøk teller
+    # klagevedtaket som en klage. Målt: svaret på «ble det klaget?» ga
+    # både klagedatoen og klagevedtakets dato (R250).
+    forlop = [{"dato": dato,
+               "type": _sakstype_av(dok),
+               "hendelse": (
                    (dok.get("type") or {}).get("term")
                    if isinstance(dok.get("type"), dict) else None)
                    or _sakstype_av(dok),
