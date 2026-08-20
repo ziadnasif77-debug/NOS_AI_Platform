@@ -17,6 +17,7 @@ røde på en travel maskin og grønne på en rask; en kvadratisk kurve
 derimot er kvadratisk overalt.
 """
 import os
+import statistics
 import sys
 import time
 
@@ -48,16 +49,26 @@ def _tid(fn, arg, runder=5):
     return beste
 
 
-def _vekst(fn, lag, n1, n2, runder=5):
+def _vekst(fn, lag, n1, n2, runder=5, gjentakelser=1):
     """Faktoren tiden vokser med når inndata dobles.
 
     Inndataene må være store nok til at t1 ligger godt over
     klokkeoppløsningen. Med t1 = 0,7 ms ga litt støy en «vekst» på 4×
-    uten at noe var galt."""
-    t1 = _tid(fn, lag(n1), runder)
-    t2 = _tid(fn, lag(n2), runder)
-    # Gulv på 2 ms: under det måler vi klokke og støy, ikke kode.
-    return t2 / max(t1, 0.002)
+    uten at noe var galt.
+
+    `gjentakelser` > 1 måler HELE forholdet flere ganger og tar
+    medianen. Best-av-N demper støy i hver enkelt måling, men ett uheldig
+    par — rask t1, treg t2 — gir fortsatt et falskt forholdstall, og det
+    er den formen for flakhet som faktisk har rammet oss. Medianen av
+    tre forhold koster like mye som best-av-tre på hver side, og tåler
+    én utligger i begge retninger."""
+    forhold = []
+    for _ in range(max(1, gjentakelser)):
+        t1 = _tid(fn, lag(n1), runder)
+        t2 = _tid(fn, lag(n2), runder)
+        # Gulv på 2 ms: under det måler vi klokke og støy, ikke kode.
+        forhold.append(t2 / max(t1, 0.002))
+    return statistics.median(forhold)
 
 
 BINDESTREKER = lambda n: "1-" * n
@@ -77,14 +88,16 @@ def test_epostmonsteret_er_ikke_kvadratisk():
 def test_hele_uttrekket_er_ikke_kvadratisk():
     """Den som faktisk rammer en forespørsel.
 
-    `runder=3`, ikke 2, av grunnen modulen selv beskriver: to runder er
-    for tynt grunnlag når maskinen er travel. Den falt på 3,7× i en full
-    testkjøring, og etterprøvingen viste at det var støy — samme kode
-    målt sju ganger ga median 2,07, og alene gikk testen grønt 6 av 6.
-    Terskelen er URØRT; det er målingen som er styrket. En vakt som
-    roper tilfeldig blir slått av, ikke fikset (R180)."""
+    Medianen av TRE forholdstall, ikke ett — og med én runde hver, så
+    kostnaden er den samme som best-av-tre var. Grunnen er målt: testen
+    falt på 3,7× og siden 3,3× i fulle testkjøringer, mens samme kode
+    målt sju ganger utenfor lasten ga median 2,04–2,07, og alene gikk
+    den grønt 6 av 6. Feilen lå altså ikke i koden og heller ikke i
+    terskelen, men i at ett uheldig målepar fikk avgjøre alene.
+    Terskelen er URØRT. En vakt som roper tilfeldig blir slått av, ikke
+    fikset (R180)."""
     faktor = _vekst(tu.strukturert_uttrekk, BINDESTREKER, 20000, 40000,
-                    runder=3)
+                    runder=1, gjentakelser=3)
     assert faktor < 3.0, f"strukturert_uttrekk vokste {faktor:.1f}× ved dobling"
 
 

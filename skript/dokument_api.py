@@ -493,6 +493,12 @@ KROPP_FRIST_S = float(os.environ.get("KROPP_FRIST_S", "30"))
 
 # Tak på antall multipart-deler. Et ekte kall har tre-fire.
 MAKS_MULTIPART_DELER = int(os.environ.get("MAKS_MULTIPART_DELER", "64"))
+# Hvor mange FILER POST /sak leser i ett kall (R244). Grensen er ikke om
+# multipart tåler flere — det gjør den — men om klienten gjør det: hver
+# fil kan kreve OCR, og tjue skannede dokumenter i én synkron
+# forespørsel sprenger enhver rimelig klientfrist. Store dokumenter hører
+# hjemme i POST /jobb, og /sak tar imot jobb_id-ene i stedet.
+MAKS_SAKSFILER = int(os.environ.get("MAKS_SAKSFILER", "20"))
 
 # Tak på hvor mye TEKST en fil får pakkes ut til. CSV og XLSX hadde et
 # linjetak; TXT og DOCX hadde ingenting. Målt: en 311 kB .docx pakket ut
@@ -869,37 +875,63 @@ def _cd_filnavn(hoder: bytes):
     return _cd_parameter(hoder, "filename")
 
 
-def _parse_multipart(body: bytes, content_type: str):
-    """Returnerer (filnavn, filbytes, tekstfelter) fra en
-    multipart/form-data-body. Filnavn/filbytes er None hvis ingen fil;
-    tekstfelter er dict av vanlige skjemafelter (f.eks. 'sporsmal').
+def _tidligste_behandlingsdato(datoer_detaljert) -> str:
+    """Den eldste datoen med rollen «behandling» (mottatt/arkivert),
+    eller None.
 
-    Parseren er bevisst tolerant mot klientvariasjon (R63): feltnavn med
-    og uten anførselstegn, CRLF og bare LF, filnavn i begge RFC-former,
-    og en boundary som står sammen med andre parametre. Alle disse har
-    samme feilmodus — delen faller stille ut og API-et svarer 200 som om
+    Reserve for sakstidslinjen når dokumentet ikke har en egen dato —
+    typisk en søknad som bare bærer «Mottatt». Eldste og ikke nyeste:
+    er dokumentet både mottatt og arkivert, er det MOTTAKET som er
+    hendelsen i saken."""
+    from delt.tekstuttrekk import ROLLE_BEHANDLING
+    treff = sorted(d.get("dato") for d in (datoer_detaljert or [])
+                   if isinstance(d, dict)
+                   and d.get("rolle") == ROLLE_BEHANDLING and d.get("dato"))
+    return treff[0] if treff else None
+
+
+def _jobb_ider(raa: str) -> list:
+    """Jobb-id-ene i et `jobb_id`-felt — komma, mellomrom eller linjeskift.
+
+    En robot som bygger lista si med join(", ") og en som bruker
+    linjeskift skal begge bli forstått; det er samme toleranse
+    multipart-parseren viser for klientvariasjon (R63). Duplikater
+    fjernes, og rekkefølgen beholdes så svaret er forutsigbart."""
+    sett, ut = set(), []
+    for bit in re.split(r"[\s,;]+", (raa or "").strip()):
+        bit = bit.strip()
+        if bit and bit not in sett:
+            sett.add(bit)
+            ut.append(bit)
+    return ut
+
+
+def _multipart_deler(body: bytes, content_type: str):
+    """Går gjennom multipart-kroppen og gir (feltnavn, filnavn, innhold,
+    hoder) for hver del. `filnavn` er None for tekstfelter.
+
+    Skilt ut av `_parse_multipart` fordi to ruter trenger HVER SIN
+    lesning av samme kropp: bryter-veien vil ha første fil og
+    tekstfeltene, `/sak` vil ha ALLE filene. To parsere ville før eller
+    siden blitt uenige om en klientvariant (R111) — og nettopp
+    klientvariantene er det denne parseren finnes for.
+
+    Parseren er bevisst tolerant (R63): feltnavn med og uten
+    anførselstegn, CRLF og bare LF, filnavn i begge RFC-former, og en
+    boundary som står sammen med andre parametre. Alle disse har samme
+    feilmodus — delen faller stille ut og API-et svarer 200 som om
     klienten aldri sendte feltet."""
-    tekstfelter = {}
-    # Boundary hentes med samme parameterleser som resten: den takler
-    # både «boundary=abc» og «boundary="abc"», og stopper ved neste «;».
-    # Naiv split på «boundary=» tok med etterfølgende parametre — en
-    # Content-Type som «...; boundary=abc; charset=utf-8» ga da en
-    # boundary som aldri fantes i kroppen, og ALT ble borte.
     boundary = _cd_parameter(content_type.encode("utf-8", "replace"),
                              "boundary")
     if not boundary:
-        return None, None, tekstfelter
+        return
     skille = ("--" + boundary).encode()
-    filnavn, filbytes = None, None
     # TAK PÅ ANTALL DELER (R161). `split` uten grense bygger én
     # listeoppføring per treff, og en kropp som bare er skilletegn gir
     # millioner av dem. Målt: 200 MB gyldig formede smådeler = 3,6
     # millioner deler og 55,7 sekunder CPU — inne i en kapasitetsplass,
     # og gulvet er to plasser. To slike forespørsler stanser altså alle
     # de tunge rutene i et minutt, fornybart.
-    #
-    # Et ekte kall har tre-fire deler (fil + noen brytere). Taket er satt
-    # høyt nok til at ingen reell klient merker det.
     deler = body.split(skille, MAKS_MULTIPART_DELER + 1)
     if len(deler) > MAKS_MULTIPART_DELER + 1:
         raise ValueError(
@@ -915,21 +947,34 @@ def _parse_multipart(body: bytes, content_type: str):
         hoder = del_[:tomlinje.start()]
         # fjern etterfølgende linjeskift før neste boundary
         innhold = del_[tomlinje.end():].rstrip(b"\r\n")
-        funnet_filnavn = _cd_filnavn(hoder)
-        funnet_feltnavn = _cd_parameter(hoder, "name")
+        yield (_cd_parameter(hoder, "name"), _cd_filnavn(hoder),
+               innhold, hoder)
+
+
+def _deltekst(innhold: bytes, hoder: bytes) -> str:
+    """Tekstdelens innhold, avkodet med tegnsettet den selv oppgir.
+    Uten dette ble æøå fra en klient som ikke bruker UTF-8 til krøll."""
+    tegnsett = _cd_parameter(hoder, "charset") or "utf-8"
+    try:
+        return innhold.decode(tegnsett, "replace").strip()
+    except LookupError:
+        return innhold.decode("utf-8", "replace").strip()
+
+
+def _parse_multipart(body: bytes, content_type: str):
+    """Returnerer (filnavn, filbytes, tekstfelter) fra en
+    multipart/form-data-body. Filnavn/filbytes er None hvis ingen fil;
+    tekstfelter er dict av vanlige skjemafelter (f.eks. 'sporsmal')."""
+    tekstfelter = {}
+    filnavn, filbytes = None, None
+    for feltnavn, funnet_filnavn, innhold, hoder in _multipart_deler(
+            body, content_type):
         if funnet_filnavn is not None:
             if filbytes is None:      # første fil vinner
                 filnavn = funnet_filnavn or "opplastet.pdf"
                 filbytes = innhold
-        elif funnet_feltnavn:
-            # Tekstdelen kan oppgi sitt eget tegnsett. Uten dette ville
-            # æøå fra en klient som ikke bruker UTF-8 bli til krøll.
-            tegnsett = _cd_parameter(hoder, "charset") or "utf-8"
-            try:
-                tekst = innhold.decode(tegnsett, "replace")
-            except LookupError:
-                tekst = innhold.decode("utf-8", "replace")
-            tekstfelter[funnet_feltnavn] = tekst.strip()
+        elif feltnavn:
+            tekstfelter[feltnavn] = _deltekst(innhold, hoder)
     return filnavn, filbytes, tekstfelter
 
 
@@ -4304,6 +4349,140 @@ def _skjemaer() -> dict:
                                           "piksler eller sterkt uskarp) — "
                                           "OCR vil gi søppel"),
                 "advarsler": {"type": "array", "items": s()}}},
+        "SakSvar": {
+            "type": "object",
+            "description": "Flere dokumenter gruppert i saker (R242–R244). "
+                           "Saksnummer/journalnummer beviser samme SAK; "
+                           "fødselsnummer beviser samme PERSON og grupperer "
+                           "aldri — slike sammenfall står i «relasjoner». "
+                           "Helt deterministisk.",
+            "properties": {
+                "ok": b(),
+                "antall_dokumenter": {"type": "integer"},
+                "antall_saker": {"type": "integer"},
+                "saker": {"type": "array", "items": ref("Sak")},
+                "relasjoner": {
+                    "type": "array", "items": ref("Personrelasjon"),
+                    "description": "Saker som gjelder samme person. De er "
+                                   "IKKE slått sammen."},
+                "uleste": {
+                    "type": "array", "items": ref("UlestKilde"),
+                    "description": "Hva som ikke kom med, og hvorfor. En sak "
+                                   "bygget av ni av ti dokumenter er en "
+                                   "annen sak enn en bygget av ti."},
+                "forklaring": s(),
+                "versjon": {"type": "object"},
+            },
+        },
+        "Sak": {
+            "type": "object",
+            "properties": {
+                "nokkel": {
+                    "type": "object", "nullable": True,
+                    "description": "Nøkkelen saken er navngitt etter — "
+                                   "{felt, verdi}. Null når ingen av "
+                                   "dokumentene bar en saksnøkkel.",
+                    "properties": {"felt": s(enum=["saksnummer",
+                                                   "journalnummer"]),
+                                   "verdi": s()}},
+                "grunnlag": s(description="Hvorfor disse dokumentene hører "
+                                          "sammen — etterprøvbart av et "
+                                          "menneske"),
+                "grunn": s(nullable=True,
+                           enum=["ingen_bevist_saksnokkel", None],
+                           description="Satt når saken bare består av ett "
+                                       "dokument uten bevisbar nøkkel"),
+                "antall_dokumenter": {"type": "integer"},
+                "dokumenter": {"type": "array", "items": ref("Saksdokument")},
+                "tidslinje": ref("Tidslinje"),
+                "motsigelser": ref("Motsigelser"),
+            },
+        },
+        "Saksdokument": {
+            "type": "object",
+            "description": "Ett dokument i saken. Fødselsnummeret er brukt "
+                           "til gruppering, men gjentas IKKE her — hvem "
+                           "saken gjelder står i «relasjoner».",
+            "properties": {
+                "filnavn": s(),
+                "kilde": s(enum=["fil", "jobb"]),
+                "jobb_id": s(nullable=True),
+                "tittel": s(nullable=True),
+                "type": {"type": "object", "description": "{kode, term}"},
+                "dato": s(nullable=True),
+                "behandlingsdato": s(nullable=True),
+                "antall_sider": {"type": "integer", "nullable": True},
+                "saksnummer": s(nullable=True),
+                "journalnummer": s(nullable=True),
+            },
+        },
+        "Tidslinje": {
+            "type": "object",
+            "properties": {
+                "hendelser": {"type": "array", "items": ref("Hendelse")},
+                "uten_dato": {
+                    "type": "array", "items": ref("Hendelse"),
+                    "description": "Dokumenter uten noen dato. De plasseres "
+                                   "ALDRI på slump: en tidslinje med et hull "
+                                   "er bedre enn en med en gjetning."},
+                "fra": s(nullable=True),
+                "til": s(nullable=True),
+            },
+        },
+        "Hendelse": {
+            "type": "object",
+            "properties": {
+                "dato": s(nullable=True),
+                "dato_kilde": s(nullable=True,
+                                enum=["dokumentdato", "behandlingsdato", None],
+                                description="Dokumentets egen dato, eller "
+                                            "behandlingsdatoen (typisk "
+                                            "«Mottatt») når den mangler. De "
+                                            "to er ikke like sterke."),
+                "hendelse": s(description="Dokumenttypens term"),
+                "dokument": s(nullable=True),
+                "filnavn": s(nullable=True),
+                "sider": {"type": "array", "items": {"type": "integer"},
+                          "description": "Sidene dokumentet dekker når det "
+                                         "er et utsnitt av en bunke; tomt "
+                                         "når hele filen er dokumentet"},
+            },
+        },
+        "Motsigelser": {
+            "type": "object",
+            "properties": {
+                "funn": {"type": "array", "items": ref("Motsigelse")},
+                "sjekket": {
+                    "type": "array", "items": s(),
+                    "description": "Hvilke sjekker som faktisk kjørte. Uten "
+                                   "denne kunne et tomt «funn» leses som "
+                                   "«saken henger sammen» — en påstand "
+                                   "ingen sjekk her kan gjøre."},
+            },
+        },
+        "Motsigelse": {
+            "type": "object",
+            "properties": {
+                "type": s(enum=["flere_personer", "umulig_rekkefolge"]),
+                "alvor": s(enum=["hoy"]),
+                "forklaring": s(description="Gjengir aldri fødselsnumrene "
+                                            "selv — teksten havner i logg"),
+                "dokumenter": {"type": "array", "items": s()},
+            },
+        },
+        "Personrelasjon": {
+            "type": "object",
+            "properties": {
+                "fnr": s(),
+                "saksindekser": {"type": "array",
+                                 "items": {"type": "integer"}},
+                "forklaring": s(),
+            },
+        },
+        "UlestKilde": {
+            "type": "object",
+            "properties": {"kilde": s(), "feil": s()},
+        },
         "ForhandssjekkSvar": {
             "type": "object",
             "description": "Kvalitetsdom FØR prosessering — aldri OCR, "
@@ -4881,6 +5060,52 @@ def _openapi() -> dict:
                                 "$ref": "#/components/schemas/"
                                         "ForhandssjekkSvar"}}}},
                     "400": {"description": "Manglende fil eller korrupt PDF",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/Feilsvar"}}}}}}},
+            "/sak": {"post": {
+                "summary": "Flere dokumenter lest som ÉN sak — gruppering, tidslinje og motsigelser",
+                "description":
+                    "Den eneste ruten som leser MER ENN ÉN fil. Send flere "
+                    "`fil`-deler, og/eller `jobb_id` med id-er fra ferdige "
+                    "POST /jobb-kall (komma-, semikolon- eller "
+                    "linjeskilt). Store skann hører hjemme i /jobb først — "
+                    "da leses de ikke om igjen her.\n\n"
+                    "**Hva som binder dokumentene sammen:** saksnummer og "
+                    "journalnummer beviser samme SAK. Fødselsnummer beviser "
+                    "samme PERSON — og det er ikke det samme. Én person kan "
+                    "ha sykepenger, dagpenger og en tilbakebetaling gående "
+                    "samtidig: tre saker, ett fødselsnummer. Slike "
+                    "sammenfall meldes derfor i `relasjoner`, aldri ved å "
+                    "slå sakene sammen. Navn binder ingenting.\n\n"
+                    "Et dokument uten bevisbar saksnøkkel blir sin egen sak "
+                    "med `grunn: ingen_bevist_saksnokkel` — det gjettes "
+                    "ikke inn i den nærmeste.\n\n"
+                    "**Tidslinjen** bruker dokumentets egen dato når den "
+                    "finnes, ellers en behandlingsdato (typisk «Mottatt» på "
+                    "en søknad). `dato_kilde` sier alltid hvilken. "
+                    "Dokumenter helt uten dato plasseres ikke på slump — de "
+                    "listes i `uten_dato`.\n\n"
+                    "**Motsigelser** meldes bare når de kan bevises: flere "
+                    "fødselsnummer i samme sak, og logisk umulig rekkefølge "
+                    "(klagevedtak før klagen, vedtak før søknaden, purring "
+                    "før kravet). `sjekket` sier hvilke sjekker som kjørte, "
+                    "så et tomt `funn` ikke leses som en frikjennelse.\n\n"
+                    "Helt deterministisk: ingen språkmodell er involvert, "
+                    "og samme mappe gir samme svar hver gang.",
+                "requestBody": {"content": {"multipart/form-data": {"schema": {
+                    "type": "object",
+                    "properties": {
+                        "fil": fil_felt,
+                        "jobb_id": {
+                            "type": "string",
+                            "description": "Id-er fra ferdige POST /jobb-kall, "
+                                           "skilt med komma, semikolon eller "
+                                           "linjeskift"}}}}}},
+                "responses": {
+                    "200": {"description": "Sakene, med tidslinje og motsigelser",
+                            "content": {"application/json": {"schema": {
+                                "$ref": "#/components/schemas/SakSvar"}}}},
+                    "400": {"description": "Ingen dokumenter, eller for mange filer",
                             "content": {"application/json": {"schema": {
                                 "$ref": "#/components/schemas/Feilsvar"}}}}}}},
             "/sladd": {"post": {
@@ -5782,6 +6007,15 @@ class Handler(BaseHTTPRequestHandler):
                                     "beviste identifikatorer erstattet av [SLADDET type]; "
                                     "«sladding_fullstendig» og «mistenkt_usladdet» sier "
                                     "hva som IKKE kunne bevises"),
+                    "POST /sak": ("FLERE dokumenter lest som ÉN sak: send flere "
+                                  "'fil'-deler og/eller 'jobb_id' (komma- eller "
+                                  "linjeskilt) fra ferdige jobber → {saker:[…], "
+                                  "relasjoner:[…], uleste:[…]}. Hver sak får "
+                                  "tidslinje og motsigelser. Gruppert på "
+                                  "saksnummer/journalnummer — det som beviser samme "
+                                  "SAK; fødselsnummer beviser samme PERSON og "
+                                  "grupperer aldri. Helt deterministisk — ingen "
+                                  "språkmodell er involvert"),
                     "POST /forhandssjekk": ("felt 'fil' → lesbarhet og sidetall UTEN å "
                                             "kjøre full OCR — svarer om dokumentet er verdt "
                                             "å sende"),
@@ -6122,6 +6356,182 @@ class Handler(BaseHTTPRequestHandler):
                 "tekstfelter": {k: v[:200] for k, v in tekstfelter.items()},
             },
             "raa_deler": deler,
+        })
+
+    def _saksdokument(self, filnavn, slag, innhold, kilde):
+        """Ett dokument lest og oversatt til den formen `delt.sak`
+        grupperer på.
+
+        Leser gjennom `_les_dokument` — samme vei som /dokument — så et
+        dokument i en sak aldri kan bli lest annerledes enn det samme
+        dokumentet sendt alene. To lesemåter ville gitt to sannheter om
+        samme fil (R111)."""
+        ktx, _advarsler, feil = self._les_dokument(
+            filnavn, slag, innhold, None, les_strekkoder=False)
+        if feil is not None:
+            return None, feil[1].get("feil") if isinstance(feil, tuple) \
+                else "kunne ikke leses"
+        profil = ktx.profil
+        dokument = profil.get("dokument") or {}
+        sak_del = profil.get("sak") or {}
+        return {
+            "filnavn": filnavn,
+            "kilde": kilde,
+            "tittel": dokument.get("tittel"),
+            "type": dokument.get("type"),
+            "dato": dokument.get("dato"),
+            # Behandlingsdatoen (mottatt/arkivert) som reserve for
+            # tidslinjen. En søknad bærer ofte BARE «Mottatt», og uten
+            # denne faller den ut av saken den startet — se
+            # `sak.hendelsesdato` for hvorfor kilden alltid oppgis.
+            "behandlingsdato": _tidligste_behandlingsdato(
+                ktx.datoer_detaljert),
+            # Hele filen ER dokumentet på denne veien, så et sidespenn
+            # ville vært samme opplysning som sideantallet — sagt to
+            # ganger. `sider` finnes i tidslinjen for dokumenter som er
+            # et UTSNITT av en bunke; her er det tomt, og det er sant.
+            "antall_sider": (profil.get("fil") or {}).get("antall_sider"),
+            "saksnummer": sak_del.get("saksnummer"),
+            "journalnummer": sak_del.get("journalnummer"),
+            # Brukes til gruppering og motsigelser, men speiles IKKE ut
+            # per dokument i svaret — se `_uten_fnr`.
+            "fnr": (profil.get("part") or {}).get("fnr"),
+        }, None
+
+    @staticmethod
+    def _uten_fnr(dok: dict) -> dict:
+        """Dokumentet slik det går UT til klienten.
+
+        Fødselsnummeret er med i grupperingen fordi den trenger det, men
+        et saksvis svar som gjentar det per dokument sprer identifikatoren
+        bredere enn oppgaven krever. Hvem saken gjelder står i
+        `relasjoner` når det betyr noe."""
+        return {k: v for k, v in dok.items() if k != "fnr"}
+
+    def _sak(self, body, ct, tekstfelter):
+        """POST /sak — flere dokumenter lest som ÉN sak (R244).
+
+        Tar imot flere `fil`-deler og/eller `jobb_id`-er, grupperer dem
+        med `delt.sak`, og svarer med tidslinje og motsigelser per sak.
+        Ingen språkmodell er involvert: alt her er deterministisk, og
+        svaret skal være identisk for samme mappe hver gang (R6)."""
+        from delt import motsigelser as _motsigelser
+        from delt import sak as _sak
+
+        # `_les_dokument` plukker opp denne; /sak setter ingen sidegrense,
+        # men feltet må finnes fordi vi hopper over dispatcher-koden som
+        # ellers setter det.
+        self._kappet_advarsel = None
+
+        dokumenter, uleste = [], []
+
+        # --- filene ---------------------------------------------------- #
+        filer = []
+        try:
+            for _felt, funnet_filnavn, del_innhold, _hoder in _multipart_deler(
+                    body, ct):
+                if funnet_filnavn is not None:
+                    filer.append((funnet_filnavn or "opplastet.pdf",
+                                  del_innhold))
+        except ValueError as exc:
+            return self._svar(400, {"ok": False, "feil": str(exc)})
+
+        if len(filer) > MAKS_SAKSFILER:
+            return self._svar(400, {
+                "ok": False,
+                "feil": (f"{len(filer)} filer er over grensen på "
+                         f"{MAKS_SAKSFILER} per kall. Kjør de store "
+                         f"dokumentene gjennom POST /jobb først og send "
+                         f"jobb_id-ene hit i stedet — da leses de ikke "
+                         f"om igjen."),
+                "felter_feil": [{"pointer": "/fil",
+                                 "message": f"maks {MAKS_SAKSFILER} filer"}]})
+
+        for filnavn, data in filer:
+            try:
+                slag, innhold = normaliser_fil(filnavn, data)
+            except Exception as exc:                        # noqa: BLE001
+                uleste.append({"kilde": filnavn,
+                               "feil": f"korrupt eller ugyldig format "
+                                       f"({type(exc).__name__})"})
+                continue
+            if slag is None:
+                uleste.append({"kilde": filnavn, "feil": innhold})
+                continue
+            dok, feil = self._saksdokument(filnavn, slag, innhold, "fil")
+            if dok is None:
+                uleste.append({"kilde": filnavn, "feil": feil})
+            else:
+                dokumenter.append(dok)
+
+        # --- jobbene --------------------------------------------------- #
+        # Et stort skann hører hjemme i POST /jobb. Teksten er da alt
+        # lest, så saken bygges uten å kjøre OCR en gang til.
+        for jid in _jobb_ider(tekstfelter.get("jobb_id", "")):
+            jobb = _jobber.get(jid)
+            # Å lese en annens jobb er en lekkasje, ikke en tjeneste
+            # (R153) — og «finnes ikke» er det samme svaret utenfra.
+            if jobb is not None and not self._eier_jobben(jobb):
+                jobb = None
+            if jobb is None:
+                uleste.append({"kilde": jid, "feil": "Ukjent jobb_id"})
+                continue
+            if jobb.get("status") != "ferdig":
+                uleste.append({
+                    "kilde": jid,
+                    "feil": f"Jobben er {jobb.get('status')} — bare "
+                            f"ferdige jobber kan inngå i en sak"})
+                continue
+            dok, feil = self._saksdokument(
+                jobb.get("filnavn") or jid, "tekst", jobb.get("tekst") or "",
+                "jobb")
+            if dok is None:
+                uleste.append({"kilde": jid, "feil": feil})
+            else:
+                dok["jobb_id"] = jid
+                dokumenter.append(dok)
+
+        if not dokumenter:
+            return self._svar(400, {
+                "ok": False,
+                "feil": ("Ingen dokumenter å bygge en sak av. Send én "
+                         "eller flere 'fil'-deler, og/eller 'jobb_id' med "
+                         "id-er fra ferdige POST /jobb-kall."),
+                "uleste": uleste,
+                "felter_feil": [{"pointer": "/fil",
+                                 "message": "minst ett dokument kreves"}]})
+
+        saker = _sak.grupper_i_saker(dokumenter)
+        ut = []
+        for enkeltsak in saker:
+            ut.append({
+                "nokkel": enkeltsak["nokkel"],
+                "grunnlag": enkeltsak["grunnlag"],
+                "grunn": enkeltsak["grunn"],
+                "antall_dokumenter": len(enkeltsak["dokumenter"]),
+                "dokumenter": [self._uten_fnr(d)
+                               for d in enkeltsak["dokumenter"]],
+                "tidslinje": _sak.tidslinje(enkeltsak),
+                "motsigelser": _motsigelser.finn_motsigelser(enkeltsak),
+            })
+        return self._svar(200, {
+            "ok": True,
+            "antall_dokumenter": len(dokumenter),
+            "antall_saker": len(ut),
+            "saker": ut,
+            "relasjoner": _sak.personrelasjoner(saker),
+            # Hva som IKKE kom med, og hvorfor. En sak bygget av ni av ti
+            # dokumenter er en annen sak enn en bygget av ti, og
+            # forskjellen skal ikke måtte gjettes (R24).
+            "uleste": uleste,
+            "forklaring": (
+                "Dokumentene er gruppert på saksnummer og journalnummer — "
+                "det som beviser samme SAK. Fødselsnummer beviser samme "
+                "PERSON og grupperer aldri; slike sammenfall står i "
+                "«relasjoner». Alt her er deterministisk: ingen "
+                "språkmodell er involvert."),
+            "versjon": {"api": API_VERSJON,
+                        "uttrekk_regler": UTTREKK_REGEL_VERSJON},
         })
 
     def _forhandssjekk(self, filnavn, slag, innhold, tekstfelter):
@@ -7150,7 +7560,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if sti not in ("/spor", "/jobb", "/innsyn", "/dokument",
                        "/dokument/operasjoner", "/ekko",
-                       "/forhandssjekk", "/sladd"):
+                       "/forhandssjekk", "/sladd", "/sak"):
             return self._svar(404, ruting_404(sti))
 
         # Køplass tas FØR kroppen leses. Tas den etterpå, har hver ventende
@@ -7289,6 +7699,12 @@ class Handler(BaseHTTPRequestHandler):
             if _omvendte:
                 return self._svar(400, _omvendt_felt_feil(_omvendte,
                                                           _kjente_felt))
+
+        # Saken leses av FLERE filer, ikke én. Den tar derfor sin egen
+        # vei gjennom kroppen (`_multipart_deler`) i stedet for å arve
+        # «første fil vinner» fra parseren over.
+        if sti == "/sak":
+            return self._sak(body, ct, tekstfelter)
 
         # /spor kan bruke jobb_id i stedet for fil — eller stå helt uten
         # fil (rent spørsmål → generelt modellsvar)
@@ -9403,6 +9819,7 @@ _KJENTE_FELT_SPOR = {"sporsmal", "jobb_id", "korriger", "maks_sider",
                      "strekkoder"}
 _KJENTE_FELT_JOBB = {"maks_sider", "sporsmal"}
 _KJENTE_FELT_INNSYN = {"maks_sider"}
+_KJENTE_FELT_SAK = {"jobb_id"}
 
 # Hvilket feltsett hver POST-rute kjenner. Fire ruter hadde vakten fra
 # før; tre hadde den ikke, og målt var det NETTOPP der den manglet mest:
@@ -9440,6 +9857,7 @@ _FELTSETT_PER_RUTE = {
     "/spor": _KJENTE_FELT_SPOR,
     "/jobb": _KJENTE_FELT_JOBB,
     "/innsyn": _KJENTE_FELT_INNSYN,
+    "/sak": _KJENTE_FELT_SAK,
 }
 
 

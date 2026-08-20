@@ -240,6 +240,43 @@ def test_samme_dag_har_fast_rekkefolge():
         == ["a.pdf", "b.pdf"]
 
 
+def test_behandlingsdato_brukes_naar_dokumentet_mangler_egen():
+    """En søknad bærer ofte BARE «Mottatt: 10.01.2026», som er en
+    behandlingsdato. Uten reserven faller søknaden ut av tidslinjen —
+    og saken mister hendelsen den begynte med."""
+    sak = s.grupper_i_saker([
+        dok(filnavn="1.pdf", saksnummer="44", behandlingsdato="2026-01-10",
+            tittel="Søknad", type={"kode": "soknad", "term": "Søknad"}),
+        dok(filnavn="2.pdf", saksnummer="44", dato="2026-02-01",
+            tittel="Vedtak", type={"kode": "vedtak", "term": "Vedtak"}),
+    ])[0]
+    t = s.tidslinje(sak)
+    assert [h["dato"] for h in t["hendelser"]] == ["2026-01-10", "2026-02-01"]
+    assert t["uten_dato"] == []
+
+
+def test_tidslinjen_sier_hvilken_dato_den_brukte():
+    """De to datoslagene er ikke like sterke. En tidslinje som skjuler
+    forskjellen inviterer til å lese en mottaksdato som en vedtaksdato."""
+    sak = s.grupper_i_saker([
+        dok(filnavn="1.pdf", saksnummer="44", behandlingsdato="2026-01-10"),
+        dok(filnavn="2.pdf", saksnummer="44", dato="2026-02-01"),
+    ])[0]
+    kilder = [h["dato_kilde"] for h in s.tidslinje(sak)["hendelser"]]
+    assert kilder == ["behandlingsdato", "dokumentdato"]
+
+
+def test_dokumentets_egen_dato_vinner_over_behandlingsdatoen():
+    dato, kilde = s.hendelsesdato(
+        dok(dato="2026-02-01", behandlingsdato="2026-01-10"))
+    assert (dato, kilde) == ("2026-02-01", "dokumentdato")
+
+
+def test_uten_noen_dato_er_svaret_ingen_dato():
+    assert s.hendelsesdato(dok()) == (None, None)
+    assert s.hendelsesdato(None) == (None, None)
+
+
 def test_tom_sak_gir_tom_tidslinje():
     t = s.tidslinje({"dokumenter": []})
     assert t["hendelser"] == [] and t["fra"] is None and t["til"] is None

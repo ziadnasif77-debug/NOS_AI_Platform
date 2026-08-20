@@ -34,7 +34,7 @@ og en tabell med månedsbeløp har mange. Uten et målt korpus å skille på,
 ville regelen ropt på friske saker. Den hører hjemme her når vi har
 tallene, ikke før.
 """
-from delt.sak import PERSONNOKKEL, _sakstype_av, _verdi
+from delt.sak import PERSONNOKKEL, _sakstype_av, _verdi, hendelsesdato
 
 # Alvorsgrader — samme ord som resten av huset bruker om funn.
 ALVOR_HOY = "hoy"
@@ -65,13 +65,23 @@ def _tidligste(dokumenter: list, typekode: str):
 
     Eldste og ikke nyeste med vilje: finnes det tre klager, er det den
     første som avgjør om et klagevedtak kan ha kommet før noen klage i
-    det hele tatt."""
-    treff = [d for d in dokumenter
-             if _sakstype_av(d) == typekode and d.get("dato")]
+    det hele tatt.
+
+    Datoen hentes gjennom `sak.hendelsesdato`, samme kilde som
+    tidslinjen bruker. En søknad bærer ofte bare «Mottatt», og spurte vi
+    bare etter dokumentets egen dato, ville sjekken «vedtak før søknad»
+    aldri slått ut på nettopp de søknadene det gjelder."""
+    treff = []
+    for d in dokumenter:
+        if _sakstype_av(d) != typekode:
+            continue
+        dato, _kilde = hendelsesdato(d)
+        if dato:
+            treff.append((dato, _dokumentnavn(d), d))
     if not treff:
         return None
-    treff.sort(key=lambda d: (d["dato"], _dokumentnavn(d)))
-    return treff[0]["dato"], treff[0]
+    treff.sort(key=lambda t: (t[0], t[1]))
+    return treff[0][0], treff[0][2]
 
 
 def _flere_personer(sak: dict) -> list:

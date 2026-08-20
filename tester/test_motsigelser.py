@@ -154,6 +154,20 @@ def test_bare_den_ene_typen_gir_ingen_dom():
     assert m.finn_motsigelser(sak)["funn"] == []
 
 
+def test_soknad_med_bare_mottatt_dato_teller_i_rekkefolgen():
+    """Uten dette slo «vedtak før søknad» aldri ut på nettopp de
+    søknadene det gjelder: de bærer bare «Mottatt», som er en
+    behandlingsdato, ikke dokumentets egen."""
+    sak = en_sak(
+        dok(filnavn="1.pdf", saksnummer="44", behandlingsdato="2026-05-01",
+            tittel="Søknad", type=type_("soknad")),
+        dok(filnavn="2.pdf", saksnummer="44", dato="2026-01-01",
+            tittel="Vedtak", type=type_("vedtak")),
+    )
+    funn = m.finn_motsigelser(sak)["funn"]
+    assert [f["type"] for f in funn] == ["umulig_rekkefolge"]
+
+
 def test_dokument_uten_dato_teller_ikke_i_rekkefolgen():
     """Uten dato finnes ingen rekkefølge å motsi."""
     sak = en_sak(

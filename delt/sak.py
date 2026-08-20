@@ -215,28 +215,57 @@ def personrelasjoner(saker: list) -> list:
     return ut
 
 
+def hendelsesdato(dok: dict) -> tuple:
+    """(dato, kilde) for NÅR dokumentet hører hjemme i tidslinjen.
+
+    Dokumentets EGEN dato først. Finnes den ikke, brukes en
+    behandlingsdato (mottatt/arkivert) — og det er ikke en oppmykning,
+    det er nødvendig: en søknad bærer ofte bare «Mottatt: 10.01.2026»,
+    som er en behandlingsdato i datomodellen. Uten fallbacken faller
+    søknaden ut av tidslinjen, og saken mister hendelsen den BEGYNTE
+    med. Verre: `motsigelser` kan da aldri se at et vedtak er eldre enn
+    søknaden det svarer på, fordi den ene datoen mangler.
+
+    Kilden sies alltid, så de to aldri forveksles. Ett sted som svarer
+    på «når skjedde dette» — tidslinjen og motsigelsene spør begge her,
+    og to steder ville før eller siden blitt uenige (R111)."""
+    dok = dok or {}
+    if dok.get("dato"):
+        return dok["dato"], "dokumentdato"
+    if dok.get("behandlingsdato"):
+        return dok["behandlingsdato"], "behandlingsdato"
+    return None, None
+
+
 def tidslinje(sak: dict) -> dict:
     """Sakens hendelser i tid — hver med dokumentet den kommer fra.
 
-    {"hendelser": [{dato, hendelse, dokument, filnavn, sider}],
+    {"hendelser": [{dato, dato_kilde, hendelse, dokument, filnavn, sider}],
      "uten_dato": [...], "fra": …, "til": …}
 
-    Dokumenter uten dato GJETTES IKKE inn i rekkefølgen. De listes for
-    seg, for en tidslinje der noe er plassert på slump er verre enn en
-    tidslinje med et hull: hullet ser man."""
+    `dato_kilde` sier om datoen er dokumentets EGEN eller en
+    behandlingsdato — se `hendelsesdato`. De to er ikke like sterke, og
+    en tidslinje som skjuler forskjellen inviterer til å lese en
+    mottaksdato som en vedtaksdato.
+
+    Dokumenter uten noen dato GJETTES IKKE inn i rekkefølgen. De listes
+    for seg, for en tidslinje der noe er plassert på slump er verre enn
+    en tidslinje med et hull: hullet ser man."""
     hendelser, uten_dato = [], []
     for dok in (sak or {}).get("dokumenter") or []:
         type_ = _sakstype_av(dok)
         term = ((dok.get("type") or {}).get("term")
                 if isinstance(dok.get("type"), dict) else None)
+        dato, kilde = hendelsesdato(dok)
         post = {
-            "dato": dok.get("dato"),
+            "dato": dato,
+            "dato_kilde": kilde,
             "hendelse": term or type_ or "Ukjent dokumenttype",
             "dokument": dok.get("tittel"),
             "filnavn": dok.get("filnavn"),
             "sider": dok.get("sider") or [],
         }
-        (hendelser if dok.get("dato") else uten_dato).append(post)
+        (hendelser if dato else uten_dato).append(post)
 
     # Sortert på dato, så på merkelapp: to hendelser samme dag skal ha en
     # fast rekkefølge, ikke en tilfeldig (R6).

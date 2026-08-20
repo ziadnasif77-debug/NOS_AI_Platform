@@ -2310,7 +2310,13 @@ _DOKUMENTTYPER = [
     ("faktura", r"faktura|forfallsdato|\bkid\b"),
     ("kvittering", r"kvittering|betaling mottatt|kj[øo]pskvittering"),
     ("vedtak", r"\bvedtak"),
-    ("soknad", r"s[øo]knad"),
+    # «oe» må med, ikke bare ø og o. R244: en søknad skrevet «Soeknad»
+    # fikk INGEN type — og `dokumentruting.SPORSMAALSORD` har hatt
+    # `s(?:ø|oe|o)knad` hele tiden, så de to modulene var uenige om
+    # nøyaktig samme ord (R111). Verre enn en manglende etikett: uten
+    # typen kan `motsigelser`-sjekken «vedtak før søknad» aldri slå ut,
+    # fordi den ene halvdelen av paret ikke finnes.
+    ("soknad", r"s(?:ø|oe|o)knad"),
     # sentrale NAV-dokumenttyper: uten dem ble en legeerklæring og en
     # inntektsmelding stående som «vedtak» fordi ordet vedtak fantes et
     # sted i teksten
