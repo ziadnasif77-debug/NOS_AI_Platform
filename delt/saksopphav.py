@@ -129,6 +129,28 @@ def _relasjonsopphav(relasjon: dict) -> dict:
     return _post("sjekksum", "hoy", relasjon.get("forklaring"))
 
 
+def _partopphav(sammendrag: dict) -> dict:
+    """Hvem saken gjelder. Fødselsnummeret er mod11-validert og hentet
+    under en eieretikett — altså matematikk, ikke en slutning. Er det
+    flere eller ingen, er metoden `ingen`: da er svaret et ærlig hull,
+    ikke et valg mellom kandidater."""
+    part = sammendrag.get("part") or {}
+    if part.get("fnr"):
+        return _post("sjekksum", "hoy", part.get("grunnlag"))
+    return _post("ingen", "ingen", part.get("grunnlag"))
+
+
+def _statusopphav(sammendrag: dict) -> dict:
+    """Status er en REGEL anvendt på hvilke dokumenttyper som finnes og
+    i hvilken rekkefølge — ikke et felt noen har skrevet i et dokument.
+    Merkes derfor `regel`, aldri `etikett`. «Ukjent» er `ingen`: da bar
+    ikke dokumentene grunnlaget."""
+    status = sammendrag.get("status") or {}
+    if status.get("kode") in (None, "ukjent"):
+        return _post("ingen", "ingen", status.get("begrunnelse"))
+    return _post("regel", "middels", status.get("begrunnelse"))
+
+
 def bygg_saksopphav(saker: list, relasjoner: list = None,
                     nivaa: str = "viktige") -> dict:
     """JSON Pointer → opphav, for påstandene i saksvaret.
@@ -149,6 +171,11 @@ def bygg_saksopphav(saker: list, relasjoner: list = None,
         if not isinstance(sak, dict):
             continue
         kart[f"/saker/{i}/nokkel"] = _nokkelopphav(sak)
+        sammendrag = sak.get("sammendrag") or {}
+        if sammendrag:
+            kart[f"/saker/{i}/sammendrag/part"] = _partopphav(sammendrag)
+            kart[f"/saker/{i}/sammendrag/status"] = _statusopphav(
+                sammendrag)
         for j, funn in enumerate((sak.get("motsigelser") or {}).get("funn")
                                  or []):
             kart[f"/saker/{i}/motsigelser/funn/{j}"] = \

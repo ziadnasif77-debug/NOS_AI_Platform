@@ -4446,9 +4446,74 @@ def _skjemaer() -> dict:
                            description="Satt når saken bare består av ett "
                                        "dokument uten bevisbar nøkkel"),
                 "antall_dokumenter": {"type": "integer"},
+                "sammendrag": ref("Sakssammendrag"),
                 "dokumenter": {"type": "array", "items": ref("Saksdokument")},
                 "tidslinje": ref("Tidslinje"),
                 "motsigelser": ref("Motsigelser"),
+            },
+        },
+        "Sakssammendrag": {
+            "type": "object",
+            "description": "Saken fortalt som ÉN sak (R249) — hvem den "
+                           "gjelder, hva den handler om, hva som skjedde, "
+                           "hva som manglet og hva som ble bestemt til "
+                           "slutt. Alt er utledet av felt som allerede er "
+                           "bevist; ingen språkmodell er involvert.",
+            "properties": {
+                "part": {
+                    "type": "object",
+                    "description": "Hvem saken gjelder. `fnr` er null når "
+                                   "ingen dokumenter bærer et "
+                                   "mod11-validert nummer under en "
+                                   "eieretikett — ELLER når de bærer "
+                                   "flere: å plukke ett ville vært å "
+                                   "gjette. `grunnlag` sier hvilket.",
+                    "properties": {"fnr": s(nullable=True),
+                                   "antall_personer": {"type": "integer"},
+                                   "grunnlag": s()}},
+                "ytelse": {"type": "object",
+                           "description": "{kode, term} — bare når "
+                                          "dokumentene er ENIGE. To ulike "
+                                          "ytelser betyr som regel at "
+                                          "mappa er blandet."},
+                "antall_dokumenter": {"type": "integer"},
+                "forlop": {
+                    "type": "array", "items": ref("Hendelse"),
+                    "description": "Sakens gang — bare typene som flytter "
+                                   "den (søknad, krav, purring, vedtak, "
+                                   "klage, klagevedtak). Notater og brev "
+                                   "står i tidslinjen: et sammendrag som "
+                                   "gjentar alt er ikke et sammendrag."},
+                "klaget": b(),
+                "siste_avgjorelse": {
+                    "type": "object", "nullable": True,
+                    "description": "Avgjørelsen som GJELDER — ikke det "
+                                   "nyeste dokumentet. Et journalnotat "
+                                   "skrevet etter klagevedtaket er nyere, "
+                                   "men avgjør ingenting, og "
+                                   "klageinstansens vedtak går foran "
+                                   "førsteinstansens uansett dato."},
+                "status": {
+                    "type": "object",
+                    "description": "Hvor saken står — en SLUTNING av "
+                                   "hvilke dokumenttyper som finnes og i "
+                                   "hvilken rekkefølge, ikke et felt noen "
+                                   "har skrevet. Opphavskartet merker den "
+                                   "«regel». «ukjent» når grunnlaget "
+                                   "mangler.",
+                    "properties": {
+                        "kode": s(enum=["avgjort_etter_klage", "avgjort",
+                                        "venter_paa_dokumentasjon",
+                                        "under_behandling", "ukjent"]),
+                        "term": s(), "begrunnelse": s()}},
+                "mangler": {
+                    "type": "array",
+                    "description": "Hva dokumentene manglet, samlet fra "
+                                   "de MÅLTE forventningene (R247). Et "
+                                   "felt som ikke er målt, kan ikke mangle.",
+                    "items": {"type": "object"}},
+                "antall_motsigelser": {"type": "integer"},
+                "forklaring": s(),
             },
         },
         "Saksdokument": {
@@ -6514,6 +6579,14 @@ class Handler(BaseHTTPRequestHandler):
             # beregningstabell skal aldri kunne bli til et funn.
             **{f: (profil.get("okonomi") or {}).get(f)
                for f in _motsigelser_belopsfelt()},
+            # R249: ytelsen og hva dokumentet MANGLER. Manglene er R247
+            # regnet ut her, per dokument, så sakssammendraget kan svare
+            # på «hva var ufullstendig» uten å lese dokumentet på nytt.
+            "ytelse": (profil.get("ytelse") or {}).get("navn"),
+            "mangler": (typeforventninger.forventningsrapport(
+                ((dokument.get("type") or {}).get("kode")
+                 if isinstance(dokument.get("type"), dict) else None),
+                ktx.struktur) or {}).get("mangler") or None,
             # Brukes til gruppering og motsigelser, men speiles IKKE ut
             # per dokument i svaret — se `_uten_fnr`.
             "fnr": (profil.get("part") or {}).get("fnr"),
@@ -6685,20 +6758,26 @@ class Handler(BaseHTTPRequestHandler):
         from delt import motsigelser as _motsigelser
         from delt import sak as _sak
         from delt import saksopphav as _saksopphav
+        from delt import sakssammendrag as _sammendrag
 
         dokumenter = mappe.get("dokumenter") or []
         saker = _sak.grupper_i_saker(dokumenter)
         ut = []
         for enkeltsak in saker:
+            funn = _motsigelser.finn_motsigelser(enkeltsak)
             ut.append({
                 "nokkel": enkeltsak["nokkel"],
                 "grunnlag": enkeltsak["grunnlag"],
                 "grunn": enkeltsak["grunn"],
                 "antall_dokumenter": len(enkeltsak["dokumenter"]),
+                # R249: saken fortalt som ÉN sak, før dokumentlista.
+                # Rekkefølgen er svaret på «hva skjedde her?» — den som
+                # bare vil vite det, skal ikke måtte lese tolv poster.
+                "sammendrag": _sammendrag.bygg_sammendrag(enkeltsak, funn),
                 "dokumenter": [self._uten_fnr(d)
                                for d in enkeltsak["dokumenter"]],
                 "tidslinje": _sak.tidslinje(enkeltsak),
-                "motsigelser": _motsigelser.finn_motsigelser(enkeltsak),
+                "motsigelser": funn,
             })
         # Regnes ÉN gang: både svaret og opphavskartet bygger på den, og
         # to utregninger av samme liste er to lister som kan bli uenige.
