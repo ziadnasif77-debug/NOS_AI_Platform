@@ -231,7 +231,63 @@ def test_ruten_er_kjent_og_har_et_feltsett():
     """Feltsettet er kontrakten: et felt som ikke står her, blir avvist
     som ukjent i stedet for å forsvinne i stillhet."""
     assert "/sak" in api._FELTSETT_PER_RUTE
-    assert api._FELTSETT_PER_RUTE["/sak"] == {"jobb_id", "sak_id"}
+    assert api._FELTSETT_PER_RUTE["/sak"] == {"jobb_id", "sak_id", "opphav"}
+
+
+# ------------------------------------------------------------------ #
+#  R246: opphavskartet på sak-nivå                                    #
+# ------------------------------------------------------------------ #
+
+def test_svaret_har_et_opphavskart():
+    svar = _svar([("1.pdf", _pdf(SOKNAD)), ("2.pdf", _pdf(VEDTAK))])["kropp"]
+    assert "/saker/0/nokkel" in svar["opphav"]
+    assert svar["opphav"]["/saker/0/nokkel"]["metode"] == "etikett"
+
+
+def test_opphav_alle_tar_med_tidslinjen():
+    svar = _svar([("1.pdf", _pdf(SOKNAD)), ("2.pdf", _pdf(VEDTAK))],
+                 [("opphav", "alle")])["kropp"]
+    assert [p for p in svar["opphav"] if "/tidslinje/hendelser/" in p]
+
+
+def test_opphav_ingen_gir_tomt_kart():
+    svar = _svar([("1.pdf", _pdf(SOKNAD))], [("opphav", "ingen")])["kropp"]
+    assert svar["opphav"] == {}
+
+
+def test_ukjent_opphavsnivaa_avvises_i_stedet_for_aa_ignoreres():
+    """Et kjent felt med en ugyldig verdi skal si fra — å behandle det
+    som «viktige» ville vært samme stille fella resten av API-et vokter
+    mot."""
+    fanget = _svar([("1.pdf", _pdf(SOKNAD))], [("opphav", "kanskje")])
+    assert fanget["kode"] == 400
+    assert "opphav" in fanget["kropp"]["feil"]
+
+
+def test_opphavet_bruker_samme_ordforraad_som_dokumentnivaaet():
+    from delt.opphav import KONFIDENSNIVAA, METODER
+    svar = _svar([("1.pdf", _pdf(SOKNAD)), ("2.pdf", _pdf(VEDTAK))],
+                 [("opphav", "alle")])["kropp"]
+    for post in svar["opphav"].values():
+        assert post["metode"] in METODER
+        assert post["konfidens"] in KONFIDENSNIVAA
+
+
+def test_get_respekterer_opphav_i_sporrestrengen():
+    forste = _svar([("1.pdf", _pdf(SOKNAD))])["kropp"]
+    h, fanget = _handler()
+    h.path = f"/sak/{forste['sak_id']}?opphav=alle"
+    h._hent_sak(forste["sak_id"])
+    assert fanget["kode"] == 200
+    assert fanget["kropp"]["opphav"]
+
+
+def test_get_avviser_ugyldig_opphav_i_sporrestrengen():
+    forste = _svar([("1.pdf", _pdf(SOKNAD))])["kropp"]
+    h, fanget = _handler()
+    h.path = f"/sak/{forste['sak_id']}?opphav=tull"
+    h._hent_sak(forste["sak_id"])
+    assert fanget["kode"] == 400
 
 
 # ------------------------------------------------------------------ #

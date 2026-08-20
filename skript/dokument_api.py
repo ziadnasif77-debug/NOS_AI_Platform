@@ -4393,6 +4393,19 @@ def _skjemaer() -> dict:
                 "antall_dokumenter": {"type": "integer"},
                 "antall_saker": {"type": "integer"},
                 "saker": {"type": "array", "items": ref("Sak")},
+                "opphav": {
+                    "type": "object",
+                    "description": "JSON Pointer → {metode, konfidens, "
+                                   "begrunnelse, dokumenter, side} for "
+                                   "påstandene i svaret. Pekerne følger "
+                                   "svaret med samme indekser: "
+                                   "«/saker/0/nokkel» er nøkkelen til "
+                                   "første sak. Samme metode- og "
+                                   "konfidensordforråd som opphavskartet "
+                                   "på /dokument — «dokumenter» er "
+                                   "sak-nivåets svar på «side», for et "
+                                   "sidetall er meningsløst når saken "
+                                   "består av tolv filer."},
                 "relasjoner": {
                     "type": "array", "items": ref("Personrelasjon"),
                     "description": "Saker som gjelder samme person. De er "
@@ -5138,7 +5151,16 @@ def _openapi() -> dict:
                             "description": "Legg dokumentene til i en mappe som "
                                            "alt finnes, i stedet for å lage en "
                                            "ny. Utelates den, opprettes en ny "
-                                           "mappe og id-en står i svaret."}}}}}},
+                                           "mappe og id-en står i svaret."},
+                        "opphav": {
+                            "type": "string",
+                            "enum": list(NIVAAER),
+                            "description": "Hvor mye av opphavskartet du vil "
+                                           "ha. Samme felt og samme ordforråd "
+                                           "som på /dokument: «viktige» "
+                                           "(standard) gir nøkkelen og "
+                                           "motsigelsene, «alle» også hver "
+                                           "hendelse og relasjon."}}}}}},
                 "responses": {
                     "200": {"description": "Sakene, med tidslinje og motsigelser",
                             "content": {"application/json": {"schema": {
@@ -5164,9 +5186,12 @@ def _openapi() -> dict:
                     "jobblageret for de som brukte POST /jobb.\n\n"
                     "Mappa ryddes etter samme oppbevaringsfrist som jobber "
                     "(`JOBB_OPPBEVARING_DAGER`, standard 30 dager).",
-                "parameters": [{"name": "sak_id", "in": "path",
-                                "required": True,
-                                "schema": {"type": "string"}}],
+                "parameters": [
+                    {"name": "sak_id", "in": "path", "required": True,
+                     "schema": {"type": "string"}},
+                    {"name": "opphav", "in": "query", "required": False,
+                     "schema": {"type": "string", "enum": list(NIVAAER)},
+                     "description": "Hvor mye av opphavskartet du vil ha"}],
                 "responses": {
                     "200": {"description": "Saksmappa",
                             "content": {"application/json": {"schema": {
@@ -6505,6 +6530,17 @@ class Handler(BaseHTTPRequestHandler):
         # ellers setter det.
         self._kappet_advarsel = None
 
+        # Samme felt og samme ordforråd som /dokument (R246). En klient
+        # som kan «opphav=alle» der, skal ikke måtte lære et nytt ord her.
+        opphavsnivaa = ((tekstfelter or {}).get("opphav", "").strip().lower()
+                        or "viktige")
+        if opphavsnivaa not in NIVAAER:
+            return self._svar(400, {"ok": False, "feil": (
+                f"Ukjent 'opphav': {opphavsnivaa!r}. Bruk "
+                + ", ".join(f"'{n}'" for n in NIVAAER) + "."),
+                "felter_feil": [{"pointer": "/opphav",
+                                 "message": "Bruk " + "/".join(NIVAAER)}]})
+
         dokumenter, uleste = [], []
 
         # --- filene ---------------------------------------------------- #
@@ -6610,7 +6646,8 @@ class Handler(BaseHTTPRequestHandler):
 
         lagt = sakslager.legg_til(mappe, dokumenter)
         sakslager.lagre(mappe)
-        return self._svar(200, self._sakssvar(mappe, uleste=uleste, **lagt))
+        return self._svar(200, self._sakssvar(
+            mappe, uleste=uleste, opphavsnivaa=opphavsnivaa, **lagt))
 
     def _eier_mappa(self, mappe: dict) -> bool:
         """Er det DENNE klienten som bygger saksmappa? (R153)
@@ -6625,7 +6662,7 @@ class Handler(BaseHTTPRequestHandler):
         return eier == getattr(self, "_klient_id", None)
 
     def _sakssvar(self, mappe: dict, uleste=None, lagt_til=None,
-                  duplikater=None) -> dict:
+                  duplikater=None, opphavsnivaa="viktige") -> dict:
         """Mappa slik den ser ut NÅ — gruppert, tidsordnet og sjekket.
 
         Grupperingen REGNES her, den lagres ikke. Lagret gruppering ville
@@ -6633,6 +6670,7 @@ class Handler(BaseHTTPRequestHandler):
         ikke nådd de mappene som trengte den mest — de gamle."""
         from delt import motsigelser as _motsigelser
         from delt import sak as _sak
+        from delt import saksopphav as _saksopphav
 
         dokumenter = mappe.get("dokumenter") or []
         saker = _sak.grupper_i_saker(dokumenter)
@@ -6648,6 +6686,9 @@ class Handler(BaseHTTPRequestHandler):
                 "tidslinje": _sak.tidslinje(enkeltsak),
                 "motsigelser": _motsigelser.finn_motsigelser(enkeltsak),
             })
+        # Regnes ÉN gang: både svaret og opphavskartet bygger på den, og
+        # to utregninger av samme liste er to lister som kan bli uenige.
+        relasjoner = _sak.personrelasjoner(saker)
         svar = {
             "ok": True,
             "sak_id": mappe.get("sak_id"),
@@ -6657,7 +6698,13 @@ class Handler(BaseHTTPRequestHandler):
             "antall_dokumenter": len(dokumenter),
             "antall_saker": len(ut),
             "saker": ut,
-            "relasjoner": _sak.personrelasjoner(saker),
+            "relasjoner": relasjoner,
+            # R246: hva hver påstand i svaret bygger på. Pekerne følger
+            # svaret over, med samme indekser — bevis, tolkning og
+            # konklusjon holdt fra hverandre i stedet for blandet i en
+            # fritekst klienten må lese på norsk.
+            "opphav": _saksopphav.bygg_saksopphav(ut, relasjoner,
+                                                  opphavsnivaa),
             "forklaring": (
                 "Dokumentene er gruppert på saksnummer og journalnummer — "
                 "det som beviser samme SAK. Fødselsnummer beviser samme "
@@ -6692,7 +6739,19 @@ class Handler(BaseHTTPRequestHandler):
         if mappe is None:
             return self._svar(404, {"ok": False,
                                     "feil": f"Ukjent sak_id: {sak_id}"})
-        return self._svar(200, self._sakssvar(mappe))
+        # GET har ingen kropp å legge felter i; nivået kommer som
+        # spørrestreng. Ukjent verdi avvises her også — et felt som blir
+        # stille ignorert er nettopp fella resten av API-et vokter mot.
+        from urllib.parse import parse_qs, urlparse
+        nivaa = (parse_qs(urlparse(self.path).query).get("opphav", [""])[0]
+                 .strip().lower() or "viktige")
+        if nivaa not in NIVAAER:
+            return self._svar(400, {"ok": False, "feil": (
+                f"Ukjent 'opphav': {nivaa!r}. Bruk "
+                + ", ".join(f"'{n}'" for n in NIVAAER) + "."),
+                "felter_feil": [{"pointer": "/opphav",
+                                 "message": "Bruk " + "/".join(NIVAAER)}]})
+        return self._svar(200, self._sakssvar(mappe, opphavsnivaa=nivaa))
 
     def _forhandssjekk(self, filnavn, slag, innhold, tekstfelter):
         """POST /forhandssjekk — billig kvalitetsdom FØR GPU-en brukes.
@@ -9979,7 +10038,7 @@ _KJENTE_FELT_SPOR = {"sporsmal", "jobb_id", "korriger", "maks_sider",
                      "strekkoder"}
 _KJENTE_FELT_JOBB = {"maks_sider", "sporsmal"}
 _KJENTE_FELT_INNSYN = {"maks_sider"}
-_KJENTE_FELT_SAK = {"jobb_id", "sak_id"}
+_KJENTE_FELT_SAK = {"jobb_id", "sak_id", "opphav"}
 
 # Hvilket feltsett hver POST-rute kjenner. Fire ruter hadde vakten fra
 # før; tre hadde den ikke, og målt var det NETTOPP der den manglet mest:
