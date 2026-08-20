@@ -29,6 +29,7 @@ Start:
 Enhver HTTP-klient: POST http://localhost:8600/dokument med filen som
 multipart-felt «fil». Se GET /hjelp for alle endepunkter.
 """
+import contextlib
 import copy
 import gzip
 import hashlib
@@ -1140,6 +1141,18 @@ def doem_forhandssjekk(sider: list) -> tuple:
 
 def ocr_pdf_bytes(data: bytes, maks_sider: int = None,
                   bare_sider: set = None) -> dict:
+    """Som `_ocr_pdf_bytes_intern`, men rammet inn som ETT dokument.
+
+    R239: rammen er stedet OCR-motoren kan revurderes — og det eneste
+    stedet det er trygt. Inne i rammen står motoren fast, så side 1 og
+    side 50 av samme bunke leses garantert av samme modell (R6)."""
+    from delt.region_ocr import dokumentlesing
+    with dokumentlesing():
+        return _ocr_pdf_bytes_intern(data, maks_sider, bare_sider)
+
+
+def _ocr_pdf_bytes_intern(data: bytes, maks_sider: int = None,
+                          bare_sider: set = None) -> dict:
     """Renderer PDF-sider til bilder (200 dpi) og OCR-er dem med
     regionbasert modellruting (delt/region_ocr): EasyOCR leser alt,
     usikre regioner leses i tillegg av norhand (norsk håndskrift),
@@ -3210,6 +3223,10 @@ def _jobb_arbeider() -> None:
                 except Exception:
                     pass
             continue
+        # Rammen om ETT dokument (R239). Opprettes utenfor try-en, så
+        # `finally` alltid har noe å lukke — også når jobben feiler før
+        # rammen rakk å bli åpnet.
+        dokramme = contextlib.ExitStack()
         try:
             # Importene ligger INNE i jobb-try-en med vilje: 2026-07-24
             # døde tråden stille ved oppstart fordi et import feilet
@@ -3233,6 +3250,15 @@ def _jobb_arbeider() -> None:
             # heter «sender» i den kanoniske livssyklusen: jobben er
             # hentet fra køen, og det avgjøres HVORDAN den skal leses.
             _jobb_status(jobb, "sender")
+            # R239: rammen åpnes FØR policyen fryses. Rekkefølgen er hele
+            # poenget — inne i rammen kan motoren revurderes én gang, og
+            # så står den fast til siste side er lest. Motsatt rekkefølge
+            # ville frosset en policy som rammen straks kunne endre.
+            try:
+                from delt.region_ocr import dokumentlesing
+                dokramme.enter_context(dokumentlesing())
+            except Exception:                                   # noqa: BLE001
+                pass
             try:
                 from delt.region_ocr import los_policy
                 jobb["ocr_policy"] = los_policy()
@@ -3453,6 +3479,12 @@ def _jobb_arbeider() -> None:
             except Exception:
                 pass
         finally:
+            # Lukk dokumentrammen FØR opprydningen: først da er motoren
+            # fri til å revurderes for neste jobb i køen.
+            try:
+                dokramme.close()
+            except Exception:
+                pass
             # Rydd etter hver jobb, ikke bare ved oppstart: en server som
             # står i månedsvis ville ellers samlet opp dokumenttekst helt
             # til neste omstart.
@@ -5261,6 +5293,11 @@ class Handler(BaseHTTPRequestHandler):
         tillatte = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
         return origin if origin in tillatte else None
 
+    # Klienten la på — ikke en serverfeil. Windows gir ConnectionAborted,
+    # Linux ConnectionReset, og en halvskrevet kropp gir BrokenPipe.
+    _KLIENTEN_LA_PAA = (ConnectionAbortedError, ConnectionResetError,
+                        BrokenPipeError)
+
     def _serverfeil(self, exc):
         """En uventet feil skal LOGGES i sin helhet på serveren, men bare
         gi klienten en generisk melding. Den fulle exceptionen (type,
@@ -5268,10 +5305,31 @@ class Handler(BaseHTTPRequestHandler):
         biblioteksdetaljer til enhver som treffer et endepunkt."""
         import traceback
         korr = self._korrelasjonsid()
+        # R240: at KLIENTEN lukket forbindelsen er ikke en feil hos oss.
+        # Målt 2026-08-20: et skannet dokument ble lest ferdig, sendt til
+        # Label Studio og var i ferd med å bli skrevet ut som 200 da
+        # UiPath ga opp å vente. Loggen viste «!!! Uventet serverfeil»
+        # med full stakksporing — for en forespørsel som LYKTES.
+        #
+        # Det er ikke bare støy. Vakthunden finnes fordi vi ikke klarte å
+        # se hvorfor tjenesten falt; da må en ekte krasj ikke drukne i
+        # falske. Og et 500-svar er umulig å levere uansett: socketen
+        # ligger nede, så `_svar` ville bare kastet en gang til.
+        if isinstance(exc, self._KLIENTEN_LA_PAA):
+            print(f"  [klienten lukket forbindelsen] {self.command} "
+                  f"{self.path} — arbeidet ble gjort, men svaret nådde "
+                  f"ikke fram (korrelasjon={korr}). Sjekk klientens "
+                  f"tidsavbrudd; store skann tar minutter.", file=sys.stderr)
+            return None
         # Skriv korrelasjons-ID-en SAMMEN med stakksporet, så en bruker som
         # oppgir uuid-en fører deg rett til akkurat denne feilen i loggen.
         print(f"!!! Uventet serverfeil (korrelasjon={korr}):", file=sys.stderr)
-        traceback.print_exc()
+        # `exc` skrives ut, ikke `print_exc()`. Den gamle formen leste
+        # den AKTIVE exceptionen fra omgivelsene og skrev «NoneType:
+        # None» hvis det ikke sto noen der — altså full taushet om feilen
+        # akkurat i det tilfellet loggen er til for. Nå er det argumentet
+        # vi faktisk fikk som havner i loggen, uansett hvem som kaller.
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
         try:
             return self._svar(500, {
                 "ok": False,

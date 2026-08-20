@@ -17,6 +17,7 @@ Modellene lastes én gang (lat), GPU med CPU-fallback ved for lite ledig
 minne (R51 — se MINSTE_LEDIG_GPU under).
 Trådsikker: én lås rundt motorkallene (GPU-en tar én jobb om gangen).
 """
+import contextlib
 import os
 import threading
 import time
@@ -327,7 +328,27 @@ OCR_MOTOR = os.environ.get("OCR_MOTOR", "auto").strip().lower()
 # mange linjer. 32 målt som god balanse mellom fart og minnebruk.
 OCR_BATCH = int(os.environ.get("OCR_BATCH", "32"))
 _rapid = {"motor": None}
-_valgt = {"motor": None}      # hva auto faktisk landet på
+_valgt = {"motor": None, "tid": 0.0}   # hva auto landet på, og NÅR
+
+# Hvor lenge et auto-valg står før det kan revurderes (sekunder).
+#
+# R239: valget ble tatt ÉN gang og sto så ut prosessens levetid. Det er
+# feil på en server som lever i dagevis: starter den mens kortet er
+# opptatt — og det ER det ved oppstart, for Borealis lastes i bakgrunnen
+# samtidig — låses OCR-en til CPU for godt, også lenge etter at VRAM ble
+# ledig igjen. Målt på denne maskinen: serveren startet 07:41 og sto på
+# «rapid» timevis etterpå, mens EasyOCR på GPU leste de samme sidene
+# 2,3× raskere (1,27 s/side mot 2,87 s/side).
+#
+# Karantenen er ikke kosmetisk: den hindrer at valget vipper fram og
+# tilbake mens VRAM svinger rundt terskelen, og den gjør at to kall like
+# etter hverandre alltid gir samme policy (R6).
+MOTOR_REVURDER_S = float(os.environ.get("OCR_MOTOR_REVURDER_S", "120"))
+
+# Dokumenter som leses akkurat nå. Motoren får bare byttes når det ikke
+# står ANDRE lesere i køen enn den som spør — se `dokumentlesing`.
+_aapne_dokumenter = [0]
+_dok_las = threading.Lock()
 
 
 # Hvor mange CPU-tråder RapidOCR får bruke. -1 (standard) betyr alle
@@ -363,28 +384,132 @@ def _hent_rapid():
 
 
 def _velg_motor_for_maskinen() -> str:
-    """Avgjør motor én gang, ut fra ledig VRAM her og nå."""
+    """Motoren som gjelder NÅ — stabil mellom dokumentskiller.
+
+    Leses per side, og svaret skal derfor ikke kunne endre seg mens et
+    dokument er under lesing: side 1 og side 50 av samme bunke MÅ leses
+    av samme modell (R6). Nyvurderingen bor i `revurder_motor`, som bare
+    kalles ved dokumentskiller."""
     if _valgt["motor"] is not None:
         return _valgt["motor"]
     if OCR_MOTOR in ("easy", "rapid"):
-        _valgt["motor"] = OCR_MOTOR
+        _sett_motor(OCR_MOTOR)
         return OCR_MOTOR
     ledig = ledig_gpu_mb()
     if ledig >= MINSTE_LEDIG_GPU_MB:
-        _valgt["motor"] = "easy"          # GPU har plass → beste kvalitet
+        _sett_motor("easy")               # GPU har plass → beste kvalitet
         print(f"  [OCR] {ledig:.0f} MiB ledig VRAM (krav {MINSTE_LEDIG_GPU_MB})"
               " — EasyOCR på GPU.")
     else:
         try:                              # fullt kort → rask CPU-motor
             _hent_rapid()
-            _valgt["motor"] = "rapid"
+            _sett_motor("rapid")
             print(f"  [OCR] Bare {ledig:.0f} MiB ledig VRAM — bruker "
                   "RapidOCR på CPU (~1 s/side) i stedet for EasyOCR, og "
-                  "lar språkmodellen beholde GPU-en.")
+                  "lar språkmodellen beholde GPU-en. Vurderes på nytt ved "
+                  f"neste dokument, tidligst om {MOTOR_REVURDER_S:.0f} s.")
         except Exception as exc:
-            _valgt["motor"] = "easy"      # RapidOCR mangler → EasyOCR/CPU
+            _sett_motor("easy")           # RapidOCR mangler → EasyOCR/CPU
             print(f"  [OCR] RapidOCR utilgjengelig ({exc}) — EasyOCR på CPU.")
     return _valgt["motor"]
+
+
+def _sett_motor(motor: str) -> None:
+    """Ett sted som skriver valget — så tidsstempelet aldri glemmes."""
+    _valgt["motor"] = motor
+    _valgt["tid"] = time.monotonic()
+
+
+def revurder_motor() -> str:
+    """Gi auto-valget en ny sjanse. Kalles ved DOKUMENTSKILLER, aldri
+    per side.
+
+    R239: uten dette sto CPU-fallbacken ut prosessens levetid. En server
+    som tilfeldigvis startet mens kortet var opptatt leste alt på CPU i
+    dagevis, selv om VRAM ble ledig minutter senere.
+
+    Tre begrensninger, hver med sin grunn:
+
+      * BARE OPP (rapid → easy). Nedgraderingen ville krevd at EasyOCRs
+        vekter ble kastet ut av kortet midt i drift; koden laster dem
+        aldri ut, så en «nedgradering» ville bare gitt en ubrukt modell
+        på et kort vi nettopp erklærte for fullt.
+      * BARE NÅR INGEN LESER. `dokumentlesing` teller åpne dokumenter.
+        Byttes motoren mens en bunke leses, blir side 1 og side 50 lest
+        av ulike modeller — nøyaktig det R6 forbyr. Og en jobb som frøs
+        «rapid» kan lese sider PARALLELT; EasyOCR er ikke trådsikker, så
+        et bytte under den jobben ville sluppet flere tråder inn i en
+        modell som ikke tåler det.
+      * BARE ETTER KARANTENE. `MOTOR_REVURDER_S` hindrer vipping når
+        ledig VRAM ligger og vaker rundt terskelen.
+
+    `_gpu_budsjett_ok` brukes framfor en rå sammenligning, fordi den også
+    trekker fra arbeidsbufferne EasyOCR trenger PER SIDE (R166). Å bare
+    se på vektene er det som felte tjenesten sist."""
+    if OCR_MOTOR in ("easy", "rapid"):
+        return _velg_motor_for_maskinen()   # tvunget — ikke vårt valg
+    with _LASTELAS:
+        if _valgt["motor"] != "rapid":
+            return _velg_motor_for_maskinen()
+        if time.monotonic() - _valgt["tid"] < MOTOR_REVURDER_S:
+            return "rapid"
+        with _dok_las:
+            # «> 1», ikke «> 0»: `dokumentlesing` har alt talt opp for
+            # dokumentet som spør. Med «> 0» blokkerte vakten nettopp det
+            # kallet den var satt til å slippe gjennom — og motoren ble
+            # aldri revurdert i det hele tatt. Vi teller ANDRE lesere.
+            if _aapne_dokumenter[0] > 1:
+                return "rapid"
+        if not _gpu_budsjett_ok(MINSTE_LEDIG_GPU_MB):
+            # Ikke plass ennå. Nullstill klokka, ellers ville hvert
+            # eneste dokument etter karantenen kostet en ny måling.
+            _valgt["tid"] = time.monotonic()
+            return "rapid"
+        try:
+            # Lastes HER, ikke på første side: da vet vi hvilken enhet
+            # den faktisk havnet på før policyen fryses, og en policy som
+            # sier «easy på gpu» er da målt og ikke antatt.
+            _hent_easyocr()
+        except Exception as exc:            # noqa: BLE001
+            _valgt["tid"] = time.monotonic()
+            print(f"  [OCR] Ville byttet til EasyOCR, men den lot seg ikke "
+                  f"laste ({exc}) — blir på RapidOCR/CPU.")
+            return "rapid"
+        if not _easyocr["gpu"]:
+            # Plassen forsvant mellom budsjettsjekken og lastingen. Et
+            # bytte nå ville vært et NEDGRADERING i forkledning: EasyOCR
+            # på CPU er målt 6–8 s/side mot RapidOCRs 1,1 s.
+            _valgt["tid"] = time.monotonic()
+            print("  [OCR] EasyOCR havnet på CPU likevel — blir på "
+                  "RapidOCR/CPU, som er ~6× raskere der.")
+            return "rapid"
+        _sett_motor("easy")
+        print(f"  [OCR] {ledig_gpu_mb():.0f} MiB ledig VRAM igjen (krav "
+              f"{MINSTE_LEDIG_GPU_MB}) — bytter fra RapidOCR/CPU til EasyOCR "
+              f"på {'GPU' if _easyocr['gpu'] else 'CPU'} for nye dokumenter. "
+              "Jobber som alt er i gang beholder sin frosne policy.")
+        return "easy"
+
+
+@contextlib.contextmanager
+def dokumentlesing():
+    """Rammer inn lesingen av ETT dokument.
+
+    To oppgaver: den ber om en nyvurdering av motoren når dokumentet er
+    det første i køen, og den holder motoren låst så lenge lesingen
+    varer. Uten rammen finnes det ikke noe «mellom dokumenter» å bytte
+    motor i — bare en strøm av sider der et bytte alltid ville truffet
+    midt i noe (R239)."""
+    with _dok_las:
+        forste = _aapne_dokumenter[0] == 0
+        _aapne_dokumenter[0] += 1
+    try:
+        if forste:
+            revurder_motor()
+        yield
+    finally:
+        with _dok_las:
+            _aapne_dokumenter[0] -= 1
 
 
 def los_policy() -> dict:
