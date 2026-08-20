@@ -2863,10 +2863,14 @@ def _klassifisersvar_til_kode(svar: str):
 
     Dette er garantien i klassifiser-operasjonen (R184): modellen kan
     bare VELGE fra listen i `_DOKUMENTTYPER`, aldri utvide den. Et
-    påfunn («purring», «rekommandert brev») ser ut som en dokumenttype,
+    påfunn («rekommandert brev», «hastesak») ser ut som en dokumenttype,
     men ingen klient kan forgrene på en kode som ikke finnes i
     kodeverket — så alt utenfor listen forkastes, og forkastingen
-    rapporteres (`modell_ugyldig`), den skjules ikke."""
+    rapporteres (`modell_ugyldig`), den skjules ikke.
+
+    Eksempelet her var «purring» til R241 gjorde den til en EKTE kode.
+    At en kommentar rekker å bli usann er billig; at den lærer bort feil
+    kodeverk er ikke."""
     raa = (svar or "").strip().strip(".,:;!«»\"'` ").lower()
     if not raa:
         return None

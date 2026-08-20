@@ -75,9 +75,16 @@ def test_epostmonsteret_er_ikke_kvadratisk():
 
 
 def test_hele_uttrekket_er_ikke_kvadratisk():
-    """Den som faktisk rammer en forespørsel."""
+    """Den som faktisk rammer en forespørsel.
+
+    `runder=3`, ikke 2, av grunnen modulen selv beskriver: to runder er
+    for tynt grunnlag når maskinen er travel. Den falt på 3,7× i en full
+    testkjøring, og etterprøvingen viste at det var støy — samme kode
+    målt sju ganger ga median 2,07, og alene gikk testen grønt 6 av 6.
+    Terskelen er URØRT; det er målingen som er styrket. En vakt som
+    roper tilfeldig blir slått av, ikke fikset (R180)."""
     faktor = _vekst(tu.strukturert_uttrekk, BINDESTREKER, 20000, 40000,
-                   runder=2)
+                    runder=3)
     assert faktor < 3.0, f"strukturert_uttrekk vokste {faktor:.1f}× ved dobling"
 
 

@@ -7,7 +7,16 @@
 #
 # Gyldige dokumenttyper: faktura, kvittering, vedtak, soknad,
 # legeerklaring, inntektsmelding, sykmelding, klage, egenerklaring,
-# meldekort, pensjonsbrev, attest, kontrakt, boardingkort, brev.
+# returslipp, kontoutskrift, meldekort, pensjonsbrev, attest, kontrakt,
+# boardingkort, brev — og saksbehandlingens egne (R241): klagevedtak,
+# journalnotat, telefonnotat, oppfolgingsnotat, internvurdering,
+# dokumentasjonskrav, purring, veiledningsbrev, arbeidsgiveropplysninger,
+# legeopplysninger, referat.
+#
+# De elleve siste har MED VILJE ingen standardforventninger. Vi har ikke
+# målt hva et journalnotat alltid inneholder, og en forventning uten
+# måling roper «mangler» på friske dokumenter. Vil du sette dem for din
+# egen arkivbunke, gjør det her — det er nettopp det fila er til for.
 #
 # Gyldige felter (lukket vokabular — bare det koden kan PÅVISE):
 # belop, dato, periode, fodselsnummer, kontonummer,

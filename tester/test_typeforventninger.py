@@ -114,12 +114,23 @@ def test_ingen_slaar_forventningene_av(egen_regelfil):
 
 
 def test_ukjente_felter_og_typer_hoppes_over(egen_regelfil):
+    # «purring» sto her som den ukjente typen til R241 gjorde den til en
+    # ekte dokumenttype. Eksempelet må være noe kodeverket IKKE kjenner
+    # — ellers tester linja det motsatte av navnet sitt.
     egen_regelfil.write_text(
         "faktura = belop, blodtype, dato\n"      # «blodtype» finnes ikke
-        "purring = belop\n",                      # typen finnes ikke
+        "hastesak = belop\n",                     # typen finnes ikke
         encoding="utf-8")
     assert tf.forventninger_for("faktura") == ("belop", "dato")
-    assert tf.forventninger_for("purring") is None
+    assert tf.forventninger_for("hastesak") is None
+
+
+def test_den_ukjente_typen_i_testen_er_faktisk_ukjent():
+    """Vakt mot at eksempelet over blir gyldig og testen stille slutter
+    å teste det den heter."""
+    from delt.tekstuttrekk import DOKUMENTTYPE_TERM
+    assert "hastesak" not in DOKUMENTTYPE_TERM
+    assert "blodtype" not in tf.FELTDETEKTORER
 
 
 def test_bare_ukjente_felter_gir_ingen_overstyring(egen_regelfil):

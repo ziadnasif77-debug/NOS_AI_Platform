@@ -2337,6 +2337,51 @@ _DOKUMENTTYPER = [
     ("attest", r"\battest"),
     ("kontrakt", r"kontrakt|l[æa]rekontrakt|avtale"),
     ("boardingkort", r"boardingkort|boarding"),
+    # ---------------------------------------------------------------- #
+    #  R241: saksbehandlingens egne dokumenter                          #
+    # ---------------------------------------------------------------- #
+    # Lista over kjente 17 typer beskrev dokumenter som kommer INN i en
+    # sak (søknad, legeerklæring, faktura). Den beskrev ikke sakens egen
+    # gang: notatene, purringene, kravene og klagevedtaket. Målt før
+    # utvidelsen — 12 av 12 realistiske saksdokumenter klassifisert
+    # feil, og tre av dem AKTIVT feil, ikke bare tomme:
+    #
+    #   «Telefonsamtalenotat … manglende meldekort»  → meldekort
+    #   «Klagevedtak … har behandlet klagen din»     → klage
+    #   «Vedtak i klagesak»                          → vedtak
+    #
+    # De to siste er den dyre: et klagevedtak er svaret PÅ en klage, og
+    # når begge heter «klage» kan ingen sammenligne førstevedtak mot
+    # klagevedtak — nettopp spørsmålet en saksmappe stilles.
+    #
+    # Mønstrene er trange med vilje. «notat», «vurdering» og «opplysninger»
+    # alene er for vanlige ord til å bære en klassifisering; det er
+    # sammensetningen som kunngjør dokumentets art. Plassert FØR «brev»
+    # og ETTER alle eldre typer: rekkefølgen avgjør bare uavgjort i
+    # brødtekst-tellingen, så eldre typer beholder sin forrang, mens en
+    # spesifikk ny type slår den generiske «brev»-fallbacken.
+    # Æ/Ø/Å skrives (?:ø|oe|o) og ikke [øo]: OCR-en gjengir jevnlig ø som
+    # «oe», og et mønster som bare tåler ø og o ville sett «Oppfoelgings-
+    # notat» som ukjent — samme felle som R-fiksen på RapidOCRs ordbok.
+    ("klagevedtak", r"klagevedtak|vedtak i klagesak|"
+                    r"klageavgj(?:ø|oe|o)relse"),
+    ("journalnotat", r"journalnotat|journalf(?:ø|oe|o)rt notat"),
+    ("telefonnotat", r"telefonsamtalenotat|telefonnotat|"
+                     r"notat fra telefonsamtale"),
+    ("oppfolgingsnotat", r"oppf(?:ø|oe|o)lgingsnotat|"
+                         r"oppf(?:ø|oe|o)lgingssamtale"),
+    ("internvurdering", r"intern vurdering|internvurdering|"
+                        r"faglig vurdering|saksvurdering"),
+    ("dokumentasjonskrav", r"dokumentasjonskrav|krav om dokumentasjon|"
+                           r"innhenting av dokumentasjon"),
+    ("purring", r"\bpurring|purrebrev|p(?:å|aa)minnelse om"),
+    ("veiledningsbrev", r"veiledningsbrev|orienteringsbrev"),
+    ("arbeidsgiveropplysninger", r"arbeidsgiveropplysninger|"
+                                 r"opplysninger fra arbeidsgiver"),
+    ("legeopplysninger", r"legeopplysninger|opplysninger fra lege|"
+                         r"legeuttalelse"),
+    ("referat", r"\breferat\b|m(?:ø|oe|o)tereferat|"
+                r"dialogm(?:ø|oe|o)tereferat"),
     ("brev", r"med vennlig hilsen|kj[æa]re"),
 ]
 
@@ -2364,6 +2409,18 @@ DOKUMENTTYPE_TERM = {
     "attest": "Attest",
     "kontrakt": "Kontrakt",
     "boardingkort": "Boardingkort",
+    # R241 — saksbehandlingens egne dokumenter
+    "klagevedtak": "Klagevedtak",
+    "journalnotat": "Journalnotat",
+    "telefonnotat": "Telefonnotat",
+    "oppfolgingsnotat": "Oppfølgingsnotat",
+    "internvurdering": "Intern vurdering",
+    "dokumentasjonskrav": "Dokumentasjonskrav",
+    "purring": "Purring",
+    "veiledningsbrev": "Veiledningsbrev",
+    "arbeidsgiveropplysninger": "Arbeidsgiveropplysninger",
+    "legeopplysninger": "Legeopplysninger",
+    "referat": "Referat",
     "brev": "Brev",
 }
 

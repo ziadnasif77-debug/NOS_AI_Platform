@@ -72,12 +72,26 @@ def test_ukjent_type_nevner_de_nye_typene():
     ("Dokumenttype: faktura", "faktura"),    # gjentatt ledetekst
     ("ukjent", "ukjent"),
     ("vet ikke", "ukjent"),
-    ("purring", None),                       # ikke i kodeverket
+    ("hastesak", None),                      # ikke i kodeverket
     ("kvitteringskopi", None),               # delstreng er IKKE treff
     ("", None),
 ])
 def test_modellsvar_valideres_mot_kodeverket(svar, kode):
     assert _klassifisersvar_til_kode(svar) == kode
+
+
+def test_eksemplene_paa_ugyldig_kode_er_faktisk_ugyldige():
+    """Vakt mot at testen slutter å teste det den heter.
+
+    «purring» sto her som eksempelet på en kode modellen ikke kan finne
+    på — helt til R241 gjorde purring til en EKTE dokumenttype. Da
+    påsto testen fortsatt noe sant, men om noe annet enn den trodde.
+    Blir «hastesak» en dag en gyldig type, feiler denne først."""
+    from delt.tekstuttrekk import DOKUMENTTYPE_TERM
+    for eksempel in ("hastesak", "kvitteringskopi"):
+        assert eksempel not in DOKUMENTTYPE_TERM, (
+            f"«{eksempel}» er blitt en gyldig kode — velg et nytt "
+            "eksempel i testen over")
 
 
 # ------------------------------------------------------------------ #

@@ -58,6 +58,24 @@ SPORSMAALSORD = {
     "soknad": r"\bs(?:ø|oe|o)knad(?:a|as|en|ens)?\b",
     "kvittering": r"\bkvittering(?:a|as|en|ens)?\b",
     "attest": r"\battest(?:a|en|ens)?\b",
+    # R241: saksbehandlingens egne dokumenter. «Hva står i
+    # klagevedtaket?» må kunne rutes til ETT dokument i mappa, ellers
+    # svares det fra førstevedtaket — som er et annet dokument med et
+    # annet svar. Merk at «klagevedtaket» IKKE trigger «vedtak» eller
+    # «klage»: begge krever ordgrense, og den finnes ikke inne i et
+    # sammensatt ord (se modulens innledning).
+    "klagevedtak": r"\bklagevedtak(?:et|ets)?\b",
+    "journalnotat": r"\bjournalnotat(?:et|ets)?\b",
+    "telefonnotat": r"\btelefon(?:samtale)?notat(?:et|ets)?\b",
+    "oppfolgingsnotat": r"\boppf(?:ø|oe|o)lgingsnotat(?:et|ets)?\b",
+    "internvurdering": r"\bintern(?:e)? vurdering(?:a|as|en|ens)?\b",
+    "dokumentasjonskrav": r"\bdokumentasjonskrav(?:et|ets)?\b",
+    "purring": r"\bpurring(?:a|as|en|ens)?\b",
+    "veiledningsbrev": r"\bveiledningsbrev(?:et|ets)?\b",
+    "arbeidsgiveropplysninger":
+        r"\barbeidsgiveropplysning(?:er|ene|enes)?\b",
+    "legeopplysninger": r"\blegeopplysning(?:er|ene|enes)?\b",
+    "referat": r"\breferat(?:et|ets)?\b",
 }
 
 
