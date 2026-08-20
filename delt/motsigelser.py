@@ -7,7 +7,7 @@ fylte ut med det uttrekket beviste, på tre felter. Ingenting sammenlignet
 dokument mot dokument — og det er der en saksmappe motsier seg selv.
 
 HVA SOM MELDES, OG HVA SOM IKKE GJØR DET
-Bare det kode kan BEVISE. To slag:
+Bare det kode kan BEVISE. Tre slag:
 
   1. TO PERSONER I SAMME SAK. Sakens dokumenter bærer mer enn ett
      mod11-gyldig fødselsnummer. Enten gjelder saken flere parter, eller
@@ -27,12 +27,24 @@ Tom liste betyr «vi fant ingen av de motsigelsene vi kan bevise», ikke
 faktisk ble kjørt — så et tomt funn aldri kan leses som en garanti det
 ikke er (R128).
 
-ULIKE BELØP MELDES IKKE
-Det var fristende: to dokumenter i samme sak med ulik dagsats ser ut som
-en motsigelse. Men et vedtak og et omgjøringsvedtak SKAL ha ulike beløp,
-og en tabell med månedsbeløp har mange. Uten et målt korpus å skille på,
-ville regelen ropt på friske saker. Den hører hjemme her når vi har
-tallene, ikke før.
+ULIKE BELØP — OG HVORFOR REGELEN ER SÅ SMAL (R248)
+Det var fristende å melde ethvert avvikende beløp. Men et vedtak og et
+omgjøringsvedtak SKAL ha ulike beløp: klagen førte fram, og satsen ble
+endret. En regel som bare ser «to ulike tall» ville ropt på den friskeste
+saken i arkivet.
+
+Skillet som holder, er om det ene kan gå FORAN det andre. Ulike datoer
+er en HISTORIE — først dette, så det. Samme dato er to påstander om
+samme øyeblikk, og da kan begge ikke stemme. Derfor sammenlignes bare
+dokumenter datert samme dag, bare innenfor samme MERKEDE felt, og aldri
+på tvers av felt: dagsats og månedsbeløp er ulike med matematisk
+nødvendighet.
+
+Regelen ble MÅLT før den ble kodet, mot `tester/korpus/belopsvarianter.json`
+— seks legitime saker skrevet for å falsifisere den (omgjøring, ny
+årssats, ulike felt, beregningstabell, samme verdi ulikt skrevet,
+manglende dato) og to ekte motsigelser. Kjøres med
+`skript/kjor_belopsmotsigelser.py`.
 """
 from delt.sak import PERSONNOKKEL, _sakstype_av, _verdi, hendelsesdato
 
@@ -51,8 +63,16 @@ UMULIG_REKKEFOLGE = (
      "eldre enn det"),
 )
 
+# De MERKEDE beløpsfeltene (R248). Bare disse sammenlignes — et beløp
+# uten etikett blir aldri en dagsats (R71), så tallene i en
+# beregningstabell kan aldri bli til et funn. Feltene er dessuten
+# ARTSSKILTE: dagsats og månedsbeløp er ulike med matematisk
+# nødvendighet, og sammenlignes derfor aldri med hverandre.
+BELOPSFELT = ("dagsats", "manedsbelop", "utbetalt_belop",
+              "tilbakebetalingsbelop")
+
 # Navnene på sjekkene som kjøres — rapporteres alltid, se modulinnledningen.
-SJEKKER = ("flere_personer", "umulig_rekkefolge")
+SJEKKER = ("flere_personer", "umulig_rekkefolge", "ulikt_belop")
 
 
 def _dokumentnavn(dok: dict) -> str:
@@ -130,6 +150,72 @@ def _umulig_rekkefolge(sak: dict) -> list:
     return funn
 
 
+def _tall(raa):
+    """Beløpet som tall, eller None.
+
+    «1 240,00», «1240,00» og «1240» er SAMME beløp skrevet på tre måter.
+    Sammenlignet som strenger ville de vært tre motsigelser — et funn
+    som bare handler om skrivemåte er støy, og støy slår av vakten."""
+    if raa is None:
+        return None
+    # Alt som ikke er siffer, komma, punktum eller minus kastes: det
+    # dekker mellomrom, hardt mellomrom, «kr» og «kroner» i én regel.
+    tett = "".join(c for c in str(raa)
+                   if c.isdigit() or c in ",.-").replace(",", ".")
+    try:
+        return round(float(tett), 2)
+    except ValueError:
+        return None
+
+
+def _ulikt_belop(sak: dict) -> list:
+    """Samme merkede beløp, samme dato, ulik verdi (R248).
+
+    HVORFOR SAMME DATO ER HELE REGELEN
+    Et vedtak og et omgjøringsvedtak SKAL ha ulike beløp — klagen førte
+    fram, og satsen ble endret. En regel som bare ser «to ulike tall»
+    ville ropt på den friskeste saken i arkivet. Det som skiller en
+    endring fra en motsigelse, er om det ene kan gå FORAN det andre:
+    ulike datoer er en historie, samme dato er to påstander om samme
+    øyeblikk — og da kan begge ikke stemme.
+
+    Derfor sammenlignes bare dokumenter datert samme dag, og bare
+    innenfor SAMME felt. Mangler datoen på det ene, sies ingenting:
+    da kan ingen vite hva som går foran, og en gjetning der ville vært
+    verre enn taushet."""
+    per_nokkel = {}
+    for dok in (sak.get("dokumenter") or []):
+        if not isinstance(dok, dict):
+            continue
+        dato, _kilde = hendelsesdato(dok)
+        if not dato:
+            continue
+        for felt in BELOPSFELT:
+            verdi = _tall(dok.get(felt))
+            if verdi is None:
+                continue
+            per_nokkel.setdefault((felt, dato), {}).setdefault(
+                verdi, []).append(_dokumentnavn(dok))
+
+    funn = []
+    for (felt, dato), verdier in sorted(per_nokkel.items()):
+        if len(verdier) < 2:
+            continue
+        dokumenter = sorted({n for navn in verdier.values() for n in navn})
+        funn.append({
+            "type": "ulikt_belop",
+            "alvor": ALVOR_HOY,
+            "forklaring": (
+                f"«{felt}» er oppgitt med {len(verdier)} ulike verdier i "
+                f"dokumenter datert {dato}. Dokumenter fra samme dag kan "
+                "ikke gå foran hverandre, så begge kan ikke stemme — "
+                "enten er mappa blandet, eller så er ett av dokumentene "
+                "feil."),
+            "dokumenter": dokumenter,
+        })
+    return funn
+
+
 def finn_motsigelser(sak: dict) -> dict:
     """{funn, sjekket} for ÉN sak.
 
@@ -137,6 +223,7 @@ def finn_motsigelser(sak: dict) -> dict:
     tomt resultat leses som «saken henger sammen», og det er en påstand
     denne modulen ikke kan gjøre (R128)."""
     sak = sak if isinstance(sak, dict) else {}
-    funn = _flere_personer(sak) + _umulig_rekkefolge(sak)
+    funn = (_flere_personer(sak) + _umulig_rekkefolge(sak)
+            + _ulikt_belop(sak))
     funn.sort(key=lambda f: (f["type"], f["forklaring"]))
     return {"funn": funn, "sjekket": list(SJEKKER)}

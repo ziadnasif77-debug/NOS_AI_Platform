@@ -876,6 +876,14 @@ def _cd_filnavn(hoder: bytes):
     return _cd_parameter(hoder, "filename")
 
 
+def _motsigelser_belopsfelt() -> tuple:
+    """Beløpsfeltene motsigelsessjekken sammenligner. Hentes DER, ikke
+    listet opp her: to lister ville før eller siden blitt uenige om
+    hvilke felt som gjelder (R111)."""
+    from delt.motsigelser import BELOPSFELT
+    return BELOPSFELT
+
+
 def _tidligste_behandlingsdato(datoer_detaljert) -> str:
     """Den eldste datoen med rollen «behandling» (mottatt/arkivert),
     eller None.
@@ -4508,7 +4516,8 @@ def _skjemaer() -> dict:
         "Motsigelse": {
             "type": "object",
             "properties": {
-                "type": s(enum=["flere_personer", "umulig_rekkefolge"]),
+                "type": s(enum=["flere_personer", "umulig_rekkefolge",
+                                "ulikt_belop"]),
                 "alvor": s(enum=["hoy"]),
                 "forklaring": s(description="Gjengir aldri fødselsnumrene "
                                             "selv — teksten havner i logg"),
@@ -6500,6 +6509,11 @@ class Handler(BaseHTTPRequestHandler):
             "antall_sider": (profil.get("fil") or {}).get("antall_sider"),
             "saksnummer": sak_del.get("saksnummer"),
             "journalnummer": sak_del.get("journalnummer"),
+            # R248: de MERKEDE beløpene. Bare disse — et beløp uten
+            # etikett blir aldri en dagsats (R71), og tallene i en
+            # beregningstabell skal aldri kunne bli til et funn.
+            **{f: (profil.get("okonomi") or {}).get(f)
+               for f in _motsigelser_belopsfelt()},
             # Brukes til gruppering og motsigelser, men speiles IKKE ut
             # per dokument i svaret — se `_uten_fnr`.
             "fnr": (profil.get("part") or {}).get("fnr"),

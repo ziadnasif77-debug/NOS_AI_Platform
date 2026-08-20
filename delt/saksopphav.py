@@ -114,9 +114,10 @@ def _motsigelsesopphav(funn: dict) -> dict:
     hviler på mod11.
 
     «Flere personer» er bevist av kontrollsifferet i fødselsnummeret;
-    derfor «sjekksum». «Umulig rekkefølge» er en logisk regel anvendt på
-    to datoer; derfor «regel». Å kalle dem det samme ville skjult at det
-    ene er matematikk og det andre er en slutning."""
+    derfor «sjekksum». «Umulig rekkefølge» og «ulikt beløp» er logiske
+    regler anvendt på datoer og merkede felt; derfor «regel». Å kalle
+    dem det samme ville skjult at det ene er matematikk og de andre er
+    slutninger."""
     slag = funn.get("type")
     metode = "sjekksum" if slag == "flere_personer" else "regel"
     return _post(metode, "hoy", funn.get("forklaring"),

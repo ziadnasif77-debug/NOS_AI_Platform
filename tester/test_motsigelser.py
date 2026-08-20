@@ -206,16 +206,115 @@ def test_sjekkene_rapporteres_ogsaa_naar_ingenting_ble_funnet():
     assert svar["sjekket"] == list(m.SJEKKER)
 
 
-def test_ulike_belop_meldes_ikke():
-    """Fristende, men feil: et vedtak og et omgjøringsvedtak SKAL ha
-    ulike beløp. Uten et målt korpus ville regelen ropt på friske saker."""
+# ------------------------------------------------------------------ #
+#  R248: ulike beløp — og alt regelen IKKE skal ta                    #
+# ------------------------------------------------------------------ #
+
+def test_omgjoering_er_ingen_motsigelse():
+    """Kjernen i R248. Et vedtak og et omgjøringsvedtak SKAL ha ulike
+    beløp — klagen førte fram. Ulike datoer er en HISTORIE, ikke to
+    påstander om samme øyeblikk. En regel som roper her, roper på den
+    friskeste saken i arkivet."""
     sak = en_sak(
         dok(filnavn="1.pdf", saksnummer="44", dato="2026-01-01",
             tittel="Vedtak", type=type_("vedtak"), dagsats="1200"),
         dok(filnavn="2.pdf", saksnummer="44", dato="2026-05-01",
-            tittel="Omgjøring", type=type_("vedtak"), dagsats="900"),
+            tittel="Klagevedtak", type=type_("klagevedtak"), dagsats="900"),
     )
     assert m.finn_motsigelser(sak)["funn"] == []
+
+
+def test_samme_dag_ulikt_belop_meldes():
+    """Samme dag kan ingen av dem gå foran den andre, så begge kan ikke
+    stemme."""
+    sak = en_sak(
+        dok(filnavn="1.pdf", saksnummer="44", dato="2026-02-01",
+            tittel="Vedtak A", type=type_("vedtak"), dagsats="1 240,00"),
+        dok(filnavn="2.pdf", saksnummer="44", dato="2026-02-01",
+            tittel="Vedtak B", type=type_("vedtak"), dagsats="1 480,00"),
+    )
+    funn = m.finn_motsigelser(sak)["funn"]
+    assert [f["type"] for f in funn] == ["ulikt_belop"]
+    assert "dagsats" in funn[0]["forklaring"]
+
+
+def test_samme_beloep_skrevet_ulikt_er_ingen_motsigelse():
+    """«1 240,00», «1240,00» og «1240» er samme beløp. Et funn som bare
+    handler om skrivemåte er støy, og støy slår av vakten (R180)."""
+    sak = en_sak(
+        dok(filnavn="1.pdf", saksnummer="44", dato="2026-02-01",
+            dagsats="1 240,00"),
+        dok(filnavn="2.pdf", saksnummer="44", dato="2026-02-01",
+            dagsats="1240"),
+        dok(filnavn="3.pdf", saksnummer="44", dato="2026-02-01",
+            dagsats="1240,00 kroner"),
+    )
+    assert m.finn_motsigelser(sak)["funn"] == []
+
+
+def test_ulike_slags_belop_sammenlignes_aldri():
+    """Dagsats og månedsbeløp er ulike med matematisk nødvendighet. Å
+    sammenligne dem er en kategorifeil, ikke et funn."""
+    sak = en_sak(
+        dok(filnavn="1.pdf", saksnummer="44", dato="2026-02-01",
+            dagsats="1 240,00"),
+        dok(filnavn="2.pdf", saksnummer="44", dato="2026-02-01",
+            manedsbelop="26 040,00"),
+    )
+    assert m.finn_motsigelser(sak)["funn"] == []
+
+
+def test_dokument_uten_dato_utloser_ingen_belopsmotsigelse():
+    """Uten dato kan ingen si hva som går foran. Da er svaret «vi vet
+    ikke», og en gjetning der er verre enn taushet."""
+    sak = en_sak(
+        dok(filnavn="1.pdf", saksnummer="44", dato="2026-02-01",
+            dagsats="1 240,00"),
+        dok(filnavn="2.pdf", saksnummer="44", dagsats="1 480,00"),
+    )
+    assert m.finn_motsigelser(sak)["funn"] == []
+
+
+def test_umerkede_tall_blir_aldri_et_funn():
+    """Bare de MERKEDE beløpsfeltene sammenlignes. Tallene i en
+    beregningstabell er umerkede og finnes ikke i posten (R71)."""
+    from delt.motsigelser import BELOPSFELT
+    assert set(BELOPSFELT) == {"dagsats", "manedsbelop", "utbetalt_belop",
+                               "tilbakebetalingsbelop"}
+
+
+def test_belopssjekken_staar_i_sjekket():
+    """Et tomt funn er ingen frikjennelse — og nå er det tre sjekker."""
+    svar = m.finn_motsigelser(en_sak(dok(filnavn="1.pdf", saksnummer="44")))
+    assert "ulikt_belop" in svar["sjekket"]
+
+
+def test_forklaringen_gjengir_ikke_beloepene():
+    """Forklaringen havner i logg og svar. Et tilbakebetalingsbeløp er
+    økonomiske persondata — dokumentene er navngitt, og tallene står i
+    dem."""
+    sak = en_sak(
+        dok(filnavn="1.pdf", saksnummer="44", dato="2026-02-01",
+            tilbakebetalingsbelop="18 500,00"),
+        dok(filnavn="2.pdf", saksnummer="44", dato="2026-02-01",
+            tilbakebetalingsbelop="15 200,00"),
+    )
+    forklaring = m.finn_motsigelser(sak)["funn"][0]["forklaring"]
+    assert "18" not in forklaring and "15 200" not in forklaring
+
+
+def test_maalingen_mot_fasit_er_med_i_repoet():
+    """R248 ble MÅLT før den ble kodet. Korpuset er beviset, og det skal
+    kunne kjøres på nytt når et ekte arkiv finnes."""
+    import json
+    import os
+    sti = os.path.join("tester", "korpus", "belopsvarianter.json")
+    with open(sti, encoding="utf-8") as fil:
+        korpus = json.load(fil)
+    fasiter = [s["fasit"] for s in korpus["saker"]]
+    assert fasiter.count("legitim") >= 5, (
+        "for få falsifiserende saker — de legitime er de viktigste")
+    assert "motsigelse" in fasiter
 
 
 def test_taaler_soppel_inn():

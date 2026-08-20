@@ -1,0 +1,91 @@
+{
+  "_om": [
+    "Saker der beløp er ULIKE mellom dokumenter, med en fasit på om det",
+    "er en MOTSIGELSE eller helt legitimt (R248).",
+    "",
+    "Grunnen til at dette måtte måles før det kunne kodes: et vedtak og",
+    "et omgjøringsvedtak SKAL ha ulike beløp. En regel som bare ser",
+    "«to ulike tall» ville ropt på den friskeste saken i arkivet — en",
+    "klage som førte fram.",
+    "",
+    "«legitim»-sakene er derfor de viktigste. De er skrevet for å",
+    "FALSIFISERE regelen: går én av dem av, er regelen for vid, uansett",
+    "hvor mange ekte motsigelser den fanger.",
+    "",
+    "Personvern: alt er oppdiktet. Ingen ekte dokumenter, her som ellers."
+  ],
+  "saker": [
+    {
+      "navn": "omgjoering_etter_klage",
+      "fasit": "legitim",
+      "hvorfor": "Klagevedtaket ENDRER dagsatsen. Ulike datoer, så det senere går foran det tidligere — det er ikke to påstander om samme sak, det er en historie.",
+      "dokumenter": [
+        {"filnavn": "1_vedtak.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 4417820\nVedtaksdato: 01.02.2026\nDagsats: 1 240,00 kroner"},
+        {"filnavn": "2_klagevedtak.pdf", "tekst": "Klagevedtak\nSaksnummer: 4417820\nVedtaksdato: 12.06.2026\nKlagen tas til følge.\nDagsats: 1 480,00 kroner"}
+      ]
+    },
+    {
+      "navn": "nytt_aar_ny_sats",
+      "fasit": "legitim",
+      "hvorfor": "Satsen justeres ved årsskiftet. To vedtak med ulike datoer sier ikke det motsatte av hverandre.",
+      "dokumenter": [
+        {"filnavn": "1_vedtak_2025.pdf", "tekst": "Vedtak om dagpenger\nSaksnummer: 5500123\nVedtaksdato: 15.11.2025\nDagsats: 980,00 kroner"},
+        {"filnavn": "2_vedtak_2026.pdf", "tekst": "Vedtak om dagpenger\nSaksnummer: 5500123\nVedtaksdato: 10.01.2026\nDagsats: 1 015,00 kroner"}
+      ]
+    },
+    {
+      "navn": "ulike_slags_belop",
+      "fasit": "legitim",
+      "hvorfor": "Dagsats og månedsbeløp er ULIKE felter. Å sammenligne dem er en kategorifeil, ikke et funn — og de er ulike med matematisk nødvendighet.",
+      "dokumenter": [
+        {"filnavn": "1_vedtak.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 7788990\nVedtaksdato: 03.03.2026\nDagsats: 1 240,00 kroner"},
+        {"filnavn": "2_utbetaling.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 7788990\nVedtaksdato: 03.03.2026\nMånedsbeløp: 26 040,00 kroner"}
+      ]
+    },
+    {
+      "navn": "beregningstabell_med_mange_tall",
+      "fasit": "legitim",
+      "hvorfor": "Tallene i en beregningstabell er UMERKEDE. Et beløp uten etikett blir aldri en dagsats (R71) — regelen skal aldri se dem.",
+      "dokumenter": [
+        {"filnavn": "1_vedtak.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 1122334\nVedtaksdato: 05.04.2026\nDagsats: 1 240,00 kroner"},
+        {"filnavn": "2_beregning.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 1122334\nVedtaksdato: 05.04.2026\nBeregning av sykepenger\nJanuar 24 800,00\nFebruar 22 320,00\nMars 26 040,00\nApril 24 800,00"}
+      ]
+    },
+    {
+      "navn": "samme_dag_samme_belop",
+      "fasit": "legitim",
+      "hvorfor": "Samme dag, samme felt, SAMME verdi. To dokumenter som er enige er ikke en motsigelse.",
+      "dokumenter": [
+        {"filnavn": "1_vedtak.pdf", "tekst": "Vedtak om dagpenger\nSaksnummer: 2233445\nVedtaksdato: 08.05.2026\nDagsats: 1 015,00 kroner"},
+        {"filnavn": "2_kopi.pdf", "tekst": "Vedtak om dagpenger\nSaksnummer: 2233445\nVedtaksdato: 08.05.2026\nDagsats: 1015 kroner"}
+      ]
+    },
+    {
+      "navn": "ett_dokument_uten_dato",
+      "fasit": "legitim",
+      "hvorfor": "Uten dato på det ene kan ingen si om det går foran eller etter. Da er svaret «vi vet ikke», og en gjetning her ville vært verre enn taushet.",
+      "dokumenter": [
+        {"filnavn": "1_vedtak.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 3344556\nVedtaksdato: 02.02.2026\nDagsats: 1 240,00 kroner"},
+        {"filnavn": "2_notat.pdf", "tekst": "Journalnotat\nSaksnummer: 3344556\nDagsats: 1 480,00 kroner er lagt til grunn."}
+      ]
+    },
+    {
+      "navn": "samme_dag_ulik_dagsats",
+      "fasit": "motsigelse",
+      "hvorfor": "To vedtak datert SAMME dag oppgir ulik dagsats. Ingen av dem kan gå foran den andre, så begge kan ikke stemme — enten er mappa blandet, eller så er ett av dokumentene feil.",
+      "dokumenter": [
+        {"filnavn": "1_vedtak.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 4417820\nVedtaksdato: 01.02.2026\nDagsats: 1 240,00 kroner"},
+        {"filnavn": "2_vedtak.pdf", "tekst": "Vedtak om sykepenger\nSaksnummer: 4417820\nVedtaksdato: 01.02.2026\nDagsats: 1 480,00 kroner"}
+      ]
+    },
+    {
+      "navn": "samme_dag_ulik_tilbakebetaling",
+      "fasit": "motsigelse",
+      "hvorfor": "Samme krav, samme dag, to ulike beløp å betale tilbake. Dette er tallet en bruker faktisk må betale.",
+      "dokumenter": [
+        {"filnavn": "1_krav.pdf", "tekst": "Vedtak om tilbakebetaling\nSaksnummer: 6677889\nVedtaksdato: 20.03.2026\nTilbakebetalingsbeløp: 18 500,00 kroner"},
+        {"filnavn": "2_krav.pdf", "tekst": "Vedtak om tilbakebetaling\nSaksnummer: 6677889\nVedtaksdato: 20.03.2026\nTilbakebetalingsbeløp: 15 200,00 kroner"}
+      ]
+    }
+  ]
+}
