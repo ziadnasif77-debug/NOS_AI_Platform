@@ -191,6 +191,12 @@ def vurder_svar(sp: dict, svar: str, dokumentsvar: dict) -> tuple:
     return True, "ok"
 
 
+# R251: hvilken promptblokk modellspørsmålene måles med («a» standard,
+# «b» = spor.dokumentsporsmal_b). Settes av --promptvariant i main —
+# slik måles en promptendring mot NØYAKTIG samme korpus og fasit.
+PROMPTVARIANT = "a"
+
+
 def _sporsmalskall(sti: str, sporsmal: str, nokkel: str) -> dict:
     """Ett spørsmål mot /dokument. Returnerer hele svaret."""
     import requests
@@ -198,7 +204,8 @@ def _sporsmalskall(sti: str, sporsmal: str, nokkel: str) -> dict:
         svar = requests.post(
             BASE + "/dokument",
             files={"fil": (os.path.basename(sti), f, "application/pdf")},
-            data={"sporsmal": sporsmal, "struktur": "ja"},
+            data={"sporsmal": sporsmal, "struktur": "ja",
+                  "promptvariant": PROMPTVARIANT},
             headers={"X-API-Key": nokkel}, timeout=TIDSFRIST_S)
     svar.raise_for_status()
     return svar.json()
@@ -313,12 +320,25 @@ def les_fasit(navn: str = "sporsmaal_syntetisk_bunke.json") -> dict:
 
 def main() -> int:
     som_json = "--json" in sys.argv
+    # R251: --promptvariant a|b (eller --promptvariant=b) velger
+    # promptblokka som måles. Resultatet stempler valget, så to
+    # kjøringer aldri kan forveksles.
+    global PROMPTVARIANT
+    for i, arg in enumerate(sys.argv):
+        if arg == "--promptvariant" and i + 1 < len(sys.argv):
+            PROMPTVARIANT = sys.argv[i + 1].strip().lower()
+        elif arg.startswith("--promptvariant="):
+            PROMPTVARIANT = arg.split("=", 1)[1].strip().lower()
+    if PROMPTVARIANT not in ("a", "b"):
+        print(f"Ukjent --promptvariant: {PROMPTVARIANT!r} — bruk a eller b")
+        return 2
     fasit = les_fasit()
     if not som_json:
         print(f"\nSpørsmålskorpus: {len(fasit['sporsmaal'])} spørsmål mot "
-              f"{fasit['fil']}")
+              f"{fasit['fil']}  (promptvariant {PROMPTVARIANT})")
         print(f"Server: {BASE}\n")
     resultat = kjor(fasit)
+    resultat["promptvariant"] = PROMPTVARIANT
     if som_json:
         print(json.dumps(resultat, ensure_ascii=False))
         return 0 if resultat.get("ok") else 1

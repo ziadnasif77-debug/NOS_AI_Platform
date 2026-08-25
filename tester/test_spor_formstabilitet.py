@@ -45,6 +45,10 @@ FORVENTEDE_NOKLER = {
     # `advarsel` — og §26 krever at et resultat kan korreleres til
     # evidence metadata. En setning er ikke metadata.
     "bevis",
+    # R251: hvilken promptblokk som svarte, og skjebnen til stilreglene
+    # fra forespørselen — `stilregler_brukt` null = feltet ikke sendt,
+    # [] = sendt men alt avvist; avviste står med grunn, ikke i loggen.
+    "promptvariant", "stilregler_brukt", "stilregler_avvist",
     "tolket_sporsmal", "svar_avkortet", "advarsel", "fra_cache",
     "tid_sekunder", "kilde", "versjon",
 }

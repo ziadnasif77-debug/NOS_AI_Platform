@@ -2514,7 +2514,75 @@ _MAKS_EGNE_REGLER = 20
 _MAKS_REGEL_LENGDE = 200
 
 
-def _egne_regler() -> str:
+def _filtrer_stilregler(linjer: list) -> tuple:
+    """R8.1/R251: ETT filter for begge stilregelkanalene — fila
+    (`regler/egne_regler.txt`) og forespørselsfeltet (`stilregler`).
+
+    Returnerer (godkjente, avviste) der hver avvist er
+    {"regel": <linja, avkortet>, "grunn": <hvorfor>}. To kanaler med
+    hvert sitt filter ville drevet fra hverandre — angrepslinja som
+    fila stopper, må forespørselen også stoppe."""
+    godkjente, avviste = [], []
+    for i, linje in enumerate(linjer):
+        if i >= _MAKS_EGNE_REGLER:
+            avviste.append({"regel": linje[:_MAKS_REGEL_LENGDE],
+                            "grunn": f"over maks {_MAKS_EGNE_REGLER} regler"})
+            continue
+        if len(linje) > _MAKS_REGEL_LENGDE:
+            avviste.append({"regel": linje[:_MAKS_REGEL_LENGDE],
+                            "grunn": f"over {_MAKS_REGEL_LENGDE} tegn"})
+            continue
+        if _REGEL_AVVIS.search(linje):
+            avviste.append({"regel": linje,
+                            "grunn": "R8.1-filter (overstyring/utregning/"
+                                     "persondata/lenke)"})
+            continue
+        godkjente.append(linje)
+    return godkjente, avviste
+
+
+def _stilregler_fra_tekst(raatekst: str) -> tuple:
+    """R251: parser `stilregler`-feltet fra en forespørsel — én regel
+    per linje, `#` = kommentar, samme konvensjon som fila. Returnerer
+    (godkjente, avviste); avviste RAPPORTERES til klienten i svaret,
+    i motsetning til filkanalen der de bare logges."""
+    linjer = [l.strip() for l in (raatekst or "").splitlines()
+              if l.strip() and not l.strip().startswith("#")]
+    return _filtrer_stilregler(linjer)
+
+
+def _stilregler_og_variant(tekstfelter: dict) -> tuple:
+    """R251: leser `stilregler` og `promptvariant` fra en forespørsel.
+
+    Returnerer (stilregler, stilregler_avvist, promptvariant, feil):
+      * stilregler        godkjente regler (liste), eller None når
+                          feltet ikke ble sendt — skillet bevares i
+                          svaret (None = ikke brukt, [] = alt avvist)
+      * stilregler_avvist [{regel, grunn}, …] — rapporteres til
+                          klienten, i motsetning til filkanalen
+      * promptvariant     «a» (standard) eller «b»
+      * feil              ferdig 400-kropp ved ugyldig variant, ellers
+                          None
+    """
+    variant = ((tekstfelter or {}).get("promptvariant", "")
+               .strip().lower() or "a")
+    if variant not in _PROMPTVARIANTER:
+        return None, [], variant, {
+            "ok": False,
+            "feil": (f"Ukjent 'promptvariant': {variant!r}. Bruk "
+                     + "/".join(sorted(_PROMPTVARIANTER)) + " — variantene "
+                     "er blokker i regler/prompter.md (R251)."),
+            "felter_feil": [{"pointer": "/promptvariant",
+                             "message": "Bruk "
+                                        + "/".join(sorted(_PROMPTVARIANTER))}]}
+    raa = (tekstfelter or {}).get("stilregler", "")
+    if not raa.strip():
+        return None, [], variant, None
+    godkjente, avviste = _stilregler_fra_tekst(raa)
+    return godkjente, avviste, variant, None
+
+
+def _egne_regler(ekstra: list = None) -> str:
     """R8: brukerens egne stil-/formatregler — leses PER forespørsel,
     endringer virker uten omstart. # = kommentar.
 
@@ -2522,7 +2590,12 @@ def _egne_regler() -> str:
     regnemønstre avvises og logges; maks 20 regler à 200 tegn; og
     reglene plasseres FØR kjernereglene i prompten slik at kjerne-
     reglene alltid får siste ord. Dette er skadebegrensning — den
-    harde garantien mot talljuks er fortsatt tallvakten (R3, kode)."""
+    harde garantien mot talljuks er fortsatt tallvakten (R3, kode).
+
+    `ekstra` (R251) er ALLEREDE FILTRERTE stilregler fra forespørselen
+    (`_stilregler_fra_tekst`), lagt ETTER filreglene: den som skriver
+    kallet, er mer spesifikk enn den som skrev fila — men begge står
+    før kjernereglene, så rangordningen mot dem er uendret."""
     try:
         # utf-8-sig: Notepad lagrer med BOM, og uten -sig ble BOM-en
         # hengende foran «#» på linje én — kommentarfilteret slapp den
@@ -2531,30 +2604,40 @@ def _egne_regler() -> str:
             linjer = [l.strip() for l in f
                       if l.strip() and not l.strip().startswith("#")]
     except (FileNotFoundError, OSError):
-        return ""
-    godkjente = []
-    for linje in linjer[:_MAKS_EGNE_REGLER]:
-        if len(linje) > _MAKS_REGEL_LENGDE or _REGEL_AVVIS.search(linje):
-            print(f"  egne_regler: AVVIST (R8.1): {linje[:70]!r}")
-            continue
-        godkjente.append(linje)
+        linjer = []
+    godkjente, avviste = _filtrer_stilregler(linjer)
+    for avvist in avviste:
+        print(f"  egne_regler: AVVIST (R8.1): {avvist['regel'][:70]!r}")
+    godkjente += list(ekstra or [])
     if not godkjente:
         return ""
     return (prompter.avsnitt("spor.egne_regler_innledning")
             + "\n".join(f"- {l}" for l in godkjente) + "\n")
 
 
-def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False) -> str:
+# R251: lovlige promptvarianter for A/B-test. «a» er standardblokka,
+# «b» er redigeringskopien i regler/prompter.md. Ett sted å utvide.
+_PROMPTVARIANTER = {"a": "spor.dokumentsporsmal",
+                    "b": "spor.dokumentsporsmal_b"}
+
+
+def spor_borealis(tekst: str, sporsmal: str, fra_ocr: bool = False,
+                  stilregler: list = None,
+                  promptvariant: str = "a") -> str:
     """Stiller ett spørsmål om dokumentteksten (dokumentet er DATA,
     ikke instruksjoner). Med fra_ocr=True får modellen lov til å tolke
-    åpenbare OCR-lesefeil ut fra sammenhengen — men ikke dikte."""
+    åpenbare OCR-lesefeil ut fra sammenhengen — men ikke dikte.
+
+    `stilregler` (R251): ferdig filtrerte per-forespørsel-regler, se
+    `_egne_regler`. `promptvariant` velger blokk i regler/prompter.md
+    («a» standard, «b» A/B-kopien) — valideres av kalleren."""
     # R8.1: brukerens preferanser plasseres FØR kjernereglene — for
     # språkmodeller vinner senere instruksjoner, så kjernereglene får
     # alltid siste ord uansett hva regelfilen inneholder. Rekkefølgen
     # ligger i selve blokka; se regler/prompter.md.
     prompt = prompter.hent(
-        "spor.dokumentsporsmal",
-        egne_regler=_egne_regler(),
+        _PROMPTVARIANTER.get(promptvariant, "spor.dokumentsporsmal"),
+        egne_regler=_egne_regler(ekstra=stilregler),
         ocr_merknad=prompter.avsnitt("spor.ocr_merknad") if fra_ocr else "",
         dokument=tekst[:MAKS_LLM_TEGN + 2000],
         sporsmal=sporsmal)
@@ -5000,6 +5083,10 @@ def _openapi() -> dict:
                                    "skjema_motor": {"type": "string",
                                                     "enum": ["modell", "felter", "auto"],
                                                     "description": "modell=Borealis fyller alt (standard); felter=deterministisk fletting av {feltnavn}-plassholdere (rask, uten modell); auto=hybrid: deterministisk der regelen kan bevise, modell for resten (navn o.l.) med tallvakt"},
+                                   "stilregler": {"type": "string",
+                                                  "description": "Stil-/formatregler for svar-delen, én per linje (R251) — samme filter/tak som regler/egne_regler.txt; avviste rapporteres i deler.svar.stilregler_avvist"},
+                                   "promptvariant": {"type": "string", "enum": ["a", "b"],
+                                                     "description": "A/B-test av promptblokka for svar-delen (R251); deler.svar.promptvariant deklarerer hvilken som svarte"},
                                    "korriger": {"type": "string", "enum": ["ja", "nei"]},
                                    "tekst": {"type": "string", "enum": ["ja", "nei"]},
                                    "koordinater": {"type": "string",
@@ -5078,10 +5165,15 @@ def _openapi() -> dict:
                                    "sporsmal": {"type": "string"},
                                    "jobb_id": {"type": "string"},
                                    "korriger": {"type": "string", "enum": ["ja"]},
-                                   "maks_sider": {"type": "integer"}}}}}},
+                                   "maks_sider": {"type": "integer"},
+                                   "stilregler": {"type": "string",
+                                                  "description": "Stil-/formatregler for DETTE svaret, én per linje (R251). Samme filter og tak som regler/egne_regler.txt (maks 20 à 200 tegn); avviste linjer rapporteres i «stilregler_avvist» med grunn. Gjelder kun FORMEN — fakta og tall vokter koden uansett"},
+                                   "promptvariant": {"type": "string", "enum": ["a", "b"],
+                                                     "description": "A/B-test av promptblokka (R251): «a» = spor.dokumentsporsmal (standard), «b» = spor.dokumentsporsmal_b i regler/prompter.md. Svaret deklarerer hvilken som svarte"}}}}}},
                 "responses": {"200": {"description":
                     "svar, tall_verifisert, tolket_sporsmal, svar_avkortet, handskrift, strekkoder, "
-                    "ocr_motorer, advarsel, fra_cache, tid_sekunder, kilde, versjon"}}}},
+                    "ocr_motorer, promptvariant, stilregler_brukt, stilregler_avvist, "
+                    "advarsel, fra_cache, tid_sekunder, kilde, versjon"}}}},
             "/jobb": {"post": {
                 "summary": "Asynkron OCR av store dokumenter (ubegrenset antall sider)",
                 "parameters": [{"name": "Idempotency-Key", "in": "header", "required": False,
@@ -6181,7 +6273,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "operasjonsmotoren (uniform, utvidbar form)"),
                     "POST /spor": ("felter 'fil' + 'sporsmal' (eller 'jobb_id' + 'sporsmal') → svar fra Borealis; "
                                    "fil UTEN 'sporsmal' → hele den utleste teksten ordrett (deterministisk); "
-                                   "valgfritt korriger=ja → LLM-korrigert OCR-tekst"),
+                                   "valgfritt korriger=ja → LLM-korrigert OCR-tekst; "
+                                   "valgfritt stilregler (én per linje, samme filter som egne_regler.txt — "
+                                   "avviste rapporteres i stilregler_avvist) og promptvariant=a/b "
+                                   "(A/B-test av promptblokka, R251)"),
                     "POST /sladd": ("felt 'fil' (+ valgfritt 'typer') → teksten med "
                                     "beviste identifikatorer erstattet av [SLADDET type]; "
                                     "«sladding_fullstendig» og «mistenkt_usladdet» sier "
@@ -7567,6 +7662,12 @@ class Handler(BaseHTTPRequestHandler):
                                 for u in ukjente]})
 
         sporsmal = tekstfelter.get("sporsmal", "").strip()
+        # R251: samme stilregel-/variantkanal som /spor — de to
+        # kontraktene skal svare likt på samme bestilling.
+        stilregler, stilregler_avvist, promptvariant, variantfeil = \
+            _stilregler_og_variant(tekstfelter)
+        if variantfeil:
+            return self._svar(400, variantfeil)
         mal_raa = tekstfelter.get("skjema_mal", "").strip()
         # Motor for skjemautfylling: «modell» (Borealis fyller — mest
         # fleksibelt, men koster tid) eller «felter» (deterministisk
@@ -7730,7 +7831,9 @@ class Handler(BaseHTTPRequestHandler):
                     # aldri så etter (R159).
                     kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
                                                handskrift, strekkoder,
-                                               ktx.strekkoder_lest)
+                                               ktx.strekkoder_lest,
+                                               stilregler=stilregler,
+                                               promptvariant=promptvariant)
                     if kjerne["tom"]:
                         return {"ok": False, "feil": tom_feil}
                     advarsler.extend(kjerne["advarsler"])
@@ -7743,7 +7846,14 @@ class Handler(BaseHTTPRequestHandler):
                             "tolket_sporsmal": kjerne["tolket_sporsmal"],
                             "svar_avkortet": kjerne["svar_avkortet"],
                             # R207: evidence metadata, maskinlesbart
-                            "bevis": kjerne.get("bevis")}
+                            "bevis": kjerne.get("bevis"),
+                            # R251: samme deklarasjon som /spor
+                            "promptvariant": (
+                                promptvariant
+                                if kjerne.get("modell_brukt") is not False
+                                else None),
+                            "stilregler_brukt": stilregler,
+                            "stilregler_avvist": stilregler_avvist or None}
                 deler["svar"] = trygt(_svar_del)
 
         if valg["skjema"]:
@@ -8367,6 +8477,13 @@ class Handler(BaseHTTPRequestHandler):
         # deterministisk (aldri modell). Fil MED tekst = utfør bestillingen.
         sporsmal = tekstfelter.get("sporsmal", "").strip()
         tom_foresporsel = not sporsmal
+        # R251: stilregler per forespørsel + promptvariant for A/B-test.
+        # Valideres FØR noe arbeid gjøres — en ugyldig variant skal ikke
+        # koste en OCR-runde først.
+        stilregler, stilregler_avvist, promptvariant, variantfeil = \
+            _stilregler_og_variant(tekstfelter)
+        if variantfeil:
+            return self._svar(400, variantfeil)
 
         # Er «spørsmålet» en JSON-mal (limt inn i spørsmålsfeltet i en
         # GUI), rutes den automatisk til skjemautfylling MED
@@ -8529,7 +8646,9 @@ class Handler(BaseHTTPRequestHandler):
 
         kjerne = svar_paa_sporsmal(raa_tekst, sporsmal, ocr_brukt,
                                    handskrift, strekkoder,
-                                   skanning_kjorte)
+                                   skanning_kjorte,
+                                   stilregler=stilregler,
+                                   promptvariant=promptvariant)
         if kjerne["tom"]:
             # Det TOMME dokumentet var verst: 8 nøkler, og uten
             # «versjon» — stikk i strid med R39. En bunke med én blank
@@ -8581,6 +8700,14 @@ class Handler(BaseHTTPRequestHandler):
             tolket_sporsmal=tolket_sporsmal,
             svar_avkortet=svar_avkortet,
             bevis=kjerne.get("bevis"),          # R207
+            # R251: hva som FAKTISK formet prompten. `stilregler_brukt`
+            # er None når feltet ikke ble sendt, [] når alt ble avvist —
+            # skillet er informasjonen.
+            promptvariant=(promptvariant
+                           if kjerne.get("modell_brukt") is not False
+                           else None),
+            stilregler_brukt=stilregler,
+            stilregler_avvist=stilregler_avvist or None,
             advarsel=advarsel,
             fra_cache=fra_cache,
             tid_sekunder=round(time.time() - t0, 1),
@@ -9077,7 +9204,9 @@ def kan_svares_uten_modell(sporsmal: str) -> bool:
 
 def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                       handskrift: list, strekkoder: list,
-                      strekkoder_lest: bool = True) -> dict:
+                      strekkoder_lest: bool = True,
+                      stilregler: list = None,
+                      promptvariant: str = "a") -> dict:
     """Svarkjernen MED personbindingsgarantien (R213).
 
     Garantien maatte ligge her og ikke inne i kjernen: kjernen har elleve
@@ -9091,7 +9220,7 @@ def svar_paa_sporsmal(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
     fila: kjernen gjoer jobben, innpakningen holder loeftet."""
     kjerne = _svar_paa_sporsmal_intern(
         raa_tekst, sporsmal, ocr_brukt, handskrift, strekkoder,
-        strekkoder_lest)
+        strekkoder_lest, stilregler=stilregler, promptvariant=promptvariant)
     if not PERSONBINDING or not raa_tekst or kjerne.get("tom"):
         return _feltvakt_paa(kjerne, sporsmal, raa_tekst)
     _antall, _sider = del_i_sider(raa_tekst)
@@ -9147,7 +9276,9 @@ def _feltvakt_paa(kjerne: dict, sporsmal: str, raa_tekst: str) -> dict:
 
 def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                               handskrift: list, strekkoder: list,
-                              strekkoder_lest: bool = True) -> dict:
+                              strekkoder_lest: bool = True,
+                              stilregler: list = None,
+                              promptvariant: str = "a") -> dict:
     """Felles kjerne for /spor og /dokument: beriker dokumentteksten
     (håndskriftmerking, strekkoder, stort-dokument-supplement,
     datoklassifisering), spør Borealis og kjører ALLE vaktene
@@ -9417,7 +9548,9 @@ def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
                 for d in gruppe)
             tekst += f"\n\n[{overskrifter[rolle]}:]\n" + linjer
 
-    svar, svar_avkortet = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt)
+    svar, svar_avkortet = spor_borealis(tekst, sporsmal, fra_ocr=ocr_brukt,
+                                        stilregler=stilregler,
+                                        promptvariant=promptvariant)
 
     # R41 (kode): «Finnes ikke»-svar kan skyldes skrivefeil i selve
     # SPØRSMÅLET. Da normaliseres spørsmålet til korrekt norsk og
@@ -9428,7 +9561,10 @@ def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
             prompter.hent("spor.normaliser_sporsmal", sporsmal=sporsmal), 64)
         normalisert = normalisert.strip().strip('"«»')
         if normalisert and normalisert.lower() != sporsmal.strip().lower():
-            svar2, avkortet2 = spor_borealis(tekst, normalisert, fra_ocr=ocr_brukt)
+            svar2, avkortet2 = spor_borealis(tekst, normalisert,
+                                             fra_ocr=ocr_brukt,
+                                             stilregler=stilregler,
+                                             promptvariant=promptvariant)
             if not svar2.strip().lower().startswith("finnes ikke"):
                 svar, svar_avkortet = svar2, avkortet2
                 tolket_sporsmal = normalisert
@@ -9441,7 +9577,8 @@ def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
             tekst,
             sporsmal + " (VIKTIG: svaret skal IKKE inneholde "
             + ", ".join(brutt) + " — utelat dette helt)",
-            fra_ocr=ocr_brukt)
+            fra_ocr=ocr_brukt, stilregler=stilregler,
+            promptvariant=promptvariant)
         if not eksklusjoner_brutt(sporsmal, svar2):
             svar, svar_avkortet, brutt = svar2, avkortet2, []
     if brutt:
@@ -9459,7 +9596,8 @@ def _svar_paa_sporsmal_intern(raa_tekst: str, sporsmal: str, ocr_brukt: bool,
             tekst,
             sporsmal + " (VIKTIG: gjengi tallet NØYAKTIG slik det står "
                        "i dokumentet — ikke regn eller summer)",
-            fra_ocr=ocr_brukt)
+            fra_ocr=ocr_brukt, stilregler=stilregler,
+            promptvariant=promptvariant)
         if not uverifiserte_tall(svar2, tekst):
             svar, mangler, svar_avkortet = svar2, [], avkortet2
     tall_verifisert = not mangler
@@ -9925,6 +10063,14 @@ def _spor_svar(**felt) -> dict:
         # ikke metadata. `null` = bevisvalg kjørte ikke (ett dokument,
         # eller en deterministisk vei uten modellen).
         "bevis": None,
+        # R251: hvilken promptblokk som svarte («a»/«b», null = modellen
+        # var aldri involvert), og skjebnen til stilreglene fra
+        # forespørselen. `stilregler_brukt` None = feltet ble ikke sendt,
+        # [] = sendt, men alt avvist — avviste står i
+        # `stilregler_avvist` med grunn, aldri bare i loggen.
+        "promptvariant": None,
+        "stilregler_brukt": None,
+        "stilregler_avvist": None,
         "advarsel": None,
         "fra_cache": False,
         "tid_sekunder": None,
@@ -10223,13 +10369,14 @@ def _sjekk_feltnavn(tekstfelter: dict, kjente: set):
 _KJENTE_FELT_DOKUMENT = {
     "felter", "struktur", "svar", "skjema", "korriger", "tekst", "sporsmal",
     "skjema_mal", "skjema_motor", "operasjoner", "maks_sider", "strekkoder",
-    "koordinater", "datoer_detaljert", "profil", "opphav"}
+    "koordinater", "datoer_detaljert", "profil", "opphav",
+    "stilregler", "promptvariant"}
 _KJENTE_FELT_OPERASJONER = {"operasjoner", "maks_sider", "strekkoder",
                             "profil", "opphav"}
 _KJENTE_FELT_FORHANDSSJEKK = {"maks_sider"}
 _KJENTE_FELT_SLADD = {"typer", "maks_sider"}
 _KJENTE_FELT_SPOR = {"sporsmal", "jobb_id", "korriger", "maks_sider",
-                     "strekkoder"}
+                     "strekkoder", "stilregler", "promptvariant"}
 _KJENTE_FELT_JOBB = {"maks_sider", "sporsmal"}
 _KJENTE_FELT_INNSYN = {"maks_sider"}
 _KJENTE_FELT_SAK = {"jobb_id", "sak_id", "opphav", "sporsmal"}
@@ -10351,8 +10498,18 @@ class StrukturOperasjon(Operasjon):
 class SvarOperasjon(Operasjon):
     type = "svar"
 
-    def __init__(self, sporsmal):
+    def __init__(self, sporsmal, stilregler=None, stilregler_avvist=None,
+                 promptvariant="a"):
         self.sporsmal = sporsmal
+        # R251: reglene er FERDIG filtrert i fabrikken — operasjonen
+        # skal ikke kunne omgå filteret ved å bygges direkte med rå
+        # linjer i en fremtidig kodevei; derfor filtrerer vi ved
+        # tildeling også, ikke bare i fabrikken.
+        godkjente, avviste = _filtrer_stilregler(list(stilregler or []))
+        self.stilregler = godkjente if stilregler is not None else None
+        self.stilregler_avvist = (list(stilregler_avvist or []) + avviste) \
+            or None
+        self.promptvariant = promptvariant
 
     def _krever_borealis(self):
         # En ren sidelesing besvares deterministisk fra sidemarkørene —
@@ -10369,7 +10526,9 @@ class SvarOperasjon(Operasjon):
         # aldri ble skannet (R159).
         kjerne = svar_paa_sporsmal(ktx.tekst, self.sporsmal, ktx.ocr_brukt,
                                    ktx.handskrift, ktx.strekkoder,
-                                   ktx.strekkoder_lest)
+                                   ktx.strekkoder_lest,
+                                   stilregler=self.stilregler,
+                                   promptvariant=self.promptvariant)
         if kjerne["tom"]:
             return {"type": "svar", "ok": False, "feil": _TOM_DOKUMENT_FEIL}
         return {"type": "svar", "ok": True, "sporsmal": self.sporsmal,
@@ -10384,7 +10543,13 @@ class SvarOperasjon(Operasjon):
                 # R207: samme evidence metadata som den flate veien —
                 # to veier som svarer ulikt paa «hva bygget svaret paa»
                 # er verre enn ingen av dem.
-                "bevis": kjerne.get("bevis")}
+                "bevis": kjerne.get("bevis"),
+                # R251: samme deklarasjon som den flate veien
+                "promptvariant": (self.promptvariant
+                                  if kjerne.get("modell_brukt") is not False
+                                  else None),
+                "stilregler_brukt": self.stilregler,
+                "stilregler_avvist": self.stilregler_avvist}
 
 
 class SkjemaOperasjon(Operasjon):
@@ -10582,7 +10747,27 @@ def bygg_operasjon(spec):
         sporsmal = str(spec.get("sporsmal", "")).strip()
         if not sporsmal:
             raise ValueError("operasjon 'svar' krever feltet 'sporsmal'")
-        return SvarOperasjon(sporsmal)
+        # R251: additivt — {type:"svar", sporsmal, stilregler?:[…],
+        # promptvariant?:"a"|"b"}. Liste ELLER linjeskilt streng, samme
+        # konvensjon som multipart-feltet.
+        stilregler = spec.get("stilregler")
+        if isinstance(stilregler, str):
+            stilregler = [l.strip() for l in stilregler.splitlines()
+                          if l.strip() and not l.strip().startswith("#")]
+        elif stilregler is not None:
+            if not isinstance(stilregler, list) or any(
+                    not isinstance(r, str) for r in stilregler):
+                raise ValueError(
+                    "operasjon 'svar': 'stilregler' skal være en liste av "
+                    "strenger (eller én streng med linjeskift)")
+            stilregler = [r.strip() for r in stilregler if r.strip()]
+        variant = str(spec.get("promptvariant", "")).strip().lower() or "a"
+        if variant not in _PROMPTVARIANTER:
+            raise ValueError(
+                f"operasjon 'svar': ukjent 'promptvariant': {variant!r} — "
+                "bruk " + "/".join(sorted(_PROMPTVARIANTER)))
+        return SvarOperasjon(sporsmal, stilregler=stilregler,
+                             promptvariant=variant)
     if t == "korriger":
         return KorrigerOperasjon()
     if t == "klassifiser":
@@ -10636,7 +10821,10 @@ _SVAR_DATAFELT = ("sporsmal", "svar", "tall_verifisert", "tolket_sporsmal",
                   # flate veien og operasjonsveien ULIKT på «hva bygget
                   # svaret på» — og to veier som er uenige om det, er
                   # verre enn om ingen av dem svarte.
-                  "bevis")
+                  "bevis",
+                  # R251: promptvariant og stilregel-skjebnen — samme
+                  # grunn som R207: begge veier skal deklarere likt.
+                  "promptvariant", "stilregler_brukt", "stilregler_avvist")
 
 
 def normaliser_operasjonsresultat(res) -> dict:

@@ -53,6 +53,32 @@ Tallvakten (R3) er eksempelet: modellen blir bedt om å gjengi tall
 ordrett, OG koden sjekker etterpå at hvert tall i svaret faktisk står i
 dokumentet.
 
+## Stilregler uten å røre fila — og A/B-test av prompten (R251)
+
+Trenger du en stilregel for ÉN forespørsel (eller vil styre den fra
+UiPath uten å redigere filer på serveren), send multipart-feltet
+`stilregler` til `POST /spor` eller `POST /dokument` — én regel per
+linje, samme konvensjon og NØYAKTIG samme filter og tak som
+`egne_regler.txt`. Forskjellen er at avviste linjer RAPPORTERES i
+svaret (`stilregler_avvist`, med grunn) i stedet for bare å logges.
+Reglene legges etter filreglene og før kjernereglene — kjernereglene
+har fortsatt siste ord.
+
+Vil du måle en promptendring i stedet for å synse: rediger B-blokka
+`spor.dokumentsporsmal_b` i [`prompter.md`](prompter.md) (den starter
+som en kopi av standardblokka), øk `versjon`, og kjør
+
+```bash
+.pyruntime\python.exe skript\kjor_sporsmaalskorpus.py --promptvariant a
+.pyruntime\python.exe skript\kjor_sporsmaalskorpus.py --promptvariant b
+```
+
+— samme korpus, samme fasit, to tall som kan sammenlignes. Hvert svar
+deklarerer hvilken variant som svarte (`promptvariant` i svaret), så to
+kjøringer aldri kan forveksles. Ankrene «Dokument:» og «Spørsmål:» må
+stå ordrett i begge blokkene (klippepunkter — `tester/test_stilregler.py`
+vokter dem).
+
 ## Rekkefølgen når et svar blir til
 
 1. `egne_regler.txt` legges inn i prompten FØRST (stil og form).

@@ -30,6 +30,10 @@ from delt import prompter  # noqa: E402
 KALLSTEDER = [
     ("spor.dokumentsporsmal", {"egne_regler": "", "ocr_merknad": "",
                                "dokument": "DOK", "sporsmal": "SPM"}),
+    # R251: B-varianten for A/B-test — samme plassholdere som A, valgt
+    # med promptvariant=b i spor_borealis
+    ("spor.dokumentsporsmal_b", {"egne_regler": "", "ocr_merknad": "",
+                                 "dokument": "DOK", "sporsmal": "SPM"}),
     ("spor.ocr_merknad", {}),
     ("spor.egne_regler_innledning", {}),
     ("spor.uten_dokument", {"sporsmal": "SPM"}),

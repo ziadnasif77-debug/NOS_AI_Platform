@@ -137,13 +137,18 @@ def test_svar_uten_borealis_gir_feil(ktx, monkeypatch):
 def test_svar_med_mocket_modell(ktx, borealis_klar, monkeypatch):
     sett = {}
 
-    def _stub(tekst, sporsmal, ocr, hand, strek, strek_lest=True):
+    def _stub(tekst, sporsmal, ocr, hand, strek, strek_lest=True,
+              stilregler=None, promptvariant="a"):
         # `strek_lest` MÅ være med i signaturen: uten den ville stubben
         # skjult at operasjonsveien glemte å sende den, og svarte
         # «ingen strekkoder funnet» om et dokument som aldri ble
         # skannet (R159). En attrapp som er mildere enn den ekte
-        # funksjonen, måler mindre enn den ser ut til.
+        # funksjonen, måler mindre enn den ser ut til. Samme grunn for
+        # `stilregler`/`promptvariant` (R251): glemmer operasjonsveien
+        # å sende dem, skal DENNE testen se det — ikke en klient.
         sett["strek_lest"] = strek_lest
+        sett["stilregler"] = stilregler
+        sett["promptvariant"] = promptvariant
         return {"tom": False, "svar": "6380 kroner", "tall_verifisert": True,
                 "tolket_sporsmal": sporsmal, "svar_avkortet": False,
                 "advarsler": []}
@@ -155,6 +160,15 @@ def test_svar_med_mocket_modell(ktx, borealis_klar, monkeypatch):
     assert sett["strek_lest"] == ktx.strekkoder_lest, (
         "SvarOperasjon sendte ikke ktx.strekkoder_lest videre — da svarer "
         "operasjonsveien «ingen strekkoder funnet» om et uskannet dokument")
+
+    res = SvarOperasjon("Hva er beløpet?", stilregler=["Svar kort."],
+                        promptvariant="b").utfor(ktx)
+    assert sett["stilregler"] == ["Svar kort."] and \
+        sett["promptvariant"] == "b", (
+        "SvarOperasjon sendte ikke stilregler/promptvariant videre (R251) — "
+        "da måler en A/B-kjøring via operasjonsveien variant a i det stille")
+    assert res["promptvariant"] == "b"
+    assert res["stilregler_brukt"] == ["Svar kort."]
 
 
 def test_korriger_uten_ocr_gir_feil(borealis_klar):

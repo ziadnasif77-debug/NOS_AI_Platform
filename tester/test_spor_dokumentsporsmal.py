@@ -97,9 +97,11 @@ def stubbet_modell(monkeypatch):
     sett = {}
 
     def _stubb(raa_tekst, sporsmal, ocr_brukt, handskrift, strekkoder,
-               strekkoder_lest=True):
+               strekkoder_lest=True, stilregler=None, promptvariant="a"):
         sett["strekkoder_lest"] = strekkoder_lest
         sett["sporsmal"] = sporsmal
+        sett["stilregler"] = stilregler
+        sett["promptvariant"] = promptvariant
         return {"tom": False, "advarsler": [], "svar": "stubbsvar",
                 "tall_verifisert": True, "uverifiserte_tall": [],
                 "tallvakt_forsok": 1, "tolket_sporsmal": sporsmal,
