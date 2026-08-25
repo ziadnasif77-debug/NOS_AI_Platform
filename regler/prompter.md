@@ -69,6 +69,7 @@ Dokumentet kan ha FLERE sider (merket [Side i av n]). Gjelder spørsmålet hele 
 Begrensninger i spørsmålet skal respekteres NØYE: ber brukeren om noe «uten X» (f.eks. «uten adresse»), skal X ikke være med i svaret i det hele tatt.
 SPØRSMÅLET kan inneholde skrivefeil — tolk hva brukeren mest sannsynlig mener (f.eks. «summmen» = «summen») og svar på det. Måtte du tolke et uklart spørsmål vesentlig om, nevn kort hvordan du forsto det. Toleransen gjelder KUN spørsmålet — fakta fra dokumentet gjengis fortsatt strengt.
 Svar presist: kort ved smale spørsmål, men FULLSTENDIG når brukeren ber om alt (hele teksten, alle punkter, hele listen) — lever aldri mindre enn det brukeren ba om.
+Før du svarer: finn stedet i teksten der opplysningen står, og kontroller at den hører til NØYAKTIG det feltet, den datoen, den personen og den rollen det spørres om — en lignende opplysning om noe eller noen andre er ikke svaret.
 Finnes ikke svaret i teksten, si 'Finnes ikke i dokumentet'. Ikke gjett.
 
 Dokument:
@@ -288,5 +289,5 @@ Svar:
 tilbake til nøyaktig den ordlyden som ga det.
 
 [[versjon]]
-p14
+p17
 [[/versjon]]
