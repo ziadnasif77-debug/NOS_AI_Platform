@@ -527,10 +527,18 @@ class ApiKlient:
         return respons.json()
 
     # -- endepunkter -------------------------------------------------------
-    def spor_med_fil(self, pdf_sti: Path, sporsmal: str, korriger: bool = False):
+    def spor_med_fil(self, pdf_sti: Path, sporsmal: str, korriger: bool = False,
+                     stilregler: str = "", promptvariant: str = "a"):
         felter = {"sporsmal": sporsmal}
         if korriger:
             felter["korriger"] = "ja"
+        # R251: stilregler for DETTE svaret (én per linje) og promptvariant
+        # for A/B-test. Sendes bare når de avviker fra standard, så
+        # forespørselen forblir minimal.
+        if stilregler.strip():
+            felter["stilregler"] = stilregler
+        if promptvariant and promptvariant != "a":
+            felter["promptvariant"] = promptvariant
         with open(pdf_sti, "rb") as fil:
             return self._post(
                 "/spor",
@@ -4227,6 +4235,34 @@ class DokumentKlientApp:
             selectcolor=BG_INNDATA, anchor="w", highlightthickness=0,
         ).pack(fill="x", padx=8, pady=(0, 8))
 
+        # R251: stilregler per forespørsel + promptvariant for A/B-test.
+        # Samme filter og tak som regler/egne_regler.txt — avviste linjer
+        # kommer tilbake i svaret med grunn, og vises i advarselsfeltet.
+        stilramme = tema_rammefelt(
+            forelder,
+            "Stilregler for DETTE svaret (valgfritt — én per linje; kun form/"
+            "stil, virker på dokumentspørsmål)",
+        )
+        stilramme.pack(fill="x", **pad)
+        self.spor_stilregler = tema_tekstfelt(
+            stilramme, wrap="word", font=("Segoe UI", 10), height=3)
+        self.spor_stilregler.pack(fill="x", padx=8, pady=(8, 4))
+        bind_utklippstavle(self.rot, self.spor_stilregler)
+        variantrad = tk.Frame(stilramme, bg=BG_PANEL)
+        variantrad.pack(fill="x", padx=8, pady=(0, 8))
+        tk.Label(variantrad, text="Promptvariant (A/B-test):",
+                 fg=FG_DEMPET, bg=BG_PANEL).pack(side="left")
+        self.spor_promptvariant_var = tk.StringVar(value="a")
+        for nokkel, tekst in (("a", "a — standard"),
+                              ("b", "b — eksperimentblokka i regler/prompter.md")):
+            tk.Radiobutton(
+                variantrad, text=tekst, value=nokkel,
+                variable=self.spor_promptvariant_var, anchor="w",
+                bg=BG_PANEL, fg=FG_TEKST, selectcolor=BG_INNDATA,
+                activebackground=BG_PANEL, activeforeground=FG_TEKST,
+                highlightthickness=0,
+            ).pack(side="left", padx=(10, 0))
+
         primaerknapp(forelder, "Send", self._send_spor).pack(fill="x", **pad)
 
         self.spor_panel = SvarPanel(forelder, self.rot, etikett="Svar")
@@ -4248,6 +4284,8 @@ class DokumentKlientApp:
 
         kilde_sti = self.spor_valgt_fil
         korriger = self.spor_korriger_var.get()
+        stilregler = self.spor_stilregler.get("1.0", "end").strip()
+        promptvariant = self.spor_promptvariant_var.get()
         panel = self.spor_panel
         panel.nullstill("Klargjør filen ..." if kilde_sti else "Sender ...")
 
@@ -4264,7 +4302,9 @@ class DokumentKlientApp:
                         "(lenger med OCR)",
                     )
                     tidtaker["start"] = time.perf_counter()
-                    return self.klient.spor_med_fil(pdf_sti, sporsmal, korriger)
+                    return self.klient.spor_med_fil(
+                        pdf_sti, sporsmal, korriger,
+                        stilregler=stilregler, promptvariant=promptvariant)
                 self.rot.after(0, panel.status_var.set, "Sender ...")
                 tidtaker["start"] = time.perf_counter()
                 return self.klient.spor_uten_fil(sporsmal)
@@ -4297,9 +4337,30 @@ class DokumentKlientApp:
         if motorer:
             motor_notis = " | Motorer: " + ", ".join(f"{navn}:{antall}" for navn, antall in motorer.items())
         generell_notis = " — generell kunnskap, uten dokument" if data.get("uten_dokument") else ""
-        statustekst = f"Vellykket (kilde: {kilde}){ocr_notis}{motor_notis}{generell_notis}"
+        # R251: deklarer hvilken promptvariant som svarte (bare når det
+        # ikke er standarden — «a» hver gang ville bare vært støy)
+        variant_notis = ""
+        if data.get("promptvariant") and data["promptvariant"] != "a":
+            variant_notis = f" | Promptvariant: {data['promptvariant']}"
+        brukte = data.get("stilregler_brukt")
+        if isinstance(brukte, list):
+            variant_notis += f" | Stilregler brukt: {len(brukte)}"
+        statustekst = (f"Vellykket (kilde: {kilde}){ocr_notis}{motor_notis}"
+                       f"{generell_notis}{variant_notis}")
 
-        self._fullfor_suksess(panel, data, brukt, statustekst, bygg_advarselstekst(data))
+        # R251: avviste stilregler skal SES, ikke bare stå i JSON-en —
+        # ellers tror brukeren at regelen virket
+        advarselstekst = bygg_advarselstekst(data)
+        avviste = data.get("stilregler_avvist") or []
+        if avviste:
+            avvist_linjer = "\n".join(
+                f"  • «{a.get('regel', '')}» — {a.get('grunn', '')}"
+                for a in avviste if isinstance(a, dict))
+            tillegg = "Stilregler AVVIST (R8.1):\n" + avvist_linjer
+            advarselstekst = (advarselstekst + "\n" + tillegg).strip() \
+                if advarselstekst else tillegg
+
+        self._fullfor_suksess(panel, data, brukt, statustekst, advarselstekst)
 
         svar = data.get("svar")
         korrigert = data.get("korrigert_tekst")
