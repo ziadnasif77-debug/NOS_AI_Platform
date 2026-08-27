@@ -285,3 +285,56 @@ def test_den_statiske_ruta_har_ingen_sti_fra_klienten():
                               else api.Handler.do_GET)
     assert "_STATISKE_FILER" in kilde, (
         "ruteren må sjekke navnet mot hvitelista FØR _statisk kalles")
+
+
+# ---------- ingenting SKRIVES til brukerprofilen ----------
+def test_ingen_nye_skrivinger_til_brukerprofilen():
+    """CLAUDE.md §1: en fil prosjektet lager skal ligge i nav, ikke i
+    brukerprofilen — ellers følger den ikke med en mappekopi.
+
+    Funnet i revisjon: klient-GUI-et lagret server-URL OG API-nøkkelen i
+    `~/.nav_api_klient.json`. Nøkkelen lå altså i klartekst utenfor
+    nav-mappa, og en kopi av mappa til en ny maskin mistet
+    innstillingene stille.
+
+    Vakten er en HVITELISTE, ikke et forbud: `Path.home()` er greit å
+    LESE fra (arve gamle innstillinger, finne vekter en gammel
+    installasjon la igjen). Dukker det opp et nytt kallsted, feiler
+    testen, og den som la det inn må ta stilling til om det skrives.
+    """
+    import glob
+    import re
+
+    # fil -> hva Path.home()/expanduser brukes til der (kun LESING)
+    TILLATT = {
+        "api_klient_gui.py": "GAMMEL_KONFIG_STI — leses for å arve "
+                             "innstillinger fra den gamle plasseringen",
+        "sjekk_miljo.py": "leter etter EasyOCR-vekter en gammel "
+                          "installasjon la igjen",
+        "pakk_for_offline.py": "samme, som fallback etter nav/.EasyOCR",
+        "bytt_modell.py": "expanduser på en sti OPERATØREN oppgir",
+        "installer_offline.py": "kun omtalt i en kommentar",
+    }
+    monster = re.compile(r"Path\.home\(\)|\.expanduser\(\)|"
+                         r"expanduser\(['\"]~")
+    funn = []
+    for m in ("skript/*.py", "delt/*.py"):
+        for f in glob.glob(os.path.join(ROT, m)):
+            navn = os.path.basename(f)
+            with open(f, encoding="utf-8") as fh:
+                for nr, linje in enumerate(fh, 1):
+                    if monster.search(linje) and navn not in TILLATT:
+                        funn.append(f"{navn}:{nr}")
+    assert funn == [], (
+        "nytt kallsted mot brukerprofilen — skriver det en fil, flytt den "
+        f"inn i nav; leser det bare, før det opp i TILLATT: {funn}")
+
+
+def test_klientinnstillingene_lagres_inne_i_nav():
+    """Selve stien, ikke bare fraværet av Path.home(): GUI-et skal skrive
+    URL og nøkkel til nav/data, som følger med en mappekopi."""
+    import sys
+    sys.path.insert(0, os.path.join(ROT, "skript"))
+    import api_klient_gui as gui
+    assert _under_nav(str(gui.KONFIG_STI)), gui.KONFIG_STI
+    assert gui.KONFIG_STI.name == "klient_innstillinger.json"

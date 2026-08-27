@@ -20,6 +20,8 @@ cd /d "%~dp0..\.."
 
 if exist "oppstart\lokal_env.bat" call "oppstart\lokal_env.bat"
 
+REM Kun nav-lokale pakker: ignorer %APPDATA%\Python -> ingen C-binding.
+set "PYTHONNOUSERSITE=1"
 set "PY=.pyruntime\python.exe"
 if not exist "%PY%" set "PY=python"
 

@@ -27,8 +27,8 @@ Sikkerhet:
   headeren X-API-Key på alle forespørsler. Fyll inn nøkkelen i feltet
   øverst; den sendes automatisk med alle kall.
 
-Innstillinger (server-URL og API-nøkkel) lagres i ~/.nav_api_klient.json
-og huskes til neste gang — praktisk siden trycloudflare-adressen bytter
+Innstillinger (server-URL og API-nøkkel) lagres i
+nav/data/klient_innstillinger.json og huskes til neste gang — praktisk siden trycloudflare-adressen bytter
 ved hver tunnelomstart.
 
 Ingen manuell pip-installasjon trengs: manglende pakker (requests, Pillow,
@@ -147,7 +147,13 @@ from tkinter import filedialog, messagebox, scrolledtext
 import requests
 
 # --- innstillinger som huskes mellom kjøringer -----------------------------
-KONFIG_STI = Path.home() / ".nav_api_klient.json"
+# CLAUDE.md §1: alt prosjektet trenger bor INNE i nav. Fila lå før i
+# brukerprofilen (~/.nav_api_klient.json): den fulgte ikke med en
+# mappekopi, og den la API-nøkkelen i klartekst utenfor nav-mappa.
+KONFIG_STI = (Path(__file__).resolve().parent.parent
+              / "data" / "klient_innstillinger.json")
+# Leses ÉN gang for å arve innstillingene fra den gamle plasseringen.
+GAMMEL_KONFIG_STI = Path.home() / ".nav_api_klient.json"
 # R51: IPv4-adressen direkte, IKKE «localhost». Windows slår opp
 # localhost som IPv6 (::1) først, mens serveren lytter på IPv4 — hvert
 # kall betaler da ~2 sekunder på et oppslag som må feile før det faller
@@ -289,18 +295,27 @@ EKSEMPEL_OPERASJONER = """[
 
 
 def les_konfig() -> dict:
-    """Leser lagrede innstillinger — tom dict om filen mangler/er ødelagt."""
-    try:
-        data = json.loads(KONFIG_STI.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """Leser lagrede innstillinger — tom dict om filen mangler/er ødelagt.
+
+    Faller tilbake på den gamle plasseringen i brukerprofilen slik at
+    den som allerede har lagret URL og nøkkel ikke mister dem når fila
+    flyttes inn i nav. Neste `lagre_konfig` skriver til nav-stien.
+    """
+    for sti in (KONFIG_STI, GAMMEL_KONFIG_STI):
+        try:
+            data = json.loads(sti.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
 
 
 def lagre_konfig(url: str, api_nokkel: str) -> None:
     """Lagrer innstillinger for neste kjøring. Feiler stille — manglende
     lagring skal aldri stoppe selve arbeidet."""
     try:
+        KONFIG_STI.parent.mkdir(parents=True, exist_ok=True)
         KONFIG_STI.write_text(
             json.dumps({"base_url": url, "api_nokkel": api_nokkel},
                        ensure_ascii=False, indent=2),
@@ -3639,7 +3654,8 @@ class DokumentKlientApp:
         pad = {"padx": 12, "pady": 6}
 
         topp = tema_rammefelt(
-            self.rot, "Tilkobling (huskes til neste gang i ~/.nav_api_klient.json)"
+            self.rot,
+            "Tilkobling (huskes i nav/data/klient_innstillinger.json)"
         )
         topp.pack(fill="x", **pad)
 
