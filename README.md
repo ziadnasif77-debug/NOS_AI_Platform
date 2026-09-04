@@ -17,11 +17,12 @@ UiPath, curl eller egne skript.
 |---|---|
 | [docs/endepunkter.md](docs/endepunkter.md) | **Komplett endepunktreferanse** — felter inn/ut, hvilke som bruker modellen, klientfeller |
 | [docs/api_dokumentasjon.md](docs/api_dokumentasjon.md) | Arbeidsflyter og eksempler |
-| [docs/regler_lokal_api.md](docs/regler_lokal_api.md) | Regelverket R1–R67 |
+| [docs/regler_lokal_api.md](docs/regler_lokal_api.md) | Regelverket R1–R251 — hver regel merket KODE eller PROMPT |
 | [docs/prosjektjournal.md](docs/prosjektjournal.md) | **Prosjektjournal** — status mot konseptutredningen, lærdommer, milepæler |
 | [docs/fase0_beslutningsrapport.md](docs/fase0_beslutningsrapport.md) | **Phase 0-rapport** — hva maskinen faktisk klarer, målt. Kjør `make ytelse` for nye tall |
 | [docs/beslutninger/](docs/beslutninger/LES_MEG.md) | **ADR-register** — hva vi bevisst valgte bort, og hva valget koster |
 | [docs/naar_noe_gaar_galt.md](docs/naar_noe_gaar_galt.md) | **Feilboka** — symptom → årsak → hva du gjør. Skrevet for drift uten utvikler og uten internett |
+| [docs/business_case_ki_dokumentbehandling.md](docs/business_case_ki_dokumentbehandling.md) | **Business case** (førsteutkast, 2026-08-20) — med [kortnotat](docs/kortnotat_innsikt_og_ki.md) og [datagrunnlaget som mangler](docs/datagrunnlag_business_case.md) |
 | `GET /dokumentasjon` | Swagger UI med svarmodeller og innebygd veiledning |
 
 ---
@@ -64,6 +65,7 @@ curl -X POST http://localhost:8600/dokument \
 | `sporsmal` | Fritt spørsmål med tallvakt | ja* |
 | `skjema_mal` + `skjema_motor` | Din JSON-mal utfylt (`felter`/`auto`/`modell`) | avhenger |
 | `korriger` | LLM-korrigert OCR-tekst ved siden av den rå | ja |
+| `stilregler` + `promptvariant` | Svarstil per forespørsel (én regel per linje) og `a`/`b`-variant av prompten til A/B-test (R251). Svaret sier hvilke regler som ble brukt og avvist | ja |
 
 \* Sidespørsmål (`les side 10`), strekkodespørsmål og spørsmål etter
 sjekksumvaliderte identifikatorer besvares av **koden**, ikke modellen —
@@ -80,6 +82,7 @@ som ble tatt.
 | `POST /jobb` → `GET /jobb/{id}` | Store skanninger: `jobb_id` med en gang, OCR i bakgrunnen |
 | `POST /innsyn` → `GET /innsyn/{id}` | Direktevisning: strømmer lesingen hendelse for hendelse |
 | `POST /dokument/operasjoner` | Operasjonslista som EGEN ressurs — på `/dokument` overstyrer feltet bryterne i stillhet |
+| `POST /sak` → `GET /sak/{sak_id}` | **Flere dokumenter lest som ÉN sak** (R244–R250): gruppering, tidslinje, motsigelser, sakssammendrag og spørsmål om saken. Send `sak_id` igjen for å fylle på mappa senere |
 | `POST /spor` | Spørsmål **uten** fil: generelt modellsvar, merket `uten_dokument`. Det er den ene tingen `/dokument` ikke kan (den krever fil) |
 | `GET /dokumentasjon` · `/openapi.json` · `/hjelp` | Swagger UI · maskinlesbart skjema · tjenestestatus |
 
@@ -122,6 +125,8 @@ Detaljer: [docs/endepunkter.md](docs/endepunkter.md).
   og [egne_etiketter.txt](regler/egne_etiketter.txt) (nye dato-etiketter).
   Alle tre leses umiddelbart, uten omstart — nye dokumenttyper og nye
   regler krever aldri kodefiks. Se [regler/LES_MEG.md](regler/LES_MEG.md).
+  Stilregler kan også sendes per forespørsel (`stilregler`, R251) og
+  dømmes av nøyaktig samme filter som fila.
 - **Sikkerhet:** valgfri `X-API-Key` (`API_NOKKEL`), CORS av som standard
   (`CORS_ORIGINS`), rate-limiting per klient (`RATE_LIMIT_PER_MIN`, standard
   120/min), generiske feilmeldinger (detaljer kun i serverloggen).
@@ -217,6 +222,59 @@ Målingen bruker spørsmålskorpuset
 
 ---
 
+### Sakslaget — flere dokumenter som én sak (R241–R250)
+
+Et arkiv er ikke en bunke enkeltdokumenter. `POST /sak` tar flere filer
+(eller `jobb_id` fra ferdige `/jobb`-kall) og svarer med saken:
+
+- **Gruppering** på saksnummer, journalnummer og fødselsnummer — samme
+  person er ikke samme sak (R242). Legger du to saker i én mappe, svarer
+  `saker` med to; det er svaret, ikke en feil.
+- **Tidslinje** med `dato_kilde` per hendelse — dokumentets egen dato
+  først, ellers en behandlingsdato (R244).
+- **Motsigelser**: flere personer i én sak, vedtak datert før søknad,
+  ulike beløp i samme felt på samme dag (R243/R248). Beløpsregelen ble
+  målt mot seks legitime saker den IKKE skal slå ut på før den ble kodet.
+- **Sakssammendrag** (R249): part, ytelse, forløp, siste avgjørelse og
+  status — alt utledet av felter som allerede er bevist. Klageinstansens
+  vedtak går foran førsteinstansens uansett dato.
+- **Spørsmål om saken** (R250): `sporsmal` besvares av koden når svaret
+  alt er bevist; ellers ser modellen bare de tre dokumentene koden
+  valgte ut, og svaret bærer `kilder`, `utelatte` og `metode`.
+- **`sak_id`** (R245): mappa overlever forespørselen i `data/saker/`, men
+  bare dokumentPOSTENE lagres — aldri teksten. Grupperingen regnes på
+  nytt ved hver lesing, så en rettet regel når også gamle mapper.
+- **Proveniens på saksnivå** (R246): samme opphavskart som for ett
+  dokument, med `dokumenter` i stedet for `side`.
+
+Hele laget er deterministisk — ingen språkmodell, samme mappe gir samme
+svar. Dokumenttypene NAV selv bruker (vedtak, klagevedtak, journalnotat …)
+ligger i kodeverket (R241), og feltforventningene per type er MÅLT over
+tre varianter hver, ikke gjettet (R247): bare `dato` overlevde.
+
+### Validert på ekte dokumenter (R226–R240)
+
+Det syntetiske korpuset ga 133 spørsmål og en treffprosent som steg fra
+111 til 129 gjennom Phase 1 (R219–R234). Så ble ekte dokumenter kjørt,
+og de avdekket tre feil ingen syntetisk bunke kunne vist (R234):
+
+- **Bunken deles i dokumenter** før den leses, så et svar aldri blandes
+  fra to dokumenter (R226–R228), og bunkespørsmål — hvor mange personer,
+  hvilke ytelser — svares av koden, fordi modellen svarte feil på alle
+  fire den fikk (R229–R231).
+- **Feltvakten** holder tilbake en verdi som ikke hører til feltet det ble
+  spurt om (R232/R233), og svar som gjelder feil person (R213).
+- **Blandet dokument**: OCR-terskelen gjelder per side, ikke samlet (R237),
+  og et fødselsnummer må BÆRE en fødselsdato — mod11 alene er ikke bevis
+  (R238).
+- **OCR-motoren låses ikke til CPU for godt** (R239/R240): oppstarten
+  låste alltid OCR til CPU fordi Borealis lastet samtidig; valget tas nå
+  på nytt ved dokumentskille.
+
+Ekte dokumenter ligger ALDRI i git — bare lærdommene gjør det.
+
+---
+
 ## Treningsløkke (valgfri modellforbedring)
 
 Modellen (norhand/TrOCR) forbedres av menneskelige korreksjoner. Hele
@@ -307,7 +365,8 @@ Miljøvariabler (alle valgfrie): `API_NOKKEL` (krev X-API-Key),
 `CORS_ORIGINS`, `DOKUMENT_API_PORT` (standard 8600), `BOREALIS_KONTEKST`,
 `OCR_MOTOR` (auto/easy/rapid), `OCR_MAKS_SIDER`/`OCR_TAK_SIDER`,
 `STREKKODE_MAKS_SIDER`, `FORHANDSSJEKK_MAKS_SIDER`,
-`RATE_LIMIT_PER_MIN`. Se [.env.example](.env.example).
+`RATE_LIMIT_PER_MIN`, `SAK_OPPBEVARING_DAGER` (faller tilbake på
+`JOBB_OPPBEVARING_DAGER`). Se [.env.example](.env.example).
 
 > Serveren binder til `0.0.0.0`, altså er den nåbar fra andre maskiner på
 > nettet med en gang. Sett `API_NOKKEL` før du eksponerer den.
@@ -331,7 +390,7 @@ Full guide: [docs/offline_installasjon.md](docs/offline_installasjon.md).
 ## Testing
 
 ```bash
-python -m pytest tester/ -q             # 505 enhetstester (server stoppet, så GPU er fri)
+python -m pytest tester/ -q             # ~1 770 enhetstester (server stoppet, så GPU er fri)
 python skript/kjor_korpus.py            # regresjonskorpus mot kjørende server
 ```
 
